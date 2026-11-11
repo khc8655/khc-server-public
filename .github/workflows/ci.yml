@@ -86,10 +86,11 @@ jobs:
   deploy:
     name: Deploy production Worker
     needs: [agent, verify]
-    # 2026-11-11 起改为**仅手动触发**（ADR-0015）：main 合并 = 过 CI，不再等于生产部署。
-    # 公开库不持有发布签名私钥，无法在 CI 内生成签名清单；发版由主人本机执行
-    # ./scripts/deploy-local.sh（流程见 docs/engineering/release.md §3）。
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    # 2026-11-11 起恢复「合并 main 即上线」（ADR-0016，取代 ADR-0015）：
+    # push main 自动部署；workflow_dispatch 仅作补发。签名产物由本 job 现场生成，
+    # 私钥只从 repository secret 落到 mktemp 的 0600 文件，步骤结束即删除。
+    # **前提**：Cloudflare 侧的 Workers Builds（Git 集成）必须保持断开，否则两套部署会互相覆盖。
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     # 部署成功后自动打发布标签（ADR-0013 L1：发布锚点），需要写仓库权限
     permissions:
@@ -105,18 +106,20 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AGENT_RELEASE_SIGN_KEY: ${{ secrets.AGENT_RELEASE_SIGN_KEY }}
         run: |
           set -euo pipefail
           missing=""
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "${AGENT_RELEASE_SIGN_KEY:-}" ] || missing="$missing AGENT_RELEASE_SIGN_KEY"
           if [ -n "$missing" ]; then
             echo "ERROR: 缺少部署凭据：$missing"
-            echo "       公开库默认不持有生产 token（ADR-0015）。请优先在本机执行 ./scripts/deploy-local.sh；"
-            echo "       若确需由 CI 部署，先在仓库 Secrets 配置这两个值（docs/engineering/release.md §3.1）。"
+            echo "       CI 自动部署需要这 3 个 repository secrets（加上 KHC_* 5 个部署标识，见 ADR-0016）。"
+            echo "       配齐前可先在本机执行 ./scripts/deploy-local.sh 应急发版（docs/engineering/release.md §3.4）。"
             exit 1
           fi
-          echo "OK: 部署凭据已配置"
+          echo "OK: 部署凭据已配置（Cloudflare token / account id / 发布私钥）"
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -127,12 +130,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build web
-        run: pnpm build
-
-      # 公开仓库不提交真实 Worker/D1/入口标识：部署前用 repository secrets 注入（public 仓的 variables 不加密，secrets 会在日志中打码）。
+      # 公开仓库不提交真实 Worker/D1/入口标识：部署前用 repository secrets 渲染一份**临时配置**
+      # `wrangler.ci.toml`（不提交），后续所有 wrangler 命令显式 --config 指向它。
       # 需要配置：KHC_WORKER_NAME / KHC_D1_NAME / KHC_D1_ID / KHC_PANEL_ORIGIN / KHC_WORKERS_DEV_ORIGIN。
-      - name: Render wrangler.toml
+      - name: Render wrangler.ci.toml
         env:
           KHC_WORKER_NAME: ${{ secrets.KHC_WORKER_NAME }}
           KHC_D1_NAME: ${{ secrets.KHC_D1_NAME }}
@@ -146,10 +147,11 @@ jobs:
           : "${KHC_D1_ID:?请在仓库 Secrets 配置 KHC_D1_ID}"
           : "${KHC_PANEL_ORIGIN:?请在仓库 Secrets 配置 KHC_PANEL_ORIGIN}"
           : "${KHC_WORKERS_DEV_ORIGIN:?请在仓库 Secrets 配置 KHC_WORKERS_DEV_ORIGIN}"
+          cp wrangler.toml wrangler.ci.toml
           python3 - <<'PY'
           import os, re, sys
 
-          path = 'wrangler.toml'
+          path = 'wrangler.ci.toml'
           text = open(path, encoding='utf-8').read()
 
           def replace_line(pattern, value, label):
@@ -171,17 +173,38 @@ jobs:
                        + '"', 'LIVE_ORIGINS')
 
           open(path, 'w', encoding='utf-8').write(text)
-          print('OK: wrangler.toml 已用 Secrets 覆盖部署标识')
+          print('OK: wrangler.ci.toml 已用 Secrets 覆盖部署标识')
           PY
           # 部署前自检：绝不把本地默认值带到生产
-          if grep -qE 'khc-local-dev|khc-db-local|localhost:5173' wrangler.toml; then
-            echo "ERROR: wrangler.toml 仍含本地默认值，阻断部署"; exit 1
+          if grep -qE 'khc-local-dev|khc-db-local|localhost:5173' wrangler.ci.toml; then
+            echo "ERROR: wrangler.ci.toml 仍含本地默认值，阻断部署"; exit 1
           fi
+
+      # 签名产物必须在 pnpm build **之前**就位：构建会把 apps/web/public/agent/ 打进 Worker assets。
+      # 私钥只从 repository secret 落到 mktemp 的 0600 文件，步骤结束即删除；
+      # 不把私钥内容作为参数传给脚本（只传文件路径），日志里也不会出现 PEM。
+      - name: Generate signed agent release
+        env:
+          AGENT_RELEASE_SIGN_KEY: ${{ secrets.AGENT_RELEASE_SIGN_KEY }}
+          KHC_PANEL_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s' "$AGENT_RELEASE_SIGN_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          SIGN_KEY_FILE="$KEY_FILE" PUBLIC_BASE="${KHC_PANEL_ORIGIN%/}/agent" \
+            ./scripts/build-agent-release.sh
+          rm -f "$KEY_FILE"
+
+      - name: Build web
+        run: pnpm build
 
       # §3.6 部署前强制冒烟：先上传一个「不切生产流量」的 Worker 版本，
       # 用其预览 URL 探活（/api/v1/health 200 且 ok:true、/api/v1/version 200）；
       # 任何失败都 exit 1，阻断下面的 Deploy。
-      # §3.7 + §3.6：workers_dev=false 关闭生产 workers.dev 入口；wrangler.toml 显式
+      # §3.7 + §3.6：workers_dev=false 关闭生产 workers.dev 入口；wrangler.ci.toml 显式
       # preview_urls=true（两者相互独立），预览 URL 仍可用，冒烟验证的是本次新构建。
       # 仅在预览 URL 极端不可用时退化为检查自定义域名（只能发现生产已挂）。
       # 不引入任何新 Secret，复用既有 CLOUDFLARE_* 凭据。
@@ -194,7 +217,7 @@ jobs:
           set -euo pipefail
 
           # 1) 上传版本但不切生产流量；构建/上传报错直接阻断部署。
-          if ! npx wrangler versions upload 2>&1 | tee versions-upload.log; then
+          if ! npx wrangler versions upload --config wrangler.ci.toml 2>&1 | tee versions-upload.log; then
             echo "ERROR: wrangler versions upload 失败，阻断部署"
             exit 1
           fi
@@ -266,8 +289,8 @@ jobs:
           case "$H" in
             *.workers.dev) GOPATH_DEV=true ;;
           esac
-          CFG="$(grep -E '^[[:space:]]*workers_dev[[:space:]]*=' wrangler.toml | tail -1 | grep -oE '(true|false)' || true)"
-          echo "wrangler.toml workers_dev=${CFG:-<未设置，默认 true>}"
+          CFG="$(grep -E '^[[:space:]]*workers_dev[[:space:]]*=' wrangler.ci.toml | tail -1 | grep -oE '(true|false)' || true)"
+          echo "wrangler.ci.toml workers_dev=${CFG:-<未设置，默认 true>}"
           if [ "$GOPATH_DEV" = "true" ] && [ "$CFG" = "false" ]; then
             echo "ERROR: 生产入口的源站是 workers.dev，关闭 workers_dev 会让整站 404（error code: 1042）。"
             echo "       要关闭请先把 Worker 挂上真正的 Cloudflare 自定义域名，再把第三方边缘源站改到该域名。"
@@ -287,7 +310,7 @@ jobs:
           SHA12="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
           PANEL="$(node -p "require('./package.json').version")"
           AGENT="$(python3 agent/khc_agent.py version | awk '{print $2}')"
-          npx wrangler deploy --tag "$SHA12" --message "panel v${PANEL} / agent v${AGENT} (${SHA12})" \
+          npx wrangler deploy --config wrangler.ci.toml --tag "$SHA12" --message "panel v${PANEL} / agent v${AGENT} (${SHA12})" \
             | tee /tmp/deploy.log
           # 权威 Version ID 取自部署输出，不从边缘 curl（边缘/回源有传播延迟，
           # 2026-11-07 实测标签注解拿到了上一个版本 ID）。
