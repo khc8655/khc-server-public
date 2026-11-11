@@ -28,7 +28,12 @@
 ## 2026-11-11
 
 - ADR-0015: 发版改为人工触发（公开仓库不持有发布私钥与生产 token）
-- 状态：已接受（主人 2026-11-11 拍板 B 方案 + B2）
+- 状态：**已被取代**（同日由 ADR-0016 取代；B2「PR 不设文档路径豁免」继续有效）
 - 文件：`ADR-0015-manual-release.md`
-- 备注：deploy job 改为仅 `workflow_dispatch`；`push main` 只跑 agent + verify；`pull_request` 去掉文档路径豁免；`deploy-local.sh` 优先读 `wrangler.local.toml` 并在 build 前预检签名产物。**部分取代 ADR-0008 中「main 合并即生产部署」一条**（资源复用与配置唯一来源仍有效）。ADR-0014 编号未使用（`docs/ui-redesign/audit-2026-11-08.md` 曾建议用于自动加载策略，尚未成文）。
+- 备注：deploy job 改为仅 `workflow_dispatch`；`push main` 只跑 agent + verify；`pull_request` 去掉文档路径豁免；`deploy-local.sh` 优先读 `wrangler.local.toml` 并在 build 前预检签名产物。**部分取代 ADR-0008 中「main 合并即生产部署」一条**（资源复用与配置唯一来源仍有效）。
+
+- ADR-0016: 恢复 CI 自动部署（合并 main 即上线），签名私钥与 CF token 放 GitHub Secrets
+- 状态：已接受（主人 2026-11-11 拍板 A：GitHub Actions 自动部署）
+- 文件：`ADR-0016-ci-auto-deploy.md`
+- 备注：deploy job 恢复 `push main` 触发（`workflow_dispatch` 仅补发）；CI 内用 `AGENT_RELEASE_SIGN_KEY` 落 `mktemp` 0600 文件签包；用 `KHC_*` secrets 渲染临时 `wrangler.ci.toml` 部署；保留部署前冒烟与 `--tag`；**Cloudflare 侧 Workers Builds 必须保持断开**（2026-11-11 实测两套部署互相覆盖）。取代 ADR-0015。ADR-0014 编号未使用（`docs/ui-redesign/audit-2026-11-08.md` 曾建议用于自动加载策略，尚未成文）。
 

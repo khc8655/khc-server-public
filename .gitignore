@@ -18,6 +18,8 @@ apps/web/dist/
 !.env.example
 *.local.*
 wrangler.local.toml
+# CI 部署时由 secrets 现场渲染的临时配置（不提交）
+wrangler.ci.toml
 *.pem
 *.key
 *.p12

@@ -1,10 +1,12 @@
 # ADR-0015: 发版改为人工触发（公开仓库不持有发布私钥与生产 token）
 
 - 归类：决策记录
-- 状态：已接受（主人 2026-11-11 拍板选 B 方案「人工发版」，同时选 B2「PR 不设文档路径豁免」）
+- 状态：**已被取代**（2026-11-11 同日由 ADR-0016 取代：「合并 main 即上线」，CI 内签包；B2「PR 不设文档路径豁免」结论继续有效）
 - 适用范围：`.github/workflows/ci.yml`（`pull_request` 触发、deploy job）、`scripts/deploy-local.sh`、`docs/engineering/release.md`、`AGENTS.md` §3/§5/§7；**不改** Worker 运行时、D1 schema、Agent 内核
-- 最后核验：2026-11-11
-- 关联：ADR-0008（生产复用 staging）、ADR-0011（清单随部署发布）、ADR-0013（发版分层）、`docs/engineering/release.md`、`docs/auto-deploy.md`
+- 最后核验：2026-11-11（被取代，仅作历史记录；现行流程见 ADR-0016 与 `docs/engineering/release.md` §3）
+- 关联：ADR-0008（生产复用 staging）、ADR-0011（清单随部署发布）、ADR-0013（发版分层）、**ADR-0016（取代本 ADR）**、`docs/engineering/release.md`、`docs/auto-deploy.md`
+
+> **取代说明**：本 ADR 的「deploy 仅 `workflow_dispatch`」与「发版只走本机」两条已被 ADR-0016 推翻；「PR 不设文档路径豁免（B2）」「deploy-local.sh 读 wrangler.local.toml」保留。以下内容为决策历史，不再作为开发依据。
 
 ## 背景
 

@@ -43,8 +43,19 @@ DEST_DIR="$SCRIPT_DIR/apps/web/public/agent"
 install -d -m 0755 "$DEST_DIR"
 cp "$SCRIPT_DIR/agent/dist/khc-agent-${VERSION}.tar.gz" "$DEST_DIR/"
 cp "$SCRIPT_DIR/agent/dist/khc-agent-${VERSION}.tar.gz.sha256" "$DEST_DIR/"
-git add "$DEST_DIR/khc-agent-${VERSION}.tar.gz" "$DEST_DIR/khc-agent-${VERSION}.tar.gz.sha256"
-echo "==> 已入库 $DEST_DIR/khc-agent-${VERSION}.tar.gz(.sha256)"
+
+# 公开仓库把发布产物排除在版本控制之外（.gitignore），此时 `git add` 会直接报错退出；
+# 只在未被忽略（私有发版仓库）时才入库，避免公开库发版被这一步阻断。
+stage_if_tracked() {
+  if git check-ignore -q -- "$1"; then
+    echo "==> 跳过入库（已被 .gitignore 排除）：$1"
+  else
+    git add -- "$1"
+    echo "==> 已入库 $1"
+  fi
+}
+stage_if_tracked "$DEST_DIR/khc-agent-${VERSION}.tar.gz"
+stage_if_tracked "$DEST_DIR/khc-agent-${VERSION}.tar.gz.sha256"
 
 if [ -n "${SIGN_KEY_FILE:-}" ]; then
   SHA="$(awk '{print $1}' "$SCRIPT_DIR/agent/dist/khc-agent-${VERSION}.tar.gz.sha256")"
@@ -53,8 +64,8 @@ if [ -n "${SIGN_KEY_FILE:-}" ]; then
     --key "$SIGN_KEY_FILE" --version "$VERSION" \
     --url "${BASE%/}/khc-agent-${VERSION}.tar.gz?v=${SHA:0:12}" \
     --sha256 "$SHA" --out "$MANIFEST"
-  git add "$MANIFEST"
-  echo "==> 已入库签名清单 ${MANIFEST}（随 assets 部署生效，无需 wrangler secret）"
+  stage_if_tracked "$MANIFEST"
+  echo "==> 签名清单 ${MANIFEST} 已生成（随 assets 部署生效，无需 wrangler secret）"
   echo "==> 清单内公钥须与 AGENT_RELEASE_PUBKEY secret 一致（换钥时同步）"
   echo "==> 部署后在面板 GET /api/v1/agent/releases 核对版本与 sha 前缀"
   PUBKEY="$(node --input-type=module -e \
