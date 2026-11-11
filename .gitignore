@@ -62,3 +62,5 @@ __pycache__/
 
 # IDE 临时产物（html 分享包），不入库
 .trae-html-share-packages/
+
+# CI smoke (temporary)
