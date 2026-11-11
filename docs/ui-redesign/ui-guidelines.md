@@ -404,7 +404,7 @@
 ## 11. 参考样例（非权威）
 
 **入口**：[`examples/2026-11-05/demo.html`](examples/2026-11-05/demo.html)（单文件、静态、伪数据、无 API 请求）。
-**截图**：[`examples/2026-11-05/screenshots/`](examples/2026-11-05/screenshots/)。
+**截图**：已随公开库移除，原图见私有归档仓库 `khc-server`；对照形态请直接打开上面的 demo.html。
 
 **覆盖范围**（用于对照形态，不作为验收标准）：
 

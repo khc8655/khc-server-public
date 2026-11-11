@@ -43,10 +43,10 @@
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| 域名添加 | ✅ 支持。`endpoint` 契约允许 http(s):// 域名或裸 IP | [index.ts](../../../packages/contracts/src/index.ts#L94-L108)；[nodes.ts](../../../apps/api/src/routes/nodes.ts#L32-L53) |
-| IP 直连 | ✅ 裸 IP 一律走 `cloudflare:sockets` TCP（绕开 CF fetch 403/1003） | [tcp-fetch.ts](../../../apps/api/src/lib/tcp-fetch.ts#L28-L35) |
-| HTTPS 域名 | ⚠️ 域名优先走 CF `fetch()`，**会校验证书**：自签证书走域名不可用，需有效证书（CF 代理 或 ACME） | [tcp-fetch.ts](../../../apps/api/src/lib/tcp-fetch.ts#L29-L35)；[node-client.ts](../../../apps/api/src/lib/node-client.ts#L156-L178) |
-| HTTPS 自签 IP | ⚠️ TCP socket 路径 `secureTransport:'on'` 不校验证书（自签可用），**但 Agent 本身只监听 HTTP**（agent/khc 无任何 TLS 代码），要上 HTTPS 必须在 VM 前置反代 | [tcp-fetch.ts](../../../apps/api/src/lib/tcp-fetch.ts#L112-L127)；`grep ssl/TLS agent/khc/` 无匹配 |
+| 域名添加 | ✅ 支持。`endpoint` 契约允许 http(s):// 域名或裸 IP | [index.ts](../../../../../packages/contracts/src/index.ts#L94-L108)；[nodes.ts](../../../../../apps/api/src/routes/nodes.ts#L32-L53) |
+| IP 直连 | ✅ 裸 IP 一律走 `cloudflare:sockets` TCP（绕开 CF fetch 403/1003） | [tcp-fetch.ts](../../../../../apps/api/src/lib/tcp-fetch.ts#L28-L35) |
+| HTTPS 域名 | ⚠️ 域名优先走 CF `fetch()`，**会校验证书**：自签证书走域名不可用，需有效证书（CF 代理 或 ACME） | [tcp-fetch.ts](../../../../../apps/api/src/lib/tcp-fetch.ts#L29-L35)；[node-client.ts](../../../../../apps/api/src/lib/node-client.ts#L156-L178) |
+| HTTPS 自签 IP | ⚠️ TCP socket 路径 `secureTransport:'on'` 不校验证书（自签可用），**但 Agent 本身只监听 HTTP**（agent/khc 无任何 TLS 代码），要上 HTTPS 必须在 VM 前置反代 | [tcp-fetch.ts](../../../../../apps/api/src/lib/tcp-fetch.ts#L112-L127)；`grep ssl/TLS agent/khc/` 无匹配 |
 | 面板管 CF DNS | ❌ 全仓库无任何 Cloudflare DNS API 代码（`api.cloudflare.com`/`dns_records` 零匹配） | grep 全仓库（2026-11-02） |
 
 **差距**：用户想要的"面板直接托管 CF 域名的 DNS 与证书、VM 不再单独配域名"目前完全没有；HTTPS 需要用户自己在 VM 上配 Caddy + 证书。安全设计（IP 走 socket、域名走 fetch）本身是完整的。
@@ -55,10 +55,10 @@
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| 一键安装命令 | ✅ 创建节点后自动生成"下载→校验 sha256→写 token→install.sh"命令（含一次性 token，system/user 两种模式） | [agent_lifecycle.ts](../../../apps/api/src/routes/agent_lifecycle.ts#L72-L101)；[HubsPage.tsx](../../../apps/web/src/pages/HubsPage.tsx#L69-L109)（创建成功即自动加载安装命令） |
-| 安装脚本内容 | ⚠️ install.sh **只装 Agent**（Python 3.11+ 标准库 + systemd unit），不装 Caddy、不装 WG、不配证书 | [install.sh](../../../agent/install.sh#L1-L58) |
-| Caddy 安装 | ❌ `caddy-site` 适配器 `install()` 只检测 caddy 是否存在，缺失时报错并提示**手动** `apt-get install -y caddy` | [caddy_site.py](../../../agent/adapters/caddy_site.py#L2030-L2034) |
-| 自签证书服务 | ✅（面板可签发）`certificates` 适配器支持 `issue_selfsigned`（自签）与 `issue_acme`（acme.sh DNS-01，支持 cloudflare/route53 凭据），签发后 PEM 入库 D1，Caddy 站点 `tls.mode=manual` 可引用 | [certificates.py](../../../agent/adapters/certificates.py#L1-L89)；[caddy_site.py](../../../agent/adapters/caddy_site.py#L15-L17)；[certificates/page.tsx](../../../apps/web/src/apps/certificates/page.tsx#L59-L76)（三模式签发 UI：selfsigned/acme/manual） |
+| 一键安装命令 | ✅ 创建节点后自动生成"下载→校验 sha256→写 token→install.sh"命令（含一次性 token，system/user 两种模式） | [agent_lifecycle.ts](../../../../../apps/api/src/routes/agent_lifecycle.ts#L72-L101)；[HubsPage.tsx](../../../../../apps/web/src/pages/HubsPage.tsx#L69-L109)（创建成功即自动加载安装命令） |
+| 安装脚本内容 | ⚠️ install.sh **只装 Agent**（Python 3.11+ 标准库 + systemd unit），不装 Caddy、不装 WG、不配证书 | [install.sh](../../../../../agent/install.sh#L1-L58) |
+| Caddy 安装 | ❌ `caddy-site` 适配器 `install()` 只检测 caddy 是否存在，缺失时报错并提示**手动** `apt-get install -y caddy` | [caddy_site.py](../../../../../agent/adapters/caddy_site.py#L2030-L2034) |
+| 自签证书服务 | ✅（面板可签发）`certificates` 适配器支持 `issue_selfsigned`（自签）与 `issue_acme`（acme.sh DNS-01，支持 cloudflare/route53 凭据），签发后 PEM 入库 D1，Caddy 站点 `tls.mode=manual` 可引用 | [certificates.py](../../../../../agent/adapters/certificates.py#L1-L89)；[caddy_site.py](../../../../../agent/adapters/caddy_site.py#L15-L17)；[certificates/page.tsx](../../../../../apps/web/src/apps/certificates/page.tsx#L59-L76)（三模式签发 UI：selfsigned/acme/manual） |
 
 **差距**：用户期望"跑完一条命令，Caddy + 自签证书全部就绪"；现状是装完 Agent 后还要 ① 手装 caddy、② 面板装 caddy-site 适配应用、③ 面板签发自签证书、④ 建站点引用证书，共 3~4 步。
 
@@ -66,11 +66,11 @@
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| 应用安装框架 | ✅ AppPage 统一 plan/apply/install/uninstall（install 为后台任务）；Worker 转发 `/nodes/:id/apps/:app/:action` 到 Agent | [AppPage.tsx](../../../apps/web/src/pages/AppPage.tsx#L152-L190)、[apps.ts](../../../apps/api/src/routes/apps.ts#L182-L208)、[kernel.py](../../../agent/khc/kernel.py#L673-L737) |
-| 安装完展示访问地址 | ✅ 已有先例：node_exporter 安装后返回 "Metrics 地址" 卡片（可复制） | [node_exporter.py](../../../agent/adapters/node_exporter.py#L360-L363) |
+| 应用安装框架 | ✅ AppPage 统一 plan/apply/install/uninstall（install 为后台任务）；Worker 转发 `/nodes/:id/apps/:app/:action` 到 Agent | [AppPage.tsx](../../../../../apps/web/src/pages/AppPage.tsx#L152-L190)、[apps.ts](../../../../../apps/api/src/routes/apps.ts#L182-L208)、[kernel.py](../../../../../agent/khc/kernel.py#L673-L737) |
+| 安装完展示访问地址 | ✅ 已有先例：node_exporter 安装后返回 "Metrics 地址" 卡片（可复制） | [node_exporter.py](../../../../../agent/adapters/node_exporter.py#L360-L363) |
 | 展示用户名/密码 | ❌ 无任何适配器生成/回传凭据（cards 框架能力上支持，但没有先例与规范） | 全部 6 个适配器中 grep 凭据字段无匹配 |
 | 自制应用 / singbox | ❌ 无适配器。现有仅 6 个：caddy_site / certificates / host_ops / node_exporter / port_forward / wireguard | `ls agent/adapters/`（2026-11-02） |
-| 批量分发到多节点 | ❌ 无，只能逐节点逐应用操作 | [apps.ts](../../../apps/api/src/routes/apps.ts)（路由按节点维度） |
+| 批量分发到多节点 | ❌ 无，只能逐节点逐应用操作 | [apps.ts](../../../../../apps/api/src/routes/apps.ts)（路由按节点维度） |
 
 **差距**：分发框架成熟（含任务、审计、错误信封、卸载），但"应用目录"只有 node_exporter 一个可分发样例；用户点名的 singbox、自制应用需要新增适配器（AGENTS.md §6.1 有标准流程）。
 
@@ -78,12 +78,12 @@
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| CPU 高的服务排查 | ✅ 进程快照 `snapshot`/`processes`，可按 CPU/内存排序（limit 200），状态带下钻；但**结束进程能力已移除**（只读） | [OpsSegments.tsx](../../../apps/web/src/apps/host-ops/OpsSegments.tsx#L93-L125)、[ProcessDrawer.tsx](../../../apps/web/src/apps/host-ops/ProcessDrawer.tsx#L29-L32) |
-| 防火墙 | ✅ `fw.show`/`fw.apply`/`fw.confirm` + 60 秒确认与自动回滚（`__fw_rollback`） | [FirewallDrawer.tsx](../../../apps/web/src/apps/host-ops/FirewallDrawer.tsx#L181-L258)、[khc_host.py](../../../agent/adapters/host_ops/khc_host.py#L1388-L1487) |
-| SSH 密钥 | ✅ `keys.list`/`keys.add`/`keys.remove`（规范化 + 指纹校验） | [SshKeysDrawer.tsx](../../../apps/web/src/apps/host-ops/SshKeysDrawer.tsx#L59-L125) |
-| 服务重启 | ❌ UI 占位恒禁用（"svc.restart 待 Agent 拍板"）——**即用户记忆中已挂起的待确认项** | [OpsSegments.tsx](../../../apps/web/src/apps/host-ops/OpsSegments.tsx#L38-L41) |
-| 服务日志 svc.logs | ❌ khc-host 白名单无此动词 | [khc_host.py](../../../agent/adapters/host_ops/khc_host.py#L93-L106) |
-| cron 定时任务读+管 | ❌ 白名单动词只有 version/status/snapshot/processes/fw.*/keys.*，**无 cron** | [khc_host.py](../../../agent/adapters/host_ops/khc_host.py#L1520-L1531) |
+| CPU 高的服务排查 | ✅ 进程快照 `snapshot`/`processes`，可按 CPU/内存排序（limit 200），状态带下钻；但**结束进程能力已移除**（只读） | [OpsSegments.tsx](../../../../../apps/web/src/apps/host-ops/OpsSegments.tsx#L93-L125)、[ProcessDrawer.tsx](../../../../../apps/web/src/apps/host-ops/ProcessDrawer.tsx#L29-L32) |
+| 防火墙 | ✅ `fw.show`/`fw.apply`/`fw.confirm` + 60 秒确认与自动回滚（`__fw_rollback`） | [FirewallDrawer.tsx](../../../../../apps/web/src/apps/host-ops/FirewallDrawer.tsx#L181-L258)、[khc_host.py](../../../../../agent/adapters/host_ops/khc_host.py#L1388-L1487) |
+| SSH 密钥 | ✅ `keys.list`/`keys.add`/`keys.remove`（规范化 + 指纹校验） | [SshKeysDrawer.tsx](../../../../../apps/web/src/apps/host-ops/SshKeysDrawer.tsx#L59-L125) |
+| 服务重启 | ❌ UI 占位恒禁用（"svc.restart 待 Agent 拍板"）——**即用户记忆中已挂起的待确认项** | [OpsSegments.tsx](../../../../../apps/web/src/apps/host-ops/OpsSegments.tsx#L38-L41) |
+| 服务日志 svc.logs | ❌ khc-host 白名单无此动词 | [khc_host.py](../../../../../agent/adapters/host_ops/khc_host.py#L93-L106) |
+| cron 定时任务读+管 | ❌ 白名单动词只有 version/status/snapshot/processes/fw.*/keys.*，**无 cron** | [khc_host.py](../../../../../agent/adapters/host_ops/khc_host.py#L1520-L1531) |
 
 **差距**：进程/防火墙/密钥三项与期望一致且有安全设计（写动词需 root、防火墙双阶段确认）；服务级运维（重启/日志）与 cron 完全缺失，这两项正是用户"CPU 占用高的服务排查"闭环的最后一步。
 
@@ -91,8 +91,8 @@
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| 版本展示 | ✅ AgentCard 显示版本/运行模式/最后在线 | [AgentCard.tsx](../../../apps/web/src/apps/node-settings/AgentCard.tsx#L78-L96) |
-| 升级 | ⚠️ UI 只有"生成升级命令→复制粘贴"（install/upgrade/uninstall 三命令）；**远程拉取式自升级 API 已存在**（`POST /nodes/:id/agent/upgrade`，Agent 202 + detached 重启）但 UI 未接入 | [AgentCard.tsx](../../../apps/web/src/apps/node-settings/AgentCard.tsx#L43-L47)、[agent_lifecycle.ts](../../../apps/api/src/routes/agent_lifecycle.ts#L162-L205)、web 中 grep `agent/upgrade` 仅测试引用（待验证是否有其他入口） |
+| 版本展示 | ✅ AgentCard 显示版本/运行模式/最后在线 | [AgentCard.tsx](../../../../../apps/web/src/apps/node-settings/AgentCard.tsx#L78-L96) |
+| 升级 | ⚠️ UI 只有"生成升级命令→复制粘贴"（install/upgrade/uninstall 三命令）；**远程拉取式自升级 API 已存在**（`POST /nodes/:id/agent/upgrade`，Agent 202 + detached 重启）但 UI 未接入 | [AgentCard.tsx](../../../../../apps/web/src/apps/node-settings/AgentCard.tsx#L43-L47)、[agent_lifecycle.ts](../../../../../apps/api/src/routes/agent_lifecycle.ts#L162-L205)、web 中 grep `agent/upgrade` 仅测试引用（待验证是否有其他入口） |
 | 面板自身升级 | ✅ main 推送 → CI 自动部署生产（ADR-0008），非面板内操作 | AGENTS.md §5、docs/engineering/auto-deploy.md |
 
 **差距**：升级体验是"命令生成"而非"点一下"；远程升级能力后端已备好，只差 UI 按钮 + 发布清单选择。
@@ -102,41 +102,41 @@
 #### 2.1 下发安装指令（而非用户手动安装）——**没有**
 
 - `wireguard` 适配器 `install()` 只检查 `wg`/`wg-quick` 是否存在，**缺失时报错并提示用户手动 `apt-get install -y wireguard-tools`**，不下发安装。
-- 证据：[wireguard.py](../../../agent/adapters/wireguard.py#L1683-L1701)
+- 证据：[wireguard.py](../../../../../agent/adapters/wireguard.py#L1683-L1701)
 
 #### 2.2 创建 peer + 一键安装脚本；默认不全量走 WG——**半可用**
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| 创建 peer | ✅ 表单（名称/allowedIps/keepalive/公钥/启用），保存后自动导出客户端配置 | [page.tsx](../../../apps/web/src/apps/wireguard/page.tsx#L401-L451)、L444-L445（新建后同屏展示 .conf） |
-| 一键安装脚本 | ❌ 只有 `.conf` 下载/复制（`client_config` 动作返回 conf 文本 + 私钥回写 D1）；**没有**"peer 机器跑完即连"的安装脚本 | [wireguard.py](../../../agent/adapters/wireguard.py#L1758-L1781)、[page.tsx](../../../apps/web/src/apps/wireguard/page.tsx#L514-L529)（openExport） |
-| 默认网络策略 | ✅ **符合期望**：默认 `AllowedIPs` 取 hub 接口网段，兜底 `DEFAULT_ROUTE = 10.99.0.0/24`（仅 WG 子网分流，**不是** 0.0.0.0/0 全隧道）；且可按 peer 在面板改 | [wireguard.py](../../../agent/adapters/wireguard.py#L230-L237)、L59（DEFAULT_ROUTE）、[page.tsx](../../../apps/web/src/apps/wireguard/page.tsx#L135-L190)（allowedIps 表单） |
-| peer 无损换钥 | ✅（超出期望）：rotate_peer 状态机 + 宽限期 | [wireguard.py](../../../agent/adapters/wireguard.py#L1786-L1790) |
+| 创建 peer | ✅ 表单（名称/allowedIps/keepalive/公钥/启用），保存后自动导出客户端配置 | [page.tsx](../../../../../apps/web/src/apps/wireguard/page.tsx#L401-L451)、L444-L445（新建后同屏展示 .conf） |
+| 一键安装脚本 | ❌ 只有 `.conf` 下载/复制（`client_config` 动作返回 conf 文本 + 私钥回写 D1）；**没有**"peer 机器跑完即连"的安装脚本 | [wireguard.py](../../../../../agent/adapters/wireguard.py#L1758-L1781)、[page.tsx](../../../../../apps/web/src/apps/wireguard/page.tsx#L514-L529)（openExport） |
+| 默认网络策略 | ✅ **符合期望**：默认 `AllowedIPs` 取 hub 接口网段，兜底 `DEFAULT_ROUTE = 10.99.0.0/24`（仅 WG 子网分流，**不是** 0.0.0.0/0 全隧道）；且可按 peer 在面板改 | [wireguard.py](../../../../../agent/adapters/wireguard.py#L230-L237)、L59（DEFAULT_ROUTE）、[page.tsx](../../../../../apps/web/src/apps/wireguard/page.tsx#L135-L190)（allowedIps 表单） |
+| peer 无损换钥 | ✅（超出期望）：rotate_peer 状态机 + 宽限期 | [wireguard.py](../../../../../agent/adapters/wireguard.py#L1786-L1790) |
 
 **差距**：peer 侧需要用户自己装 WG 工具、自己导入 conf（或 wg-quick up / NetworkManager）。面板没有生成"curl 一条命令装好并连接"的脚本。
 
 #### 2.3 Hub 端应用配置与端口转发——**可用**
 
 - `port-forward` 适配器：socat 监听 Hub 端口 → 转发到 WG Peer（文档定位即"Hub → WireGuard Peer 的按需端口映射"）；wireguard 页有 ForwardsCard，目标下拉直接选 peer。
-- 证据：[port_forward.py](../../../agent/adapters/port_forward.py#L2-L15)、L151-L199；[page.tsx](../../../apps/web/src/apps/wireguard/page.tsx#L1040-L1050)
+- 证据：[port_forward.py](../../../../../agent/adapters/port_forward.py#L2-L15)、L151-L199；[page.tsx](../../../../../apps/web/src/apps/wireguard/page.tsx#L1040-L1050)
 - 注意：hub 端 Caddy 模式与 WG 模式互斥（dual-mode，wg 页在 caddy 模式只读），转公网流量走 caddy-site，内网穿透走 port-forward + wireguard。
 
 #### 2.4 Peer 的运维操作与 hub 端一致——**半可用**
 
 | 子项 | 现状 | 证据 |
 | --- | --- | --- |
-| peer 纳管 | ✅ host-ops `onboard` 生成 peer **一键接入命令**（内联 base64 脚本 + 受限 authorized_keys + khc-host 脚本），hub 经 SSH over WG 隧道调用 | [host_ops.py](../../../agent/adapters/host_ops.py#L283-L297)、[PeerOpsPanel.tsx](../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L48-L52) |
-| 能力与 hub 一致 | ⚠️ peer 与 hub self 走**同一 khc-host 白名单**：version/status/snapshot/processes/fw.show/fw.apply/fw.confirm/keys.list/keys.add/keys.remove——覆盖进程/防火墙/密钥三项，与 hub 本机完全一致；但 svc/cron 两边都没有 | [khc_host.py](../../../agent/adapters/host_ops/khc_host.py#L93-L106)、[PeerOpsPanel.tsx](../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L135-L159)（snapshot 一次 SSH 取 version+status） |
-| peer 升级/版本 | ✅ 版本比对 + 脚本过期提示（E_SCRIPT_OLD）+ 更新命令 | [PeerOpsPanel.tsx](../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L125-L133) |
+| peer 纳管 | ✅ host-ops `onboard` 生成 peer **一键接入命令**（内联 base64 脚本 + 受限 authorized_keys + khc-host 脚本），hub 经 SSH over WG 隧道调用 | [host_ops.py](../../../../../agent/adapters/host_ops.py#L283-L297)、[PeerOpsPanel.tsx](../../../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L48-L52) |
+| 能力与 hub 一致 | ⚠️ peer 与 hub self 走**同一 khc-host 白名单**：version/status/snapshot/processes/fw.show/fw.apply/fw.confirm/keys.list/keys.add/keys.remove——覆盖进程/防火墙/密钥三项，与 hub 本机完全一致；但 svc/cron 两边都没有 | [khc_host.py](../../../../../agent/adapters/host_ops/khc_host.py#L93-L106)、[PeerOpsPanel.tsx](../../../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L135-L159)（snapshot 一次 SSH 取 version+status） |
+| peer 升级/版本 | ✅ 版本比对 + 脚本过期提示（E_SCRIPT_OLD）+ 更新命令 | [PeerOpsPanel.tsx](../../../../../apps/web/src/apps/host-ops/PeerOpsPanel.tsx#L125-L133) |
 
 ### 三、卸载
 
 | 用户期望 | 现状 | 可用性 | 证据 |
 | --- | --- | --- | --- |
-| 一键/远程下发卸载 peer（host-ops 通道） | ✅ onboard 同时返回 peer 卸载命令（清理 khc-host + 受限 authorized_keys），面板有卸载入口 | 可用 | [host_ops.py](../../../agent/adapters/host_ops.py#L948-L1021)、PeerOpsPanel 的 showUninstall 状态（L105） |
-| 删除 peer 时把服务清掉（hub 侧） | ✅ 删除 peer = 配置移除 + apply 同步内核接口（P1-A 修复后无残留） | 可用 | [page.tsx](../../../apps/web/src/apps/wireguard/page.tsx#L715-L729)；docs/archive/audit-2026-11-02/server-test/2026-11-02/report.md P1-A 复验记录 |
+| 一键/远程下发卸载 peer（host-ops 通道） | ✅ onboard 同时返回 peer 卸载命令（清理 khc-host + 受限 authorized_keys），面板有卸载入口 | 可用 | [host_ops.py](../../../../../agent/adapters/host_ops.py#L948-L1021)、PeerOpsPanel 的 showUninstall 状态（L105） |
+| 删除 peer 时把服务清掉（hub 侧） | ✅ 删除 peer = 配置移除 + apply 同步内核接口（P1-A 修复后无残留） | 可用 | [page.tsx](../../../../../apps/web/src/apps/wireguard/page.tsx#L715-L729)；docs/archive/audit-2026-11-02/server-test/2026-11-02/report.md P1-A 复验记录 |
 | 删除 peer 时清掉 **peer 机器上的 WG 服务** | ❌ peer 侧 WG 客户端配置/服务不会被清理（peer 不装 Agent；host-ops 卸载只清 khc-host 通道，不动 WG）。peer 断连但服务残留 | 半可用 | 全仓库无 peer 侧 WG 卸载逻辑（待验证：是否可接受为设计取舍） |
-| 删除 hub 时把服务关掉 | ⚠️ 两段：**WG/Caddy 等应用**可通过面板远程 `uninstall` 动作停服务（wireguard uninstall 会 stop/disable wg-quick、删 conf、可选 purge）；**Agent 本体**卸载只有"命令生成"（复制粘贴 uninstall.sh，需人在 VM 上跑） | 半可用 | [wireguard.py](../../../agent/adapters/wireguard.py#L1719-L1736)、[agent_lifecycle.ts](../../../apps/api/src/routes/agent_lifecycle.ts#L133-L160)（仅生成命令，注释明确"不远程执行"） |
+| 删除 hub 时把服务关掉 | ⚠️ 两段：**WG/Caddy 等应用**可通过面板远程 `uninstall` 动作停服务（wireguard uninstall 会 stop/disable wg-quick、删 conf、可选 purge）；**Agent 本体**卸载只有"命令生成"（复制粘贴 uninstall.sh，需人在 VM 上跑） | 半可用 | [wireguard.py](../../../../../agent/adapters/wireguard.py#L1719-L1736)、[agent_lifecycle.ts](../../../../../apps/api/src/routes/agent_lifecycle.ts#L133-L160)（仅生成命令，注释明确"不远程执行"） |
 
 ---
 

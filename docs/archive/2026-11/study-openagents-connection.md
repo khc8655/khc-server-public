@@ -28,28 +28,30 @@ OpenAgents 不是"一条 WebSocket 打天下"，而是**三条通道分工**：
 
 ## 1. 代码证据
 
+> 说明：以下引用来自 OpenAgents 上游仓库（不在本仓库内），路径为相对其仓库根；原先指向本机 `/tmp/openagents/...` 的绝对链接已失效，统一改为代码路径。
+
 ### 1.1 实时事件通道（WebSocket）
 
-- 客户端连接 + 注册握手：[`sdk/src/openagents/sdk/connectors/websocket_connector.py:61`](file:///tmp/openagents/sdk/src/openagents/sdk/connectors/websocket_connector.py)（`connect_to_server`：先 `ws://` 连接，再发 `system_request REGISTER_AGENT`，收到 `system_response` 后才算连上）
-- 消息监听 + 服务端心跳：[`websocket_connector.py:194`](file:///tmp/openagents/sdk/src/openagents/sdk/connectors/websocket_connector.py)（`_listen_for_messages`：`type=message` 走业务；`type=system_request` 且 `command=ping_agent` 时回 pong）
-- 服务端监听与连接表：[`sdk/src/openagents/sdk/transports/websocket.py:173`](file:///tmp/openagents/sdk/src/openagents/sdk/transports/websocket.py)（`websockets.serve`；每个连接分配 `peer_id`；`register_agent_connection` 把 agent_id 映射到 socket）
+- 客户端连接 + 注册握手：`sdk/src/openagents/sdk/connectors/websocket_connector.py:61`（`connect_to_server`：先 `ws://` 连接，再发 `system_request REGISTER_AGENT`，收到 `system_response` 后才算连上）
+- 消息监听 + 服务端心跳：`websocket_connector.py:194`（`_listen_for_messages`：`type=message` 走业务；`type=system_request` 且 `command=ping_agent` 时回 pong）
+- 服务端监听与连接表：`sdk/src/openagents/sdk/transports/websocket.py:173`（`websockets.serve`；每个连接分配 `peer_id`；`register_agent_connection` 把 agent_id 映射到 socket）
 - 服务端推送：`WebSocketTransport.send()` 按目标 agent 找到 socket 直接 `send`，无目标则广播
-- 每 agent 队列 + 投递：[`sdk/src/openagents/sdk/event_gateway.py:258`](file:///tmp/openagents/sdk/src/openagents/sdk/event_gateway.py)（`agent_event_queues: Dict[str, asyncio.Queue]`；`deliver_to_agent` 入队；`poll_events` 排空队列）
-- 心跳超时清理：[`sdk/src/openagents/sdk/topology.py:566`](file:///tmp/openagents/sdk/src/openagents/sdk/topology.py)（`_heartbeat_monitor`：按 `last_seen` 判断，超时 `unregister_agent`）
+- 每 agent 队列 + 投递：`sdk/src/openagents/sdk/event_gateway.py:258`（`agent_event_queues: Dict[str, asyncio.Queue]`；`deliver_to_agent` 入队；`poll_events` 排空队列）
+- 心跳超时清理：`sdk/src/openagents/sdk/topology.py:566`（`_heartbeat_monitor`：按 `last_seen` 判断，超时 `unregister_agent`）
 
 > 注意：这里的队列是**进程内内存队列**，不是持久化 outbox。服务端重启 / agent 断线期间的消息**不会补发**（只能靠 B/C 通道的数据库记录与游标补齐）。所以 OpenAgents 的 WS 是"快"通道，不是"可靠"通道。
 
 ### 1.2 机器控制通道（HTTP 心跳 + 命令捎带）
 
-- 配对（一次性 code 换每节点 token）：[`workspace/backend/app/routers/nodes.py`](file:///tmp/openagents/workspace/backend/app/routers/nodes.py) `POST /v1/nodes/redeem` —— code 单次使用、短有效期；成功后返回 `nodeId + token`；重复配对复用同一 token，避免正在跑的 agent 掉线
-- 心跳：[`nodes.py`](file:///tmp/openagents/workspace/backend/app/routers/nodes.py) `POST /v1/nodes/heartbeat` —— 更新 `last_heartbeat/status=online`，**把 `pending` 命令改为 `running` 并随响应返回**（注释原文："the node isn't directly reachable, so the heartbeat is our push channel"）
+- 配对（一次性 code 换每节点 token）：`workspace/backend/app/routers/nodes.py` `POST /v1/nodes/redeem` —— code 单次使用、短有效期；成功后返回 `nodeId + token`；重复配对复用同一 token，避免正在跑的 agent 掉线
+- 心跳：`nodes.py` `POST /v1/nodes/heartbeat` —— 更新 `last_heartbeat/status=online`，**把 `pending` 命令改为 `running` 并随响应返回**（注释原文："the node isn't directly reachable, so the heartbeat is our push channel"）
 - 命令状态机：`pending → running → done/error`；daemon 执行后 `POST /commands/:id/result` 回传；**结果落库后清洗命令参数**（可能含 API key）
-- 机器侧节奏：launcher 注释写明 daemon **每 10 秒**读一次 `node.json` 并心跳（[`packages/launcher/src/main/node-pairing.ts:17`](file:///tmp/openagents/packages/launcher/src/main/node-pairing.ts)）；UI 点了"启动 agent"后会主动触发一次心跳，不等下一个 10s
+- 机器侧节奏：launcher 注释写明 daemon **每 10 秒**读一次 `node.json` 并心跳（`packages/launcher/src/main/node-pairing.ts:17`）；UI 点了"启动 agent"后会主动触发一次心跳，不等下一个 10s
 
 ### 1.3 消息同步通道（事件表 + cursor）
 
-- 拉取接口：[`workspace/backend/app/routers/events.py:742`](file:///tmp/openagents/workspace/backend/app/routers/events.py) `GET /v1/events?after=<event_id>&limit=...`
-- 游标恢复：[`workspace/backend/app/services/poll_queries.py:80`](file:///tmp/openagents/workspace/backend/app/services/poll_queries.py) `resume_cursor()` —— 不信任客户端游标倒退，取"客户端游标 / 缓存 head / 最新事件"里最新的位置
+- 拉取接口：`workspace/backend/app/routers/events.py:742` `GET /v1/events?after=<event_id>&limit=...`
+- 游标恢复：`workspace/backend/app/services/poll_queries.py:80` `resume_cursor()` —— 不信任客户端游标倒退，取"客户端游标 / 缓存 head / 最新事件"里最新的位置
 - at-head 优化：客户端停在 head 时空轮询走缓存/单飞，避免每次打 DB；写事件时用 generation 让旧缓存失效
 - 结论：**历史消息永远从数据库按游标读**；WS 只负责把"新事件"即时推给在线 agent，两条路最终一致
 
