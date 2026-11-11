@@ -1,0 +1,16 @@
+# 本地开发环境变量（复制为 .dev.vars 后填写；.dev.vars 已被 gitignore）
+# 注意：这里的值只用于本地 wrangler dev，不要填写生产真实密钥。
+
+ENVIRONMENT=development
+
+# 管理员口令哈希（PBKDF2-SHA256，M1 实现登录后需要）
+# ADMIN_PW_HASH=
+
+# 会话签名密钥（≥32 字节）
+# SESSION_SECRET=
+
+# 敏感字段加密密钥（AES-GCM）
+# MASTER_ENC_KEY=
+
+# 模块签名公钥（base64）
+# MODULE_PUBKEY=
