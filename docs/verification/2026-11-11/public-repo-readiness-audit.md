@@ -57,7 +57,7 @@
 
 ### F-01【阻断公开】`.workbuddy/memory` 运维记忆被提交
 
-- **位置**：[2026-11-05.md](.workbuddy/memory/2026-11-05.md)、[2026-11-06.md](.workbuddy/memory/2026-11-06.md)、[2026-11-07.md](.workbuddy/memory/2026-11-07.md)；main 仍跟踪，历史中共 9 个提交；远程分支 `chore/untrack-workbuddy` 尚未合并。
+- **位置**：`.workbuddy/memory/2026-11-05.md`、`2026-11-06.md`、`2026-11-07.md`（该目录只在私有归档 `khc-server` 中，公开库不含）；main 仍跟踪，历史中共 9 个提交；远程分支 `chore/untrack-workbuddy` 尚未合并。
 - **内容类型**：真实公网 IPv4/IPv6、SSH 用户名与私钥文件名、Agent 发布签名私钥路径、节点 ID、机器 hostname、面板与 Worker 地址、D1 操作细节、测试机登录方式。
 - **暴露后的实际风险**：这是一份按时间整理的"生产环境说明书"——攻击者可直接得到入口、节点、账号名、端口、密钥文件名与变更时间线；IPv6 地址还绕开了常见的按 IPv4 封禁策略。即使没有口令，也足以支撑定向探测、撞库与社工。
 - **修复动作**：从工作树移除（`git rm -r --cached .workbuddy` 只是开始），并清理全部历史/分支；`.gitignore` 增加 `.workbuddy/`。**仅删除当前文件无效。**
@@ -73,11 +73,11 @@
 
 - **位置**（受版本控制）：
   - 运维记忆：`.workbuddy/memory/2026-11-06.md`、`2026-11-07.md`
-  - 根文档：[CHANGELOG.md](CHANGELOG.md)、[TODO-2026-11-06.md](docs/TODO-2026-11-06.md)、[agent-lifecycle.md](docs/agent-lifecycle.md)、[auto-deploy.md](docs/auto-deploy.md)、[live-observation.md](docs/live-observation.md)、[plan-v4.md](docs/plan-v4.md)、[node-onboarding.md](docs/runbook/node-onboarding.md)、[release.md](docs/engineering/release.md)
-  - 归档：[setup-notes.md](docs/archive/audit-2026-11-02/server-test/2026-11-02/setup-notes.md)、[report.md](docs/archive/audit-2026-11-02/server-test/2026-11-02/report.md)、[test-plan.md](docs/archive/audit-2026-11-02/server-test/2026-11-02/test-plan.md)、[walkthrough.md](docs/archive/audit-2026-11-02/flow-walkthrough/2026-11-02/walkthrough.md)、`docs/archive/2026-11/c1-acceptance.md`
-  - 验证记录：[2026-11-03/report.md](docs/verification/2026-11-03/report.md)、[2026-11-04/snapshot-stability.md](docs/verification/2026-11-04/snapshot-stability.md)、[2026-11-07/incident-workers-dev-as-origin.md](docs/verification/2026-11-07/incident-workers-dev-as-origin.md)、[2026-11-07/p0-closeout.md](docs/verification/2026-11-07/p0-closeout.md)
-  - 测试与脚本：`apps/api/test/{cfDns,node-client,nodes,tcp-fetch,tunnels}.test.ts`、[p0-verify-20261107.py](scripts/p0-verify-20261107.py)、[uptime-check.mjs](scripts/uptime-check.mjs)、[live-sse-check.mjs](scripts/live-sse-check.mjs)
-  - 索引本身：[docs/README.md](docs/README.md#L72) 第 72 行也写了真实面板入口。
+  - 根文档：[CHANGELOG.md](../../../CHANGELOG.md)、[TODO-2026-11-06.md](../../../docs/TODO-2026-11-06.md)、[agent-lifecycle.md](../../../docs/agent-lifecycle.md)、[auto-deploy.md](../../../docs/auto-deploy.md)、[live-observation.md](../../../docs/live-observation.md)、[plan-v4.md](../../../docs/plan-v4.md)、[node-onboarding.md](../../../docs/runbook/node-onboarding.md)、[release.md](../../../docs/engineering/release.md)
+  - 归档：[setup-notes.md](../../../docs/archive/audit-2026-11-02/server-test/2026-11-02/setup-notes.md)、[report.md](../../../docs/archive/audit-2026-11-02/server-test/2026-11-02/report.md)、[test-plan.md](../../../docs/archive/audit-2026-11-02/server-test/2026-11-02/test-plan.md)、[walkthrough.md](../../../docs/archive/audit-2026-11-02/flow-walkthrough/2026-11-02/walkthrough.md)、`docs/archive/2026-11/c1-acceptance.md`
+  - 验证记录：[2026-11-03/report.md](../../../docs/verification/2026-11-03/report.md)、[2026-11-04/snapshot-stability.md](../../../docs/verification/2026-11-04/snapshot-stability.md)、[2026-11-07/incident-workers-dev-as-origin.md](../../../docs/verification/2026-11-07/incident-workers-dev-as-origin.md)、[2026-11-07/p0-closeout.md](../../../docs/verification/2026-11-07/p0-closeout.md)
+  - 测试与脚本：`apps/api/test/{cfDns,node-client,nodes,tcp-fetch,tunnels}.test.ts`、[p0-verify-20261107.py](../../../scripts/p0-verify-20261107.py)、[uptime-check.mjs](../../../scripts/uptime-check.mjs)、[live-sse-check.mjs](../../../scripts/live-sse-check.mjs)
+  - 索引本身：[docs/README.md](../../../docs/README.md#L72) 第 72 行也写了真实面板入口。
 - **内容类型**：8 个公网 IPv4（其中包含生产节点 `node-prod-1` 的地址）、1 个真实 IPv6、面板域名 `a.****.<tld>`、Worker 子域 `khc-*****.*******.workers.dev`、节点域名 `khc*.*****.<tld>`、`oc.******.<tld>`、Cloudflare 边缘 IP、D1 库名/ID、Worker 名、节点名与 hostname、SSH 用户名与端口。
 - **暴露后的实际风险**：公开代码本来就会暴露"系统怎么工作"，但这份清单额外暴露了"你的系统在哪、叫什么、怎么登录"。生产节点 IP 一旦公开，攻击者可绕过 CDN 直接打源站；D1/Worker 标识便于精确社工 Cloudflare 账号；节点名与 hostname 可用于在泄露数据中做关联。
 - **修复动作**：统一替换为占位符（`<panel-domain>`、`<node-ip>`、`<d1-id>`）；`wrangler.toml` 的 `database_id` 改为占位或 CI 注入；测试改用文档保留段（`198.51.100.0/24`、`203.0.113.0/24`）。随后按 §7 处理历史。**只改当前文件无效。**
@@ -98,14 +98,14 @@
 
 ### F-06【必须处理】`wrangler.toml` 暴露 D1 / Worker / 域名
 
-- **位置**：[wrangler.toml](wrangler.toml)。
+- **位置**：[wrangler.toml](../../../wrangler.toml)。
 - **内容类型**：Worker `name`、D1 `database_name` / `database_id`（`39dc****-****-****-****-**********`）、`LIVE_ORIGINS`、生产入口域名。
 - **暴露后的实际风险**：这些不是凭据，不能单独用于访问资源；但会精确暴露部署拓扑与账号内资源命名。D1 ID 还可能与公开的 Worker 版本信息关联。
 - **修复动作**：`database_id` 与 `name` 改为占位符，部署时由 CI 变量注入；或明确接受。**注意：即便接受，仍需处理 F-03 中的其他真实地址。**
 
 ### F-07【必须处理】归档文档中的 SSH 用户名、端口与私钥路径
 
-- **位置**：[setup-notes.md](docs/archive/audit-2026-11-02/server-test/2026-11-02/setup-notes.md)、[test-plan.md](docs/archive/audit-2026-11-02/server-test/2026-11-02/test-plan.md)。
+- **位置**：[setup-notes.md](../../../docs/archive/audit-2026-11-02/server-test/2026-11-02/setup-notes.md)、[test-plan.md](../../../docs/archive/audit-2026-11-02/server-test/2026-11-02/test-plan.md)。
 - **内容类型**：`ssh -i <私钥路径> <user>@<ip> -p <port>`、密钥文件名（如云厂商默认密钥文件名）、本机密钥路径。
 - **暴露后的实际风险**：私钥本体未泄露，但登录方式、用户名、端口、密钥文件名完整暴露；对本机被入侵的场景，等于把"去哪儿找钥匙"也告诉了对方。
 - **修复动作**：脱敏为 `<ssh-key>` / `<user>@<host>:<port>`；清历史。
@@ -138,7 +138,7 @@
 
 ### F-12【建议处理】代码与脚本默认值指向生产入口
 
-- **位置**：[app.ts](apps/api/src/app.ts#L68)、[types.ts](apps/api/src/types.ts#L45)、`scripts/uptime-check.mjs`、`scripts/live-sse-check.mjs`、[ci.yml](.github/workflows/ci.yml)。
+- **位置**：[app.ts](../../../apps/api/src/app.ts#L68)、[types.ts](../../../apps/api/src/types.ts#L45)、`scripts/uptime-check.mjs`、`scripts/live-sse-check.mjs`、[ci.yml](../../../.github/workflows/ci.yml)。
 - **内容类型**：注释/示例中的 `https://a.****.<tld>`、`LIVE_ORIGINS` 示例、运维脚本默认 base URL。
 - **风险**：公开即公布面板入口；脚本默认值会引导攻击者直接探测。
 - **修复动作**：示例统一改 `<panel-domain>`；CI 改用 repository variable；脚本默认值不指向真实域名。

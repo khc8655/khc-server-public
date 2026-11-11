@@ -208,7 +208,7 @@
 
 ### 4.1 现状为什么是"三套体系"（以代码为准）
 
-当前 `/hubs/:id/ops`（[HubOpsPage.tsx](apps/web/src/pages/HubOpsPage.tsx)）自上而下堆了 4 个载体、3 套交互：
+当前 `/hubs/:id/ops`（[HubOpsPage.tsx](../../../apps/web/src/pages/HubOpsPage.tsx)）自上而下堆了 4 个载体、3 套交互：
 
 | 区块 | 载体 | 操作方式 | 问题 |
 |---|---|---|---|
@@ -217,7 +217,7 @@
 | 诊断卡（DiagnosticsCard） | Badge 汇总 + Banner + 问题表格 | 行点击开 DiagnosticsDrawer | 与上面两块并排，但没有回答"我该先修哪个" |
 | 运维操作（HostOpsActions） | 3 个并排按钮 | 各开一套完全不同的抽屉 | 进程=只读表格+**抽屉里再弹 Dialog**；防火墙=编辑表格+apply/confirm 两段式；SSH 公钥=表格+添加抽屉+删除确认 |
 
-即：只读展示两套（Stat/KeyValue + 诊断表），操作入口又是一套（三按钮三抽屉），用户不知道"看"和"做"的边界在哪。关键事实（来自 [khc_host.py](agent/adapters/host_ops/khc_host.py#L95-L105)）：host-ops 白名单动词只有 `status / snapshot / version / fw.show / fw.apply / fw.confirm / keys.list / keys.add / keys.remove`——**没有重启服务**（现状只能在面板里看着 failed 的服务然后自己去 SSH）；进程 kill 已明确移除（[ProcessDrawer.tsx](apps/web/src/apps/host-ops/ProcessDrawer.tsx#L29-L32)）。
+即：只读展示两套（Stat/KeyValue + 诊断表），操作入口又是一套（三按钮三抽屉），用户不知道"看"和"做"的边界在哪。关键事实（来自 [khc_host.py](../../../agent/adapters/host_ops/khc_host.py#L95-L105)）：host-ops 白名单动词只有 `status / snapshot / version / fw.show / fw.apply / fw.confirm / keys.list / keys.add / keys.remove`——**没有重启服务**（现状只能在面板里看着 failed 的服务然后自己去 SSH）；进程 kill 已明确移除（[ProcessDrawer.tsx](../../../apps/web/src/apps/host-ops/ProcessDrawer.tsx#L29-L32)）。
 
 ### 4.2 单一交互模型：状态带 + 对象表 + 抽屉
 
