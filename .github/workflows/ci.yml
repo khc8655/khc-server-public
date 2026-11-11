@@ -4,8 +4,9 @@ on:
   push:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md']
+  # PR 不设路径豁免：纯文档 PR 也要跑 agent + verify，否则 main 的必需检查永远等不到，
+  # 文档 PR 会被分支保护永久卡住（只能 admin 绕过）。
   pull_request:
-    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 concurrency:
@@ -85,7 +86,10 @@ jobs:
   deploy:
     name: Deploy production Worker
     needs: [agent, verify]
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.ref == 'refs/heads/main'
+    # 2026-11-11 起改为**仅手动触发**（ADR-0015）：main 合并 = 过 CI，不再等于生产部署。
+    # 公开库不持有发布签名私钥，无法在 CI 内生成签名清单；发版由主人本机执行
+    # ./scripts/deploy-local.sh（流程见 docs/engineering/release.md §3）。
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # 部署成功后自动打发布标签（ADR-0013 L1：发布锚点），需要写仓库权限
     permissions:
@@ -95,6 +99,24 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+
+      # fail-closed：缺凭据时给出明确中文提示并阻断，不静默跳过、不部署到错误账号。
+      - name: Check deploy credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "ERROR: 缺少部署凭据：$missing"
+            echo "       公开库默认不持有生产 token（ADR-0015）。请优先在本机执行 ./scripts/deploy-local.sh；"
+            echo "       若确需由 CI 部署，先在仓库 Secrets 配置这两个值（docs/engineering/release.md §3.1）。"
+            exit 1
+          fi
+          echo "OK: 部署凭据已配置"
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
