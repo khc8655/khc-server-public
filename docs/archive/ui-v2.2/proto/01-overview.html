@@ -1,0 +1,60 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <div class="brand"><div class="logo">C</div>Console</div>
+  <a class="nav-item active"><i data-i="home"></i>概览</a>
+  <a class="nav-item "><i data-i="server"></i>节点<span class="count">4</span></a>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>设置</a>
+  <div class="nav-group">节点</div>
+  <a class="nav-item hubq"><span class="dot ok"></span>hk-1</a>
+  <a class="nav-item hubq"><span class="dot ok"></span>tyo-1</a>
+  <a class="nav-item hubq"><span class="dot warn"></span>sg-1</a>
+  <a class="nav-item hubq"><span class="dot off"></span>fra-1</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs"><b>概览</b></div>
+    <div class="search"><i data-i="search"></i>搜索节点、客户端、域名…<span class="kbd">⌘K</span></div>
+    <button class="btn ghost icon"><i data-i="moon"></i></button></div>
+  <div class="content">
+    <div class="page-head"><div><h1>下午好，康爷</h1><div class="sub">4 个节点中 3 个在线 · 有 2 件事需要你处理</div></div>
+      <div class="actions"></div></div>
+
+    <div class="grid g4" style="margin-bottom:var(--s4)">
+      <div class="card stat"><div class="label"><i data-i="server"></i>节点</div><div class="value">3<small> / 4 在线</small></div><div class="hint">fra-1 离线 2 小时</div></div>
+      <div class="card stat"><div class="label"><i data-i="users"></i>客户端</div><div class="value">23</div><div class="hint">近 24 小时活跃 17</div></div>
+      <div class="card stat"><div class="label"><i data-i="lock"></i>证书</div><div class="value">6</div><div class="hint">最近到期 12 天后</div></div>
+      <div class="card stat"><div class="label"><i data-i="activity"></i>本周变更</div><div class="value">14</div><div class="hint">全部已生效</div></div>
+    </div>
+
+    <div class="grid g-2-1" style="align-items:start">
+      <div class="card">
+        <div class="card-h">节点<span class="more">全部 4 个 →</span></div>
+        <table class="table">
+          <thead><tr><th>名称</th><th>状态</th><th>客户端</th><th>流量（24h）</th><th>配置</th><th></th></tr></thead>
+          <tbody>
+          <tr><td><div class="cell-main"><span class="name">hk-1</span><span class="t3 sm">香港</span></div></td><td><span class="badge ok"><span class="dot ok"></span>在线</span></td><td class="num">9</td><td class="num">38.2 GB</td><td><span class="sync"><i data-i="check"></i>已同步</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+          <tr><td><div class="cell-main"><span class="name">tyo-1</span><span class="t3 sm">东京</span></div></td><td><span class="badge ok"><span class="dot ok"></span>在线</span></td><td class="num">7</td><td class="num">21.7 GB</td><td><span class="sync" style="color:var(--accent)"><span class="dot info pulse"></span>下发中 · rev 42</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+          <tr><td><div class="cell-main"><span class="name">sg-1</span><span class="t3 sm">新加坡</span></div></td><td><span class="badge warn"><span class="dot warn"></span>降级连接</span></td><td class="num">5</td><td class="num">9.4 GB</td><td><span class="sync"><i data-i="check"></i>已同步</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+          <tr><td><div class="cell-main"><span class="name">fra-1</span><span class="t3 sm">法兰克福</span></div></td><td><span class="badge"><span class="dot off"></span>离线 2 小时</span></td><td class="num">2</td><td class="num t3">—</td><td><span class="sync" style="color:var(--warn)"><i data-i="pause"></i>待上线后生效</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+          </tbody></table>
+      </div>
+      <div class="grid" style="align-content:start">
+        <div class="card">
+          <div class="card-h">需要处理<span class="badge warn" style="margin-left:6px">2</span></div>
+          <div class="list-row"><span class="dot danger"></span><div class="main"><div class="title">fra-1 离线</div><div class="meta">最后连接 19:52 · 2 个客户端受影响</div></div><button class="btn sm">查看</button></div>
+          <div class="list-row"><span class="dot warn"></span><div class="main"><div class="title">*.example.dev 12 天后到期</div><div class="meta">自动续期上次失败：DNS 凭据无效</div></div><button class="btn sm">修复</button></div>
+        </div>
+        <div class="card">
+          <div class="card-h">最近活动<span class="more">全部 →</span></div>
+          <div class="list-row"><i data-i="users" data-s="14"></i><div class="main"><div class="title sm">添加客户端 pixel-8</div><div class="meta">tyo-1 · 3 分钟前</div></div></div>
+          <div class="list-row"><i data-i="lock" data-s="14"></i><div class="main"><div class="title sm">续期 api.example.dev</div><div class="meta">hk-1 · 今天 09:12 · 成功</div></div></div>
+          <div class="list-row"><i data-i="refresh" data-s="14"></i><div class="main"><div class="title sm">Agent 升级到 0.5.0</div><div class="meta">sg-1 · 昨天</div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main></div>
+<script src="icons.js"></script></body></html>

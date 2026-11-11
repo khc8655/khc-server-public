@@ -1,0 +1,57 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <a class="nav-item back"><i data-i="left"></i>全部节点</a>
+  <div class="hub-switch"><span class="dot ok"></span><div><div class="hn">hk-1</div><div class="hs">香港 · 在线</div></div><i data-i="chev"></i></div>
+  <a class="nav-item "><i data-i="home"></i>概况</a>
+  <a class="nav-item "><i data-i="users"></i>WireGuard<span class="count">7</span></a>
+  <a class="nav-item "><i data-i="globe"></i>站点<span class="count">3</span></a>
+  <a class="nav-item "><i data-i="arrow"></i>转发<span class="count">2</span></a>
+  <a class="nav-item "><i data-i="lock"></i>证书<span class="count">2</span></a>
+  <a class="nav-item active"><i data-i="box"></i>应用<span class="count">1</span></a>
+  <div class="nav-sep"></div>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>节点设置</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs">节点 <i data-i="right" data-s="14"></i> hk-1 <i data-i="right" data-s="14"></i> 应用 <i data-i="right" data-s="14"></i> <b>sing-box</b></div>
+    <div class="search"><i data-i="search"></i>搜索…<span class="kbd">⌘K</span></div></div>
+  <div class="content" style="max-width:960px">
+    <div class="page-head"><div style="display:flex;gap:var(--s3);align-items:center">
+      <div style="width:40px;height:40px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center"><i data-i="box" data-s="20"></i></div>
+      <div><h1>sing-box</h1><div class="sub"><span class="badge ok"><span class="dot ok"></span>运行中</span><span>1.10.1-1</span><span>hk-1</span><span class="t3">签名 module-2026a ✓</span></div></div></div>
+      <div class="actions"><button class="btn">重启</button><button class="btn icon"><i data-i="more"></i></button></div></div>
+    <div class="tabs"><span class="tab">概况</span><span class="tab active">配置</span><span class="tab">分享</span><span class="tab">日志</span></div>
+
+    <div class="banner warn" style="margin-bottom:var(--s5)"><i data-i="alert"></i><div class="btxt">有 2 处未保存的修改<div class="t2">保存后会生成 rev 18 并立即下发到 hk-1，sing-box 将重启（约 1 秒中断）。</div></div></div>
+
+    <div class="grid" style="grid-template-columns:200px 1fr;gap:var(--s8)">
+      <div class="sm">
+        <div class="nav-item active" style="height:30px">入站</div>
+        <div class="nav-item" style="height:30px">路由</div>
+        <div class="nav-item" style="height:30px">日志</div>
+        <div class="nav-item" style="height:30px">高级</div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-top:0">入站 1 · VLESS Reality</div>
+        <div class="row2">
+          <div class="field"><label>监听端口</label><div class="input invalid mono">443<span class="suffix"><i data-i="alert" data-s="14"></i></span></div><div class="err">443/tcp 已被 Caddy 占用。可改用 8443，或在“节点 → 入口模式”切换为代理优先。</div></div>
+          <div class="field"><label>伪装目标（SNI）</label><div class="input">www.microsoft.com</div><div class="help">需支持 TLS 1.3 与 H2 的大站</div></div>
+        </div>
+        <div class="field"><label>Reality 密钥对</label><div class="secret"><i data-i="shield" data-s="14"></i>私钥由节点生成，不离开 hk-1<span class="acts"><span class="t3 xs" style="align-self:center;margin-right:6px">公钥</span><span class="mono t2" style="align-self:center">Zq3x…Lm8A</span><button class="btn ghost icon sm"><i data-i="copy" data-s="14"></i></button></span></div></div>
+        <div class="field"><label>用户</label>
+          <div class="card">
+            <div class="list-row"><div class="main"><div class="title">kang</div><div class="meta mono">uuid 7b2c…91fe</div></div><button class="btn ghost sm"><i data-i="qr" data-s="14"></i>分享</button><button class="btn ghost icon sm"><i data-i="more"></i></button></div>
+            <div class="list-row"><div class="main"><div class="title">family</div><div class="meta mono">uuid 0d4e…a3c1</div></div><button class="btn ghost sm"><i data-i="qr" data-s="14"></i>分享</button><button class="btn ghost icon sm"><i data-i="more"></i></button></div>
+            <div class="list-row" style="color:var(--text-2)"><i data-i="plus" data-s="14"></i><span class="sm">添加用户</span></div>
+          </div></div>
+        <div class="check-row"><div><div>启用 Flow（xtls-rprx-vision）</div><div class="t3 xs">推荐开启</div></div><span class="toggle on"></span></div>
+        <div style="display:flex;gap:var(--s2);justify-content:flex-end;margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--border)">
+          <button class="btn">放弃修改</button><button class="btn primary disabled">保存并生效</button></div>
+      </div>
+    </div>
+  </div>
+</main></div>
+<script src="icons.js"></script></body></html>

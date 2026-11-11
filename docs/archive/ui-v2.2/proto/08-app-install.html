@@ -1,0 +1,44 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <a class="nav-item back"><i data-i="left"></i>全部节点</a>
+  <div class="hub-switch"><span class="dot ok"></span><div><div class="hn">hk-1</div><div class="hs">香港 · 在线</div></div><i data-i="chev"></i></div>
+  <a class="nav-item "><i data-i="home"></i>概况</a>
+  <a class="nav-item "><i data-i="users"></i>WireGuard<span class="count">7</span></a>
+  <a class="nav-item "><i data-i="globe"></i>站点<span class="count">3</span></a>
+  <a class="nav-item "><i data-i="arrow"></i>转发<span class="count">2</span></a>
+  <a class="nav-item "><i data-i="lock"></i>证书<span class="count">2</span></a>
+  <a class="nav-item active"><i data-i="box"></i>应用<span class="count">1</span></a>
+  <div class="nav-sep"></div>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>节点设置</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs">节点 <i data-i="right" data-s="14"></i> hk-1 <i data-i="right" data-s="14"></i> <b>应用</b></div><div class="search"><i data-i="search"></i>搜索…<span class="kbd">⌘K</span></div></div>
+  <div class="content">
+    <div class="page-head"><div><h1>应用</h1><div class="sub"><span class="scope"><i data-i="server" data-s="12"></i>hk-1</span><span>1 个已安装</span></div></div><div class="actions"><button class="btn primary"><i data-i="plus"></i>安装应用</button></div></div>
+    <div class="card"><table class="table"><thead><tr><th>应用</th><th>版本</th><th>端口</th><th>状态</th><th></th></tr></thead><tbody>
+    <tr><td><div class="cell-main"><i data-i="box"></i><span class="name">sing-box</span></div></td><td class="mono">1.10.1-1</td><td class="mono">8443/tcp</td><td><span class="badge ok"><span class="dot ok"></span>运行中</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+    </tbody></table></div>
+  </div>
+</main></div>
+<div class="scrim"></div>
+<div class="drawer">
+  <div class="drawer-h"><div><h2>安装 Hysteria2</h2><div class="t3 xs">到 hk-1 · 2.6.0-1 · 签名 module-2026a ✓</div></div><button class="btn ghost icon x"><i data-i="x"></i></button></div>
+  <div class="drawer-b">
+    <div class="wsteps" style="margin-bottom:var(--s5)"><div class="done">选择</div><div class="cur">预检</div><div>配置</div><div>安装</div></div>
+    <div class="section-title" style="margin-top:0">安装前检查（hk-1 实时上报）</div>
+    <div class="pre-row"><span style="color:var(--ok)"><i data-i="check"></i></span>架构 linux/arm64<span class="r">支持</span></div>
+    <div class="pre-row"><span style="color:var(--ok)"><i data-i="check"></i></span>内存 可用 612 MB<span class="r">需要 ≥ 64 MB</span></div>
+    <div class="pre-row"><span style="color:var(--warn)"><i data-i="alert"></i></span>端口 443/udp<span class="r">空闲，但入口模式为“站点优先”</span></div>
+    <div class="pre-row"><span style="color:var(--ok)"><i data-i="check"></i></span>证书 *.example.dev<span class="r">可用 · 12 天后到期</span></div>
+    <div class="pre-row"><span style="color:var(--ok)"><i data-i="check"></i></span>与已安装应用冲突<span class="r">无</span></div>
+    <div class="banner warn" style="margin-top:var(--s4)"><i data-i="alert"></i><div class="btxt">Hysteria2 使用 UDP 443，与 Caddy（TCP 443）可以共存。<div class="t2">但 *.example.dev 续期正在失败，安装后需先修复，否则 12 天后连接会中断。</div></div></div>
+    <div class="section-title">安装后将会</div>
+    <div class="sm t2" style="line-height:1.9">• 在 hk-1 打开 443/udp<br>• 新建系统服务 hysteria2，开机自启<br>• 订阅证书 *.example.dev，续期后自动重载</div>
+  </div>
+  <div class="drawer-f"><span class="note">无阻断项，可继续</span><button class="btn">上一步</button><button class="btn primary">下一步：配置</button></div>
+</div>
+<script src="icons.js"></script></body></html>

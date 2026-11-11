@@ -1,0 +1,54 @@
+# khc-server — Worker 配置（公开版）
+# 说明：这里的 name / database / LIVE_ORIGINS 是**本地开发用默认值**，不是生产值。
+# CI 部署前会用仓库 Secrets 覆盖这几行（见 .github/workflows/ci.yml 的 "Render wrangler.toml" 步骤），
+# 因此公开仓库里不需要、也不应该出现真实 Worker/D1/入口标识。
+# 本地要连自己的 Cloudflare 账号时，复制为 wrangler.local.toml 并改值（已 gitignore）。
+name = "khc-local-dev"
+main = "apps/api/src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+# ⚠️ workers_dev 必须保持 true（2026-11-07 事故回滚）。
+# 生产入口 https://panel.example.com 并不是 Cloudflare Workers 自定义域名，而是：
+#   panel.example.com --CNAME--> <edge-host>（第三方边缘）
+#                --> <edge-ip> 边缘节点 --回源--> <worker>.<subdomain>.workers.dev
+# 证据：`curl https://panel.example.com/cdn-cgi/trace` 返回 h=<worker>.<subdomain>.workers.dev。
+# 即 workers.dev 子域是这条链的**源站**；一旦置 false，边缘回源拿不到任何内容，
+# 整站（含 /、/api/v1/health、Agent 包）全部返回 404 + `error code: 1042`。
+# §3.7「关闭 workers.dev 直接访问」因此**在当前拓扑下不可执行**；
+# 要落地必须先给 Worker 挂一个真正的 Cloudflare 自定义域名（如 panel-alt.example.com），
+# 再把第三方边缘的源站改到该域名，然后才能置 false。详见 docs/auto-deploy.md §事故记录。
+workers_dev = true
+# §3.6：preview_urls 与 workers_dev 相互独立（Cloudflare 官方文档），显式开启保留
+# `wrangler versions upload` 的版本预览 URL，让 CI 部署前冒烟真正验证「本次新构建」。
+preview_urls = true
+
+[assets]
+directory = "apps/web/dist"
+run_worker_first = true
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# L3 构建标识（ADR-0013）：运行时读 env.CF_VERSION_METADATA 得到
+# id（Worker Version ID）/ tag（部署时 --tag 打的提交 sha 前 12 位）/ timestamp。
+# 让 /api/v1/version 能回答「线上跑的到底是哪个提交」，取代"只有 CF Version ID 可查"。
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[vars]
+ENVIRONMENT = "production"
+API_VERSION = "v1"
+# 面板对外入口白名单（CSRF Origin 校验 + Agent 观测层 --live-origins）；
+# 未配置时只允许与请求同 host 的 Origin。
+# 两个入口地位对等、都要能用：CDN 域名与 *.workers.dev 原生域名。
+# 只写其中一个，从另一个入口访问时观测层会按 Origin 403（2026-11-07 真机踩过）。
+LIVE_ORIGINS = "http://localhost:5173,http://127.0.0.1:8787"
+
+# Workers Logs（架构审查 A-10）：控制台可见调用日志
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "khc-db-local"
+database_id = "00000000-0000-0000-0000-000000000000"
+

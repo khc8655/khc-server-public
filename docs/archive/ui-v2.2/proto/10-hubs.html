@@ -1,0 +1,37 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <div class="brand"><div class="logo">C</div>Console</div>
+  <a class="nav-item "><i data-i="home"></i>概览</a>
+  <a class="nav-item active"><i data-i="server"></i>节点<span class="count">4</span></a>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>设置</a>
+  <div class="nav-group">节点</div>
+  <a class="nav-item hubq"><span class="dot ok"></span>hk-1</a>
+  <a class="nav-item hubq"><span class="dot ok"></span>tyo-1</a>
+  <a class="nav-item hubq"><span class="dot warn"></span>sg-1</a>
+  <a class="nav-item hubq"><span class="dot off"></span>fra-1</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs"><b>节点</b></div><div class="search"><i data-i="search"></i>搜索节点、客户端、域名…<span class="kbd">⌘K</span></div></div>
+  <div class="content">
+    <div class="page-head"><div><h1>节点</h1><div class="sub">每台服务器是一个节点；客户端、站点、应用都在节点里管理</div></div>
+      <div class="actions"><button class="btn primary"><i data-i="plus"></i>添加节点</button></div></div>
+    <div class="card">
+      <div class="toolbar"><div class="tbl-search"><i data-i="search" data-s="14"></i>筛选节点</div><span class="filter on">状态：全部</span></div>
+      <table class="table">
+        <thead><tr><th>名称</th><th>状态</th><th>地址</th><th>客户端</th><th>应用</th><th>Agent</th><th>配置</th><th></th></tr></thead>
+        <tbody>
+        <tr><td><div class="cell-main"><span class="name">fra-1</span><span class="t3 sm">法兰克福</span></div></td><td><span class="badge"><span class="dot off"></span>离线 2 小时</span></td><td class="mono">198.51.100.7</td><td class="num">2</td><td class="num">0</td><td class="mono">0.5.0</td><td><span class="sync" style="color:var(--warn)"><i data-i="pause"></i>待上线后生效</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+        <tr><td><div class="cell-main"><span class="name">sg-1</span><span class="t3 sm">新加坡</span></div></td><td><span class="badge warn"><span class="dot warn"></span>降级连接</span></td><td class="mono">203.0.113.88</td><td class="num">5</td><td class="num">0</td><td class="mono">0.5.0</td><td><span class="sync"><i data-i="check"></i>已同步</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+        <tr><td><div class="cell-main"><span class="name">hk-1</span><span class="t3 sm">香港</span></div></td><td><span class="badge ok"><span class="dot ok"></span>在线</span></td><td class="mono">203.0.113.10</td><td class="num">9</td><td class="num">1</td><td class="mono">0.5.0</td><td><span class="sync"><i data-i="check"></i>已同步</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+        <tr><td><div class="cell-main"><span class="name">tyo-1</span><span class="t3 sm">东京</span></div></td><td><span class="badge ok"><span class="dot ok"></span>在线</span></td><td class="mono">203.0.113.24</td><td class="num">7</td><td class="num">0</td><td class="mono">0.5.0</td><td><span class="sync" style="color:var(--accent)"><span class="dot info pulse"></span>下发中 · rev 42</span></td><td class="r t3"><i data-i="right"></i></td></tr>
+        <tr><td><div class="cell-main"><span class="name">sg-2</span><span class="t3 sm">新加坡</span></div></td><td><span class="badge"><span class="dot off"></span>等待接入</span></td><td class="t3">—</td><td class="t3">—</td><td class="t3">—</td><td class="t3">—</td><td><button class="btn sm">继续添加</button></td><td class="r t3"><i data-i="right"></i></td></tr>
+        </tbody></table>
+    </div>
+    <div class="xs t3" style="margin-top:var(--s3)">排序：需要关注的在前（离线 → 降级 → 正常 → 等待接入）。这里没有“添加客户端”——进入节点后再添加。</div>
+  </div>
+</main></div>
+<script src="icons.js"></script></body></html>

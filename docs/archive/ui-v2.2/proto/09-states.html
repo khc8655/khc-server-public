@@ -1,0 +1,49 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css">
+<style>body{padding:28px}.cols{display:grid;grid-template-columns:1.1fr 1fr;gap:20px}h2{font-size:14px;margin:0 0 8px}.c{padding:14px}</style></head><body>
+<h1 style="font-size:20px;margin:0 0 4px">状态矩阵（视觉回归基准）</h1><div class="t2 sm" style="margin-bottom:20px">每个组件的每种状态都必须长这样；实现页 /dev/gallery 截图与本页逐像素对比</div>
+<div class="cols">
+<div class="card c"><h2>Button</h2>
+<table class="matrix"><tr><th></th><th>primary</th><th>default</th><th>ghost</th><th>danger（仅确认框）</th></tr>
+<tr><td>默认</td><td><button class="btn primary">保存并生效</button></td><td><button class="btn">取消</button></td><td><button class="btn ghost">更多</button></td><td><button class="btn danger">删除节点</button></td></tr>
+<tr><td>悬停</td><td><button class="btn primary hover">保存并生效</button></td><td><button class="btn hover">取消</button></td><td><button class="btn ghost hover">更多</button></td><td><button class="btn danger" style="background:var(--danger-hover)">删除节点</button></td></tr>
+<tr><td>键盘焦点</td><td><button class="btn primary focus">保存并生效</button></td><td><button class="btn focus">取消</button></td><td><button class="btn ghost focus">更多</button></td><td><button class="btn danger focus">删除节点</button></td></tr>
+<tr><td>加载中</td><td><button class="btn primary"><span class="spin"></span>保存中</button></td><td><button class="btn"><span class="spin"></span>检测中</button></td><td>—</td><td><button class="btn danger"><span class="spin"></span>删除中</button></td></tr>
+<tr><td>禁用</td><td><button class="btn primary disabled">保存并生效</button></td><td><button class="btn disabled">取消</button></td><td><button class="btn ghost disabled">更多</button></td><td><button class="btn danger disabled">删除节点</button></td></tr>
+<tr><td>sm（表格/工具栏）</td><td><button class="btn primary sm">添加</button></td><td><button class="btn sm"><i data-i="copy" data-s="14"></i>复制</button></td><td><button class="btn ghost icon sm"><i data-i="more"></i></button></td><td>不允许</td></tr>
+</table></div>
+<div class="card c"><h2>TextInput</h2>
+<table class="matrix" style="width:100%"><tr><td>默认</td><td><div class="input">api.example.dev</div></td></tr>
+<tr><td>占位</td><td><div class="input" style="color:var(--text-3)">例如 api.example.dev</div></td></tr>
+<tr><td>聚焦</td><td><div class="input focus">api.example.dev</div></td></tr>
+<tr><td>错误</td><td><div class="input invalid mono">443</div><div class="err xs" style="color:var(--danger);margin-top:4px">443/tcp 已被 Caddy 占用。可改用 8443。</div></td></tr>
+<tr><td>校验中</td><td><div class="input mono">8443<span class="suffix"><span class="spin" style="width:12px;height:12px;border:2px solid var(--text-3);border-right-color:transparent;border-radius:50%"></span></span></div></td></tr>
+<tr><td>只读</td><td><div class="input ro mono">10.8.0.1/24</div></td></tr>
+<tr><td>禁用</td><td><div class="input ro" style="opacity:.5">由节点自动分配</div></td></tr>
+</table></div>
+<div class="card" style="grid-column:1/3"><div class="c" style="padding-bottom:0"><h2>Table 行</h2></div>
+<table class="table"><thead><tr><th>示例</th><th>名称</th><th>地址</th><th>最近握手</th><th>状态</th><th></th></tr></thead><tbody>
+<tr><td class="t3 xs">默认</td><td><div class="cell-main"><span class="dot ok"></span><span class="name">macbook</span></div></td><td class="mono">10.8.0.2</td><td>42 秒前</td><td><span class="badge ok">在线</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr class="hov"><td class="t3 xs" style="background:var(--surface-2)">悬停</td><td style="background:var(--surface-2)"><div class="cell-main"><span class="dot ok"></span><span class="name">iphone</span></div></td><td class="mono" style="background:var(--surface-2)">10.8.0.3</td><td style="background:var(--surface-2)">1 分钟前</td><td style="background:var(--surface-2)"><span class="badge ok">在线</span></td><td class="r" style="background:var(--surface-2)"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr class="selected"><td class="t3 xs">已打开（抽屉中）</td><td><div class="cell-main"><span class="dot ok"></span><span class="name">nas-home</span></div></td><td class="mono">10.8.0.5</td><td>2 分钟前</td><td><span class="badge ok">在线</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr><td class="t3 xs">下发中</td><td><div class="cell-main"><span class="dot info pulse"></span><span class="name">pixel-8</span></div></td><td class="mono">10.8.0.12</td><td class="t3">—</td><td><span class="badge info">下发中</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr><td class="t3 xs">生效失败</td><td><div class="cell-main"><span class="dot danger"></span><span class="name">router</span></div></td><td class="mono">10.8.0.6</td><td class="t3">—</td><td><span class="badge danger">生效失败 · 重试</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr><td class="t3 xs">已停用</td><td><div class="cell-main"><span class="dot off"></span><span class="name t3">old-laptop</span></div></td><td class="mono t3">10.8.0.9</td><td class="t3">—</td><td><span class="badge">已停用</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+<tr><td class="t3 xs">加载中</td><td><div class="skel" style="width:120px"></div></td><td><div class="skel" style="width:80px"></div></td><td><div class="skel" style="width:60px"></div></td><td><div class="skel" style="width:44px"></div></td><td></td></tr>
+</tbody></table></div>
+<div class="card" style="grid-column:1/3"><div class="c"><h2>长文本（用户数据一律截断，不撑开容器）</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+<div><div class="xs t3" style="margin-bottom:6px">Tabs：标签 ≤ 160px，域名中间截断；悬停显示全文</div>
+<div class="tabs" style="margin:0"><a class="on">概况</a><a>配置</a><a>分享</a><a>日志</a></div>
+<div class="xs t3" style="margin:14px 0 6px">多个同类对象：用 Select 切换，不做成一排 Tab</div>
+<div class="input mono" style="max-width:320px"><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1">very-long-subdomain…example.dev</span><span class="suffix"><i data-i="down" data-s="14"></i></span></div>
+<div class="tip" style="display:inline-block;margin-top:8px;background:var(--text);color:var(--bg);font-size:12px;padding:6px 8px;border-radius:6px">very-long-subdomain-for-staging-api.internal.example.dev</div>
+</div>
+<div><div class="xs t3" style="margin-bottom:6px">表格：行高固定 44，名称末尾截断，域名中间截断</div>
+<table class="table" style="table-layout:fixed;border:1px solid var(--border);border-radius:8px">
+<thead><tr><th style="width:150px">名称</th><th style="width:210px">域名</th><th style="width:88px;text-align:right">流量</th></tr></thead><tbody>
+<tr><td><div class="cell-main" style="overflow:hidden"><span class="dot ok"></span><span class="name" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">office-router-backu…</span></div></td><td class="mono" style="overflow:hidden;white-space:nowrap">staging-api-intern…example.dev</td><td class="num" style="text-align:right">1.2 GB</td></tr>
+<tr><td><div class="cell-main"><span class="dot ok"></span><span class="name">nas</span></div></td><td class="mono">nas.example.dev</td><td class="num" style="text-align:right">88.4 MB</td></tr>
+</tbody></table></div>
+</div></div></div>
+</div>
+<script src="icons.js"></script></body></html>

@@ -1,0 +1,51 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css">
+<style>body{padding:32px}.sheetg{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:1360px}.blk h5{margin:0 0 12px;font-size:12px;color:var(--text-3);font-weight:600;letter-spacing:.04em}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}.sw{width:100%;height:36px;border-radius:6px;border:1px solid var(--border)}.swl{font-size:11px;color:var(--text-2);margin-top:4px}</style></head>
+<body>
+<h1 style="font-size:20px;margin:0 0 4px">组件与状态</h1><div class="t2 sm" style="margin-bottom:24px">所有组件只引用设计令牌；深浅色共用同一套组件</div>
+<div class="sheetg">
+  <div class="card card-b blk"><h5>按钮</h5>
+    <div class="row"><button class="btn primary">保存并生效</button><button class="btn">取消</button><button class="btn ghost">更多</button></div>
+    <div class="row"><button class="btn danger">删除节点</button><button class="btn primary"><span class="spin"></span>保存中</button><button class="btn primary disabled">不可用</button></div>
+    <div class="row"><button class="btn icon"><i data-i="more"></i></button><button class="btn sm"><i data-i="copy" data-s="14"></i>复制</button><button class="btn focus">键盘焦点</button></div>
+    <div class="xs t3">每个区域最多 1 个主按钮；危险操作只在确认环节用红色</div>
+  </div>
+  <div class="card card-b blk"><h5>状态标记</h5>
+    <div class="row"><span class="badge ok"><span class="dot ok"></span>在线</span><span class="badge warn"><span class="dot warn"></span>降级连接</span><span class="badge"><span class="dot off"></span>离线</span><span class="badge danger"><span class="dot danger"></span>失败</span><span class="badge info"><span class="dot info"></span>运行中</span></div>
+    <h5 style="margin-top:16px">同步状态（期望 vs 已生效）</h5>
+    <div class="row"><span class="sync"><i data-i="check"></i>已同步</span><span class="sync" style="color:var(--accent)"><span class="dot info pulse"></span>下发中</span><span class="sync" style="color:var(--warn)"><i data-i="pause"></i>待上线后生效</span><span class="sync" style="color:var(--danger)"><i data-i="alert"></i>生效失败 · 重试</span></div>
+  </div>
+  <div class="card card-b blk"><h5>颜色令牌</h5>
+    <div class="grid g4" style="gap:8px">
+      <div><div class="sw" style="background:var(--bg)"></div><div class="swl">bg</div></div><div><div class="sw" style="background:var(--surface)"></div><div class="swl">surface</div></div><div><div class="sw" style="background:var(--surface-2)"></div><div class="swl">surface-2</div></div><div><div class="sw" style="background:var(--border)"></div><div class="swl">border</div></div>
+      <div><div class="sw" style="background:var(--text)"></div><div class="swl">text</div></div><div><div class="sw" style="background:var(--text-2)"></div><div class="swl">text-2</div></div><div><div class="sw" style="background:var(--text-3)"></div><div class="swl">text-3</div></div><div><div class="sw" style="background:var(--accent)"></div><div class="swl">accent</div></div>
+      <div><div class="sw" style="background:var(--ok)"></div><div class="swl">ok</div></div><div><div class="sw" style="background:var(--warn)"></div><div class="swl">warn</div></div><div><div class="sw" style="background:var(--danger)"></div><div class="swl">danger</div></div><div><div class="sw" style="background:var(--accent-soft)"></div><div class="swl">accent-soft</div></div>
+    </div></div>
+  <div class="card card-b blk"><h5>输入</h5>
+    <div class="field"><label>域名</label><div class="input focus">api.example.dev</div><div class="help">支持通配符 *.example.dev</div></div>
+    <div class="field"><label>端口</label><div class="input invalid mono">443</div><div class="err">443/tcp 已被 Caddy 占用</div></div>
+    <div class="field" style="margin:0"><label>DNS API Token</label><div class="secret">已设置 · ••••3f9a<span class="acts"><button class="btn ghost sm">替换</button></span></div><div class="help">只写不读：保存后无法再查看明文</div></div>
+  </div>
+  <div class="card card-b blk"><h5>确认等级</h5>
+    <div class="list-row" style="padding:8px 0"><span class="tag">L1</span><div class="main sm">可撤销：直接执行 + 撤销提示</div></div>
+    <div class="list-row" style="padding:8px 0"><span class="tag">L2</span><div class="main sm">影响在线连接：确认对话框，写清后果</div></div>
+    <div class="list-row" style="padding:8px 0"><span class="tag">L3</span><div class="main sm">不可逆：输入对象名称才可确认</div></div>
+    <div style="margin-top:12px" class="toast">已停用客户端 ipad<span class="act">撤销</span></div>
+  </div>
+  <div class="card blk" style="position:relative;overflow:hidden">
+    <div class="dialog-b"><h3>删除节点 fra-1？</h3><div class="sm t2" style="margin-bottom:12px">将移除它的 2 个客户端、1 张证书和全部历史。节点上的 Agent 会在下次连接时自行卸载。此操作不可恢复。</div>
+      <div class="field" style="margin:0"><label class="sm">输入 <span class="mono">fra-1</span> 确认</label><div class="input focus mono">fra-</div></div></div>
+    <div class="dialog-f"><button class="btn">取消</button><button class="btn danger disabled">删除节点</button></div>
+  </div>
+  <div class="card blk"><div class="empty"><div class="ic"><i data-i="box" data-s="20"></i></div><h4>还没有安装应用</h4><p>应用来自签名目录，安装前会显示它需要的端口和权限</p><button class="btn primary"><i data-i="plus"></i>浏览应用</button></div></div>
+  <div class="card card-b blk"><h5>加载与提示</h5>
+    <div class="skel" style="width:60%;margin-bottom:8px"></div><div class="skel" style="width:90%;margin-bottom:8px"></div><div class="skel" style="width:40%;margin-bottom:16px"></div>
+    <div class="banner danger" style="margin-bottom:8px"><i data-i="alert"></i><div class="btxt">生效失败：caddy validate 报错<div class="t2">已保留旧配置，节点服务未中断</div></div></div>
+    <div class="banner info"><i data-i="zap"></i><div class="btxt">sg-1 正以轮询方式连接，操作会延迟最多 60 秒</div></div>
+  </div>
+  <div class="card card-b blk"><h5>菜单与分段</h5>
+    <div class="row" style="align-items:flex-start;gap:16px">
+      <div class="menu"><div class="hl"><i data-i="qr" data-s="14"></i>查看配置</div><div><i data-i="refresh" data-s="14"></i>重新生成密钥</div><div><i data-i="pause" data-s="14"></i>停用</div><hr><div class="danger"><i data-i="trash" data-s="14"></i>删除</div></div>
+      <div><div class="seg" style="margin-bottom:12px"><span class="on">24 小时</span><span>7 天</span><span>30 天</span></div><div class="row"><span class="toggle on"></span><span class="toggle"></span></div><div class="bar" style="width:160px;margin-top:8px"><i style="width:62%"></i></div></div>
+    </div></div>
+</div>
+<script src="icons.js"></script></body></html>

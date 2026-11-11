@@ -1,0 +1,26 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body>
+<div class="topbar"><button class="btn ghost"><i data-i="x"></i>取消添加</button><div class="crumbs" style="margin-left:var(--s2)"><b>添加节点</b></div><span class="t3 sm" style="margin-left:auto">进度会自动保存，可随时回来继续</span></div>
+<div class="wizard">
+  <div class="wsteps"><div class="done">1 基本信息</div><div class="cur">2 安装 Agent</div><div>3 初始化网络</div><div>4 完成</div></div>
+  <h1 style="font-size:var(--fs-xl);margin:0 0 6px">在服务器上安装 Agent</h1>
+  <div class="t2" style="margin-bottom:var(--s5)">用 root 登录 <b class="mono" style="color:var(--text)">sg-2</b>（新加坡）这台服务器，执行下面这条命令。命令 30 分钟内有效，只能使用一次。</div>
+  <div class="seg" style="margin-bottom:var(--s3)"><span class="on">Debian / Ubuntu</span><span>Alpine</span><span>手动安装</span></div>
+  <div class="code" style="margin-bottom:var(--s2)"><span style="flex:1">curl -fsSL https://console.example.dev/install.sh | sudo sh -s -- --enroll e7Kp-29Qx-Lm4T</span><button class="btn sm"><i data-i="copy" data-s="14"></i>复制</button></div>
+  <div class="xs t3" style="margin-bottom:var(--s8)">会安装：hub-agent 0.5.0、WireGuard 工具；不会修改防火墙以外的系统配置。<a style="color:var(--accent)">查看脚本内容</a></div>
+
+  <div class="card">
+    <div class="card-b" style="display:flex;gap:var(--s3);align-items:center">
+      <span class="step run" style="padding:0"><span class="ic"></span></span>
+      <div style="flex:1"><div style="font-weight:500">等待 Agent 连接…</div><div class="xs t3">已等待 1 分 12 秒 · 连接成功后自动进入下一步</div></div>
+      <span class="badge info"><span class="dot info pulse"></span>监听中</span>
+    </div>
+    <div style="border-top:1px solid var(--border);padding:var(--s3) var(--s4)" class="sm t2">
+      <div class="pre-row" style="padding:6px 0"><span class="t3"><i data-i="check" data-s="14"></i></span>安装命令已生成<span class="r mono">22:31:40</span></div>
+      <div class="pre-row" style="padding:6px 0"><span class="t3">○</span>Agent 首次连接<span class="r">—</span></div>
+      <div class="pre-row" style="padding:6px 0"><span class="t3">○</span>上报系统信息（架构、内核、端口占用）<span class="r">—</span></div>
+    </div>
+  </div>
+  <div style="display:flex;gap:var(--s2);margin-top:var(--s6)"><button class="btn"><i data-i="left"></i>上一步</button><span style="flex:1"></span><button class="btn ghost">遇到问题？</button><button class="btn primary disabled">下一步</button></div>
+</div>
+<script src="icons.js"></script></body></html>

@@ -1,0 +1,63 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <a class="nav-item back"><i data-i="left"></i>全部节点</a>
+  <div class="hub-switch"><span class="dot ok"></span><div><div class="hn">hk-1</div><div class="hs">香港 · 在线</div></div><i data-i="chev"></i></div>
+  <a class="nav-item "><i data-i="home"></i>概况</a>
+  <a class="nav-item "><i data-i="users"></i>WireGuard<span class="count">7</span></a>
+  <a class="nav-item "><i data-i="globe"></i>站点<span class="count">3</span></a>
+  <a class="nav-item "><i data-i="arrow"></i>转发<span class="count">2</span></a>
+  <a class="nav-item active"><i data-i="lock"></i>证书<span class="count">2</span></a>
+  <a class="nav-item "><i data-i="box"></i>应用<span class="count">1</span></a>
+  <div class="nav-sep"></div>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>节点设置</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs">节点 <i data-i="right" data-s="14"></i> hk-1 <i data-i="right" data-s="14"></i> <b>证书</b></div>
+    <div class="search"><i data-i="search"></i>搜索…<span class="kbd">⌘K</span></div></div>
+  <div class="content">
+    <div class="page-head"><div><h1>证书</h1><div class="sub"><span class="scope"><i data-i="server" data-s="12"></i>hk-1</span><span>站点的证书由 Caddy 自动管理，这里只列需单独签发的证书</span></div></div>
+      <div class="actions"><button class="btn"><i data-i="key"></i>DNS 凭据</button><button class="btn primary"><i data-i="plus"></i>签发证书</button></div></div>
+
+    <div class="banner warn" style="margin-bottom:var(--s4)"><i data-i="alert"></i><div class="btxt"><b style="color:var(--warn)">*.example.dev 自动续期失败</b><div class="t2">Cloudflare DNS 凭据返回 403，请更新凭据后重试。距到期 12 天。</div></div><button class="btn sm" style="margin-left:auto">更新凭据</button></div>
+
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>域名</th><th>方式</th><th>到期</th><th>使用者</th><th>状态</th><th></th></tr></thead>
+        <tbody>
+        <tr class="selected"><td><div class="cell-main"><span class="name mono">*.example.dev</span></div></td><td>DNS-01 · Cloudflare</td><td><div class="num">12 天</div></td><td class="t2">sing-box</td><td><span class="badge info"><span class="dot info"></span>续期中</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><span class="name mono">api.example.dev</span></td><td>HTTP-01</td><td class="num">89 天</td><td class="t2">Caddy</td><td><span class="badge ok"><span class="dot ok"></span>有效</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        
+        <tr><td><span class="name mono">mail.example.dev</span></td><td>DNS-01 · DNSPod</td><td class="num">44 天</td><td class="t2">—</td><td><span class="badge ok"><span class="dot ok"></span>有效</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        </tbody></table>
+    </div>
+  </div>
+</main></div>
+<div class="scrim"></div>
+<div class="drawer">
+  <div class="drawer-h"><div><h2>续期 *.example.dev</h2><div class="t3 xs">任务 #T-0193 · hk-1 · 由 康爷 发起 · 21:58:03</div></div><button class="btn ghost icon x"><i data-i="x"></i></button></div>
+  <div class="drawer-b">
+    <div class="steps" style="margin-bottom:var(--s4)">
+      <div class="step done"><span class="ic"><i data-i="check" data-s="12"></i></span>下发到节点<span class="t3 xs" style="margin-left:auto">0.4 s</span></div>
+      <div class="step done"><span class="ic"><i data-i="check" data-s="12"></i></span>写入 DNS TXT 记录<span class="t3 xs" style="margin-left:auto">2.1 s</span></div>
+      <div class="step run"><span class="ic"></span>等待 DNS 传播<span class="t3 xs" style="margin-left:auto">18 s</span></div>
+      <div class="step todo"><span class="ic"></span>签发并安装</div>
+      <div class="step todo"><span class="ic"></span>重载使用者（sing-box）</div>
+    </div>
+    <div style="display:flex;align-items:center;margin-bottom:var(--s2)"><span class="sm" style="font-weight:500">实时日志</span><span class="badge info" style="margin-left:8px"><span class="dot info pulse"></span>运行中</span><button class="btn ghost sm" style="margin-left:auto"><i data-i="copy" data-s="14"></i>复制</button></div>
+    <div class="log">
+      <div class="ln"><span class="ts">21:58:03</span><span>task accepted by agent 0.5.0</span></div>
+      <div class="ln"><span class="ts">21:58:03</span><span>[INFO] [*.example.dev] acme: Obtaining SAN certificate</span></div>
+      <div class="ln"><span class="ts">21:58:04</span><span>[INFO] [*.example.dev] acme: use dns-01 solver</span></div>
+      <div class="ln"><span class="ts">21:58:05</span><span class="ok">[INFO] cloudflare: TXT record created (zone example.dev)</span></div>
+      <div class="ln"><span class="ts">21:58:06</span><span>[INFO] [*.example.dev] acme: Checking DNS record propagation</span></div>
+      <div class="ln"><span class="ts">21:58:16</span><span class="warn">[WARN] 1/3 nameservers not yet updated, retrying in 10s</span></div>
+      <div class="ln"><span class="ts">21:58:21</span><span>[INFO] waiting for propagation… ▍</span></div>
+    </div>
+  </div>
+  <div class="drawer-f"><span class="note">关闭面板不会中断任务，可在“活动”里继续查看</span><button class="btn">在后台运行</button><button class="btn danger-text">取消任务</button></div>
+</div>
+<script src="icons.js"></script></body></html>

@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KHC Console · 四页参考样例（非权威）</title>
+<style>
+/* 仅复制 apps/web/src/styles/tokens.css 的现有令牌；本文件不接入生产。 */
+:root {
+  --bg:#FAFAFA; --surface:#FFF; --surface-2:#F4F4F5; --surface-3:#EDEDEF;
+  --border:#E4E4E7; --border-strong:#D4D4D8; --text:#18181B; --text-2:#52525B; --text-3:#71717A;
+  --text-on-accent:#FFF; --accent:#2F6BFF; --accent-hover:#1F57E6; --accent-solid:#2F6BFF;
+  --accent-solid-hover:#1F57E6; --accent-soft:#EEF3FF; --ok:#15803D; --ok-soft:#EAF7EE;
+  --warn:#B45309; --warn-soft:#FDF4E7; --danger:#DC2626; --danger-hover:#B91C1C;
+  --danger-solid:#DC2626; --danger-soft:#FDECEC; --neutral-soft:#F1F1F3;
+  --focus:0 0 0 3px rgba(47,107,255,.28); --shadow-overlay:0 12px 32px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.06);
+  --scrim:rgba(24,24,27,.32); --font:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"JetBrains Mono","SFMono-Regular",ui-monospace,"DejaVu Sans Mono",monospace;
+  --fs-xs:12px; --fs-sm:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:20px; --fs-2xl:24px;
+  --lh:1.5; --fw-regular:400; --fw-medium:500; --fw-semibold:600;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px; --s8:32px; --s10:40px; --s12:48px;
+  --r-sm:6px; --r-md:8px; --r-lg:12px; --r-pill:999px; --h-control:32px; --h-control-lg:40px; --h-row:44px;
+  --sidebar:220px; --topbar:52px; --content-max:1200px; --drawer:480px;
+  --t-fast:120ms; --t-base:200ms; --ease:cubic-bezier(.2,.8,.2,1);
+}
+[data-theme="dark"] {
+  --bg:#0A0A0B; --surface:#111113; --surface-2:#18181B; --surface-3:#202024; --border:#26262B; --border-strong:#34343A;
+  --text:#F4F4F5; --text-2:#A1A1AA; --text-3:#8B8B94; --accent:#6E9BFF; --accent-hover:#8FB1FF;
+  --accent-solid:#3567EB; --accent-solid-hover:#4677F5; --accent-soft:#16203A; --ok:#4ADE80; --ok-soft:#10261A;
+  --warn:#FBBF24; --warn-soft:#2A2110; --danger:#F87171; --danger-hover:#FCA5A5; --danger-solid:#D93A3A;
+  --danger-soft:#2C1414; --neutral-soft:#1C1C20; --focus:0 0 0 3px rgba(91,140,255,.35);
+  --shadow-overlay:0 16px 40px rgba(0,0,0,.6); --scrim:rgba(0,0,0,.55);
+}
+@media (prefers-reduced-motion:reduce) { :root { --t-fast:0ms; --t-base:0ms; } * { scroll-behavior:auto!important; } }
+* { box-sizing:border-box; }
+html { background:var(--bg); }
+body { margin:0; background:var(--bg); color:var(--text); font:var(--fw-regular) var(--fs-md)/var(--lh) var(--font); }
+button,input,select { font:inherit; }
+button { color:inherit; }
+button,a,input,select { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible { outline:none; box-shadow:var(--focus); }
+button:disabled { opacity:.48; cursor:not-allowed; }
+button { cursor:pointer; }
+h1,h2,h3,p { margin:0; }
+a { color:var(--accent); text-decoration:none; }
+.mono { font-family:var(--mono); font-size:.94em; }
+.muted { color:var(--text-3); }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.shell { min-height:100vh; }
+.sidebar { position:fixed; inset:0 auto 0 0; z-index:30; width:var(--sidebar); display:flex; flex-direction:column; padding:var(--s4) var(--s3); background:var(--surface); border-right:1px solid var(--border); }
+.brand { display:flex; align-items:center; gap:10px; padding:0 var(--s2) var(--s5); }
+.brand-mark { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--r-md); background:var(--text); color:var(--surface); font:600 12px var(--mono); letter-spacing:-.04em; }
+.brand-name { font-size:var(--fs-md); font-weight:var(--fw-semibold); letter-spacing:-.01em; }
+.brand-sub { color:var(--text-3); font-size:var(--fs-xs); margin-top:1px; white-space:nowrap; }
+.demo-label { display:none; }
+.nav-label { padding:var(--s3) var(--s2) var(--s2); color:var(--text-3); font-size:11px; font-weight:var(--fw-medium); letter-spacing:.06em; }
+.nav { display:grid; gap:2px; }
+.nav-item { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; padding:7px 10px; border:0; border-radius:var(--r-md); background:transparent; color:var(--text-2); text-align:left; font-size:var(--fs-sm); transition:background var(--t-fast),color var(--t-fast); }
+.nav-item:hover { background:var(--surface-2); color:var(--text); }
+.nav-item.active { background:var(--accent-soft); color:var(--accent); font-weight:var(--fw-medium); }
+.nav-item .nav-count { margin-left:auto; min-width:20px; padding:0 5px; border-radius:var(--r-pill); background:var(--danger-soft); color:var(--danger); font-size:11px; text-align:center; }
+.status-dot { display:inline-block; flex:0 0 auto; width:7px; height:7px; border-radius:50%; background:var(--text-3); }
+.status-dot.ok { background:var(--ok); } .status-dot.warn { background:var(--warn); } .status-dot.danger { background:var(--danger); }
+.nav-node { margin-top:var(--s2); padding-top:var(--s2); border-top:1px solid var(--border); }
+.node-context { padding:var(--s2) 10px var(--s3); }
+.node-context strong { display:block; font-size:var(--fs-sm); font-weight:var(--fw-medium); }
+.node-context span { display:block; margin-top:2px; color:var(--text-3); font-size:11px; }
+.sidebar-foot { margin-top:auto; padding:var(--s4) 10px 0; border-top:1px solid var(--border); color:var(--text-3); font-size:var(--fs-xs); }
+.sidebar-foot .budget { display:flex; align-items:center; gap:7px; color:var(--text-2); margin-bottom:var(--s1); }
+.main { min-width:0; min-height:100vh; margin-left:var(--sidebar); }
+.topbar { position:sticky; top:0; z-index:20; height:var(--topbar); display:flex; align-items:center; gap:var(--s3); padding:0 var(--s6); background:color-mix(in srgb,var(--surface) 92%,transparent); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); }
+.crumb { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-3); font-size:var(--fs-sm); }
+.crumb b { color:var(--text-2); font-weight:var(--fw-medium); }
+.topbar-spacer { flex:1; }
+.request-note { display:flex; align-items:center; gap:6px; color:var(--text-3); font-size:var(--fs-xs); white-space:nowrap; }
+.theme-toggle,.mobile-menu { height:30px; padding:0 10px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--text-2); font-size:var(--fs-xs); }
+.theme-toggle:hover,.mobile-menu:hover { background:var(--surface-2); color:var(--text); }
+.mobile-menu { display:none; }
+.content { width:100%; max-width:var(--content-max); margin:0 auto; padding:var(--s6); }
+.page { display:none; } .page.active { display:block; }
+.page-head { display:flex; align-items:flex-start; gap:var(--s4); margin-bottom:var(--s5); }
+.page-head h1 { font-size:var(--fs-xl); line-height:1.35; font-weight:var(--fw-semibold); letter-spacing:-.02em; }
+.page-sub { margin-top:3px; color:var(--text-3); font-size:var(--fs-sm); }
+.page-actions { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--s2); }
+.btn { min-height:var(--h-control); display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:5px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--text-2); font-size:var(--fs-sm); font-weight:var(--fw-medium); white-space:nowrap; transition:background var(--t-fast),border-color var(--t-fast),color var(--t-fast); }
+.btn:hover { background:var(--surface-2); border-color:var(--border-strong); color:var(--text); }
+.btn.primary { background:var(--accent-solid); border-color:var(--accent-solid); color:var(--text-on-accent); }
+.btn.primary:hover { background:var(--accent-solid-hover); border-color:var(--accent-solid-hover); color:#FFF; }
+.btn.danger { background:var(--danger-solid); border-color:var(--danger-solid); color:#FFF; }
+.btn.danger:hover { background:var(--danger-hover); border-color:var(--danger-hover); }
+.btn.ghost { border-color:transparent; background:transparent; color:var(--accent); }
+.btn.ghost:hover { background:var(--accent-soft); }
+.btn.sm { min-height:28px; padding:3px 9px; font-size:var(--fs-xs); }
+.btn.wide { min-height:var(--h-control-lg); }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); }
+.card + .card { margin-top:var(--s4); }
+.card-head { min-height:49px; display:flex; align-items:center; gap:var(--s3); padding:11px var(--s4); border-bottom:1px solid var(--border); }
+.card-head h2 { font-size:var(--fs-md); font-weight:var(--fw-semibold); }
+.card-head .card-action { margin-left:auto; }
+.card-body { padding:var(--s4); }
+.banner { display:flex; align-items:flex-start; gap:10px; padding:11px 13px; margin-bottom:var(--s4); border:1px solid color-mix(in srgb,var(--warn) 24%,var(--border)); border-radius:var(--r-md); background:var(--warn-soft); color:var(--warn); font-size:var(--fs-sm); }
+.banner.danger { border-color:color-mix(in srgb,var(--danger) 25%,var(--border)); background:var(--danger-soft); color:var(--danger); }
+.banner.info { border-color:color-mix(in srgb,var(--accent) 22%,var(--border)); background:var(--accent-soft); color:var(--accent); }
+.banner strong { font-weight:var(--fw-semibold); }
+.banner .banner-action { margin-left:auto; display:flex; gap:var(--s2); }
+.triage { display:grid; grid-template-columns:150px 1fr; margin-bottom:var(--s4); overflow:hidden; }
+.triage-label { padding:var(--s4); background:var(--warn-soft); border-right:1px solid var(--border); }
+.triage-label .eyebrow { color:var(--warn); font-size:var(--fs-xs); font-weight:var(--fw-medium); }
+.triage-label .count { margin-top:3px; font-size:var(--fs-2xl); line-height:1.2; font-weight:var(--fw-semibold); }
+.triage-items { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.triage-item { display:flex; align-items:center; gap:10px; min-width:0; padding:13px var(--s4); border:0; border-right:1px solid var(--border); background:var(--surface); text-align:left; }
+.triage-item:last-child { border-right:0; }
+.triage-item:hover { background:var(--surface-2); }
+.triage-copy { min-width:0; }
+.triage-copy strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-sm); font-weight:var(--fw-medium); }
+.triage-copy span { display:block; margin-top:2px; color:var(--text-3); font-size:var(--fs-xs); }
+.triage-arrow { margin-left:auto; color:var(--text-3); }
+.stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--s3); margin-bottom:var(--s4); }
+.stat { padding:var(--s3) var(--s4); }
+.stat-label { color:var(--text-3); font-size:var(--fs-xs); }
+.stat-value { margin-top:var(--s1); font-size:var(--fs-2xl); line-height:1.33; font-weight:var(--fw-semibold); letter-spacing:-.02em; }
+.stat-value.attention { color:var(--warn); }
+.stat-hint { margin-top:3px; color:var(--text-3); font-size:var(--fs-xs); }
+.badge { display:inline-flex; align-items:center; gap:5px; width:max-content; max-width:100%; padding:1px 8px; border:1px solid var(--border); border-radius:var(--r-pill); background:var(--neutral-soft); color:var(--text-2); font-size:var(--fs-xs); line-height:19px; white-space:nowrap; }
+.badge.ok { border-color:color-mix(in srgb,var(--ok) 22%,var(--border)); background:var(--ok-soft); color:var(--ok); }
+.badge.warn { border-color:color-mix(in srgb,var(--warn) 22%,var(--border)); background:var(--warn-soft); color:var(--warn); }
+.badge.danger { border-color:color-mix(in srgb,var(--danger) 22%,var(--border)); background:var(--danger-soft); color:var(--danger); }
+.badge.info { border-color:color-mix(in srgb,var(--accent) 20%,var(--border)); background:var(--accent-soft); color:var(--accent); }
+.table-wrap { width:100%; overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+th { height:36px; padding:7px 14px; border-bottom:1px solid var(--border); color:var(--text-3); font-size:var(--fs-xs); font-weight:var(--fw-medium); text-align:left; white-space:nowrap; }
+td { height:var(--h-row); padding:9px 14px; border-bottom:1px solid var(--border); color:var(--text-2); vertical-align:middle; }
+tbody tr:last-child td { border-bottom:0; }
+td:first-child { color:var(--text); }
+tr.row-link { cursor:pointer; transition:background var(--t-fast); }
+tr.row-link:hover { background:var(--surface-2); }
+.cell-name { font-weight:var(--fw-medium); white-space:nowrap; }
+.cell-sub { display:block; margin-top:1px; color:var(--text-3); font-size:11px; }
+.row-actions { display:flex; justify-content:flex-end; gap:var(--s2); }
+.node-summary { display:flex; align-items:center; gap:8px; }
+.route-chip { color:var(--text-3); font-size:var(--fs-xs); }
+.segmented { display:inline-flex; max-width:100%; gap:2px; margin-bottom:var(--s4); padding:3px; overflow-x:auto; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface-2); }
+.segmented button { min-height:28px; padding:3px 13px; border:0; border-radius:var(--r-sm); background:transparent; color:var(--text-3); font-size:var(--fs-sm); white-space:nowrap; }
+.segmented button:hover { color:var(--text); }
+.segmented button.active { background:var(--surface); color:var(--text); font-weight:var(--fw-medium); box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.subpage { display:none; } .subpage.active { display:block; }
+.inline-note { margin-top:var(--s3); color:var(--text-3); font-size:var(--fs-xs); }
+.statusbar { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); margin-bottom:var(--s4); overflow:hidden; }
+.status-cell { min-width:0; padding:12px 13px; border:0; border-right:1px solid var(--border); background:var(--surface); text-align:left; }
+.status-cell:last-child { border-right:0; }
+.status-cell.clickable:hover { background:var(--surface-2); }
+.status-key { display:block; color:var(--text-3); font-size:11px; }
+.status-value { display:flex; align-items:center; gap:6px; margin-top:3px; font-size:var(--fs-lg); line-height:1.35; font-weight:var(--fw-semibold); }
+.status-value.warn { color:var(--warn); } .status-value.danger { color:var(--danger); }
+.status-meta { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; color:var(--text-3); font-size:11px; white-space:nowrap; }
+.table-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:var(--s2); padding:11px 14px; border-bottom:1px solid var(--border); }
+.table-toolbar .toolbar-copy { color:var(--text-3); font-size:var(--fs-xs); }
+.table-toolbar .toolbar-actions { margin-left:auto; display:flex; gap:var(--s2); }
+.firewall-banner { display:none; align-items:center; flex-wrap:wrap; gap:10px; padding:11px 14px; border-top:1px solid color-mix(in srgb,var(--warn) 24%,var(--border)); background:var(--warn-soft); color:var(--warn); font-size:var(--fs-sm); }
+.firewall-banner.show { display:flex; }
+.firewall-banner .btn { margin-left:auto; }
+.offline .ops-data { opacity:.55; }
+.offline .ops-action { pointer-events:none; opacity:.45; }
+.overlay { position:fixed; inset:0; z-index:50; visibility:hidden; opacity:0; background:var(--scrim); transition:opacity var(--t-base) var(--ease),visibility var(--t-base); }
+.overlay.open { visibility:visible; opacity:1; }
+.drawer { position:fixed; inset:0 0 0 auto; z-index:51; width:var(--drawer); max-width:100vw; display:flex; flex-direction:column; background:var(--surface); border-left:1px solid var(--border); box-shadow:var(--shadow-overlay); transform:translateX(100%); visibility:hidden; transition:transform var(--t-base) var(--ease),visibility var(--t-base); }
+.drawer.open { visibility:visible; transform:translateX(0); }
+.drawer-head { display:flex; align-items:flex-start; gap:var(--s3); padding:17px var(--s5) 14px; border-bottom:1px solid var(--border); }
+.drawer-heading { min-width:0; }
+.drawer-head h2 { font-size:var(--fs-lg); font-weight:var(--fw-semibold); }
+.drawer-context { margin-top:3px; color:var(--text-3); font-size:var(--fs-xs); }
+.drawer-close { margin-left:auto; width:30px; height:30px; padding:0; border:0; border-radius:var(--r-md); background:transparent; color:var(--text-3); font-size:20px; line-height:1; }
+.drawer-close:hover { background:var(--surface-2); color:var(--text); }
+.drawer-body { flex:1; min-height:0; overflow-y:auto; padding:var(--s5); }
+.drawer-foot { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:var(--s2); padding:12px var(--s5); border-top:1px solid var(--border); background:var(--surface); }
+.drawer-foot .foot-note { margin-right:auto; align-self:center; color:var(--text-3); font-size:var(--fs-xs); }
+.form-section + .form-section { margin-top:var(--s5); padding-top:var(--s5); border-top:1px solid var(--border); }
+.form-title { margin-bottom:var(--s3); color:var(--text-2); font-size:var(--fs-sm); font-weight:var(--fw-semibold); }
+.field { margin-bottom:var(--s4); }
+.field:last-child { margin-bottom:0; }
+.field label,.field-label { display:block; margin-bottom:5px; color:var(--text-2); font-size:var(--fs-sm); font-weight:var(--fw-medium); }
+.field input,.field select { width:100%; height:var(--h-control-lg); padding:7px 10px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--text); font-size:var(--fs-sm); }
+.field input::placeholder { color:var(--text-3); }
+.field input:hover,.field select:hover { border-color:var(--border-strong); }
+.field-help { margin-top:5px; color:var(--text-3); font-size:var(--fs-xs); }
+.field-error { display:none; margin-top:5px; color:var(--danger); font-size:var(--fs-xs); }
+.field.invalid input { border-color:var(--danger); }
+.field.invalid .field-error { display:block; }
+.field-row { display:grid; grid-template-columns:1fr 1fr; gap:var(--s3); }
+.check-row { display:flex; align-items:flex-start; gap:9px; color:var(--text-2); font-size:var(--fs-sm); }
+.check-row input { margin-top:4px; accent-color:var(--accent-solid); }
+.code-wrap { margin-top:var(--s3); }
+.code-label { display:flex; align-items:center; margin-bottom:6px; color:var(--text-2); font-size:var(--fs-xs); }
+.code-label .btn { margin-left:auto; }
+.codeblock { padding:12px; overflow:auto; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface-2); color:var(--text-2); font:12px/1.65 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+.result-mark { display:grid; place-items:center; width:36px; height:36px; margin-bottom:var(--s3); border-radius:50%; background:var(--ok-soft); color:var(--ok); font-size:20px; }
+.result-title { font-size:var(--fs-lg); font-weight:var(--fw-semibold); }
+.result-copy { margin-top:5px; color:var(--text-2); font-size:var(--fs-sm); }
+.kv { display:grid; grid-template-columns:112px minmax(0,1fr); gap:10px 14px; margin:var(--s4) 0 0; font-size:var(--fs-sm); }
+.kv dt { color:var(--text-3); } .kv dd { min-width:0; margin:0; color:var(--text-2); overflow-wrap:anywhere; }
+details.advanced { margin-top:var(--s4); border-top:1px solid var(--border); }
+details.advanced summary { padding:12px 0 0; color:var(--text-2); cursor:pointer; font-size:var(--fs-sm); }
+details.advanced .advanced-body { padding-top:var(--s4); }
+.toast { position:fixed; left:50%; bottom:24px; z-index:80; max-width:calc(100vw - 32px); padding:9px 14px; border:1px solid var(--border-strong); border-radius:var(--r-md); background:var(--text); color:var(--surface); box-shadow:var(--shadow-overlay); font-size:var(--fs-sm); opacity:0; visibility:hidden; transform:translate(-50%,8px); transition:opacity var(--t-fast),transform var(--t-fast),visibility var(--t-fast); }
+.toast.show { opacity:1; visibility:visible; transform:translate(-50%,0); }
+.empty { padding:44px 20px; text-align:center; }
+.empty h3 { font-size:var(--fs-md); font-weight:var(--fw-medium); }
+.empty p { margin:5px auto 14px; max-width:340px; color:var(--text-3); font-size:var(--fs-sm); }
+.savebar { display:none; align-items:center; gap:var(--s2); margin-top:var(--s4); padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); color:var(--text-2); font-size:var(--fs-sm); }
+.savebar.show { display:flex; }
+.savebar .save-actions { margin-left:auto; display:flex; gap:var(--s2); }
+.app-back { margin-bottom:var(--s3); }
+.mobile-scrim { display:none; }
+@media (max-width:1050px) {
+  .statusbar { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .status-cell:nth-child(3) { border-right:0; }
+  .status-cell:nth-child(-n+3) { border-bottom:1px solid var(--border); }
+  .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .triage { grid-template-columns:120px 1fr; }
+  .triage-items { grid-template-columns:1fr; }
+  .triage-item { border-right:0; border-bottom:1px solid var(--border); }
+  .triage-item:last-child { border-bottom:0; }
+}
+@media (max-width:760px) {
+  .sidebar { transform:translateX(-100%); transition:transform var(--t-base) var(--ease); box-shadow:var(--shadow-overlay); }
+  .sidebar.mobile-open { transform:translateX(0); }
+  .mobile-scrim { position:fixed; inset:0; z-index:29; background:var(--scrim); }
+  .mobile-scrim.open { display:block; }
+  .main { margin-left:0; }
+  .mobile-menu { display:inline-flex; align-items:center; }
+  .topbar { padding:0 var(--s4); }
+  .request-note { display:none; }
+  .content { padding:var(--s4); }
+  .page-head { flex-wrap:wrap; }
+  .page-actions { width:100%; margin-left:0; justify-content:flex-start; }
+  .low-priority { display:none; }
+  .drawer { width:min(var(--drawer),100vw); }
+}
+@media (max-width:480px) {
+  .content { padding:14px 12px var(--s6); }
+  .crumb { font-size:var(--fs-xs); }
+  .theme-toggle { flex-shrink:0; }
+  #page-overview th:nth-last-child(-n+2),#page-overview td:nth-last-child(-n+2),
+  #page-agents th:nth-last-child(-n+2),#page-agents td:nth-last-child(-n+2) { display:none; }
+  .page-head { margin-bottom:var(--s4); }
+  .page-actions .btn { flex:1; }
+  .stats { gap:var(--s2); }
+  .stat { padding:11px 12px; }
+  .stat-value { font-size:20px; }
+  .triage { grid-template-columns:1fr; }
+  .triage-label { display:flex; align-items:center; gap:8px; padding:10px 13px; border-right:0; border-bottom:1px solid var(--border); }
+  .triage-label .count { margin:0; font-size:var(--fs-lg); }
+  .triage-item { padding:12px 13px; }
+  .card-head { padding:10px 12px; }
+  th,td { padding:8px 10px; }
+  .statusbar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .status-cell,.status-cell:nth-child(3) { border-right:1px solid var(--border); border-bottom:1px solid var(--border); }
+  .status-cell:nth-child(even) { border-right:0; }
+  .status-cell:nth-last-child(-n+2) { border-bottom:0; }
+  .status-cell { padding:var(--s2) var(--s3); }
+  .status-value { font-size:var(--fs-md); }
+  .field-row { grid-template-columns:1fr; gap:0; }
+  .drawer-head,.drawer-body { padding-left:var(--s4); padding-right:var(--s4); }
+  .drawer-foot { padding:10px var(--s4); }
+  .drawer-foot .foot-note { width:100%; margin:0 0 2px; }
+  .banner { flex-wrap:wrap; }
+  .banner .banner-action { width:100%; margin-left:0; }
+  .savebar { flex-wrap:wrap; }
+  .savebar .save-actions { width:100%; margin-left:0; justify-content:flex-end; }
+  .kv { grid-template-columns:88px minmax(0,1fr); }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar" aria-label="主导航">
+    <div class="brand">
+      <div class="brand-mark">KHC</div>
+      <div><div class="brand-name">Console</div><div class="brand-sub">服务器运维遥控器</div></div>
+      <span class="demo-label">DEMO</span>
+    </div>
+    <div class="nav-label">全局</div>
+    <nav class="nav">
+      <button class="nav-item active" data-route="overview"><span class="status-dot"></span>概览<span class="nav-count">2</span></button>
+      <button class="nav-item" data-route="agents"><span class="status-dot"></span>节点</button>
+      <button class="nav-item" data-demo-only="设置"><span class="status-dot"></span>设置</button>
+    </nav>
+    <div class="nav-label">当前节点</div>
+    <div class="node-context"><strong><span class="status-dot ok"></span> tyo-1</strong><span>域名直连 · Agent v0.1.12</span></div>
+    <nav class="nav nav-node">
+      <button class="nav-item" data-route="apps"><span class="status-dot"></span>站点 / 扩展应用</button>
+      <button class="nav-item" data-route="ops"><span class="status-dot danger"></span>主机运维<span class="nav-count">1</span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="budget"><span class="status-dot ok"></span>控制面已连接</div>
+      <div>打开时请求一次 · 无后台轮询</div>
+    </div>
+  </aside>
+  <div class="mobile-scrim" id="mobile-scrim"></div>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="mobile-menu" id="mobile-menu" aria-label="打开导航">菜单</button>
+      <div class="crumb" id="crumb">控制台 / <b>概览</b></div>
+      <div class="topbar-spacer"></div>
+      <div class="request-note"><span class="status-dot ok"></span>按需连接 · 0 次后台请求</div>
+      <button class="theme-toggle" id="theme-toggle" aria-label="切换深浅主题">深色</button>
+    </header>
+
+    <div class="content">
+      <!-- A：全局分诊概览 -->
+      <section class="page active" id="page-overview" aria-labelledby="overview-title">
+        <div class="page-head">
+          <div><h1 id="overview-title">概览</h1><p class="page-sub">4 个节点 · 2 项需要处理</p></div>
+        </div>
+        <div class="card triage" role="region" aria-label="需要处理">
+          <div class="triage-label"><div class="eyebrow">需要处理</div><div class="count">2</div></div>
+          <div class="triage-items">
+            <button class="triage-item" data-triage="offline"><span class="badge danger">离线</span><span class="triage-copy"><strong>hk-1 连接中断</strong><span>最后在线 3 小时前 · 查看诊断</span></span><span class="triage-arrow">→</span></button>
+            <button class="triage-item" data-demo-only="证书库"><span class="badge warn">证书</span><span class="triage-copy"><strong>nas-wildcard 即将到期</strong><span>剩余 11 天 · 前往证书库</span></span><span class="triage-arrow">→</span></button>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="card stat"><div class="stat-label">节点在线</div><div class="stat-value">2 / 4</div><div class="stat-hint">1 离线 · 1 未探测</div></div>
+          <div class="card stat"><div class="stat-label">未探测节点</div><div class="stat-value">1</div><div class="stat-hint">打开页面不自动探测</div></div>
+          <div class="card stat"><div class="stat-label">证书</div><div class="stat-value">4</div><div class="stat-hint">1 张 14 天内到期</div></div>
+          <div class="card stat"><div class="stat-label">需要处理</div><div class="stat-value attention">2</div><div class="stat-hint">离线节点与临期证书</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>节点</h2><button class="btn ghost sm card-action" data-route="agents">管理节点 →</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>名称</th><th>状态</th><th>接入地址</th><th class="low-priority">线路</th><th>最近在线</th><th></th></tr></thead>
+            <tbody>
+              <tr class="row-link" data-node-enter="sg-1"><td class="cell-name">sg-1</td><td><span class="badge ok"><span class="status-dot ok"></span>在线</span></td><td class="mono">https://sg-1.example.com</td><td class="low-priority"><span class="route-chip">域名直连</span></td><td>刚刚</td><td class="row-actions"><span class="route-chip">进入 →</span></td></tr>
+              <tr class="row-link" data-node-enter="tyo-1"><td class="cell-name">tyo-1</td><td><span class="badge ok"><span class="status-dot ok"></span>在线</span></td><td class="mono">https://tyo-1.example.com</td><td class="low-priority"><span class="route-chip">域名直连</span></td><td>刚刚</td><td class="row-actions"><span class="route-chip">进入 →</span></td></tr>
+              <tr class="row-link" data-node-enter="hk-1"><td class="cell-name">hk-1</td><td><span class="badge danger"><span class="status-dot danger"></span>离线</span></td><td class="mono">http://198.51.100.7:8880</td><td class="low-priority"><span class="route-chip">IP 直连</span></td><td>3 小时前</td><td class="row-actions"><span class="route-chip">诊断 →</span></td></tr>
+              <tr class="row-link" data-node-enter="arm-1"><td class="cell-name">arm-1</td><td><span class="badge"><span class="status-dot"></span>未探测</span></td><td class="mono">http://192.0.2.16:8880</td><td class="low-priority"><span class="route-chip">IP 直连</span></td><td>—</td><td class="row-actions"><span class="route-chip">进入 →</span></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <p class="inline-note">本页只请求节点与证书两份列表；不展示 CPU、内存，也不逐节点探测。</p>
+      </section>
+
+      <!-- B：节点列表 + 添加 Agent 唯一抽屉 -->
+      <section class="page" id="page-agents" aria-labelledby="agents-title">
+        <div class="page-head">
+          <div><h1 id="agents-title">节点</h1><p class="page-sub">4 个节点 · 创建、删除与 Agent 接入</p></div>
+          <div class="page-actions"><button class="btn" id="refresh-nodes">刷新状态</button><button class="btn primary" id="add-agent">＋ 创建节点</button></div>
+        </div>
+        <div class="card">
+          <div class="table-wrap"><table>
+            <thead><tr><th>名称</th><th>状态</th><th>接入地址</th><th class="low-priority">路由</th><th>最近在线</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="cell-name">sg-1</td><td><span class="badge ok">在线</span></td><td class="mono">https://sg-1.example.com</td><td class="low-priority">域名直连</td><td>刚刚</td><td class="row-actions"><button class="btn sm" data-install="sg-1">安装命令</button></td></tr>
+              <tr><td class="cell-name">tyo-1</td><td><span class="badge ok">在线</span></td><td class="mono">https://tyo-1.example.com</td><td class="low-priority">域名直连</td><td>刚刚</td><td class="row-actions"><button class="btn sm" data-install="tyo-1">安装命令</button></td></tr>
+              <tr><td class="cell-name">hk-1</td><td><span class="badge danger">离线</span></td><td class="mono">http://198.51.100.7:8880</td><td class="low-priority">IP 直连</td><td>3 小时前</td><td class="row-actions"><button class="btn sm" data-install="hk-1">安装命令</button></td></tr>
+              <tr><td class="cell-name">arm-1</td><td><span class="badge">未探测</span></td><td class="mono">http://192.0.2.16:8880</td><td class="low-priority">IP 直连</td><td>—</td><td class="row-actions"><button class="btn sm" data-install="arm-1">安装命令</button></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <p class="inline-note">状态只在点击「刷新状态」时探测一轮；失败后保留数据，不自动重试。</p>
+      </section>
+
+      <!-- B：站点页的扩展应用分段 -->
+      <section class="page" id="page-apps" aria-labelledby="apps-title">
+        <div id="apps-list-view">
+          <div class="page-head">
+            <div><h1 id="apps-title">站点</h1><p class="page-sub">tyo-1 · 扩展应用分段</p></div>
+            <div class="page-actions"><button class="btn" data-demo-only="Caddy 服务">Caddy 服务</button><button class="btn primary" data-demo-only="添加站点">＋ 添加站点</button></div>
+          </div>
+          <div class="segmented" role="tablist" aria-label="站点分段"><button role="tab" data-demo-only="站点列表">站点</button><button class="active" role="tab" aria-selected="true">扩展应用</button><button role="tab" data-demo-only="节点证书">证书</button></div>
+          <div class="card">
+            <div class="card-head"><h2>扩展应用</h2><span class="muted card-action" style="font-size:var(--fs-xs)">1 个应用</span></div>
+            <div class="table-wrap"><table>
+              <thead><tr><th>应用</th><th>版本</th><th>状态</th><th class="low-priority">配置版本</th><th class="low-priority">更新时间</th><th></th></tr></thead>
+              <tbody><tr class="row-link" id="open-app"><td><span class="node-summary"><span class="status-dot ok"></span><span class="cell-name mono">node-exporter</span></span><span class="cell-sub">主机指标采集</span></td><td class="mono">1.8.2</td><td><span class="badge ok">已生效</span></td><td class="mono low-priority">rev 3 / 已应用 3</td><td class="low-priority">2 天前</td><td class="row-actions"><span class="route-chip">查看 →</span></td></tr></tbody>
+            </table></div>
+          </div>
+          <p class="inline-note">应用列表不作为新的一级页面；行点击进入既有应用详情（C + D 型）。</p>
+        </div>
+
+        <!-- C + D：应用详情，由列表行进入 -->
+        <div id="app-detail-view" style="display:none">
+          <button class="btn ghost sm app-back" id="app-back">← 返回扩展应用</button>
+          <div class="page-head"><div><h1>node-exporter <span class="badge ok" style="vertical-align:2px">已生效</span></h1><p class="page-sub">tyo-1 · v1.8.2 · 配置 rev 3</p></div></div>
+          <div class="segmented" id="app-tabs" role="tablist"><button class="active" data-app-tab="config">配置</button><button data-app-tab="changes">变更</button><button data-app-tab="tasks">任务</button><button data-app-tab="history">历史</button></div>
+          <div class="subpage active" id="app-tab-config">
+            <div class="card"><div class="card-body">
+              <div class="field"><label for="app-port">监听端口</label><input class="mono" id="app-port" value="9100" inputmode="numeric"><div class="field-help">仅监听节点内网地址，保存后立即下发。</div></div>
+              <div class="field"><label for="app-args">额外参数</label><input class="mono" id="app-args" value="--collector.systemd"></div>
+            </div></div>
+            <div class="savebar" id="app-savebar"><span>有未保存的修改</span><div class="save-actions"><button class="btn sm" id="app-discard">放弃修改</button><button class="btn primary sm" id="app-save">保存并生效</button></div></div>
+          </div>
+          <div class="subpage" id="app-tab-changes"><div class="card"><div class="card-body"><div class="empty"><h3>没有待生效的变更</h3><p>修改配置后，可在这里检查差异并执行 plan / apply。</p><button class="btn" data-app-jump="config">返回配置</button></div></div></div></div>
+          <div class="subpage" id="app-tab-tasks"><div class="card"><div class="table-wrap"><table><thead><tr><th>动作</th><th>状态</th><th>时间</th></tr></thead><tbody><tr><td class="mono">apply</td><td><span class="badge ok">成功</span></td><td>2 天前</td></tr><tr><td class="mono">install</td><td><span class="badge ok">成功</span></td><td>12 天前</td></tr></tbody></table></div></div></div>
+          <div class="subpage" id="app-tab-history"><div class="card"><div class="table-wrap"><table><thead><tr><th>版本</th><th>说明</th><th>时间</th><th></th></tr></thead><tbody><tr><td class="mono">rev 3</td><td>当前版本</td><td>2 天前</td><td>—</td></tr><tr><td class="mono">rev 2</td><td>调整监听端口</td><td>9 天前</td><td class="row-actions"><button class="btn sm" id="app-rollback">回滚</button></td></tr></tbody></table></div></div></div>
+        </div>
+      </section>
+
+      <!-- E：主机运维 -->
+      <section class="page" id="page-ops" aria-labelledby="ops-title">
+        <div class="page-head">
+          <div><h1 id="ops-title">主机运维</h1><p class="page-sub"><span id="ops-node-name">tyo-1</span> · 实时快照（10s）· 服务数据打开时读取一次</p></div>
+          <div class="page-actions"><button class="btn" id="ops-offline">模拟离线</button><button class="btn primary" id="ops-diagnostic">诊断 · 2 项</button></div>
+        </div>
+        <div class="banner danger" id="ops-offline-banner" style="display:none"><div><strong>Agent 离线</strong> · 以下为 3 小时前的缓存，所有运维动作已禁用。</div></div>
+        <div id="ops-live-content">
+          <div class="card statusbar ops-data" role="region" aria-label="节点状态带">
+            <button class="status-cell" data-ops-segment="services"><span class="status-key">AGENT</span><span class="status-value"><span class="status-dot ok"></span>在线</span><span class="status-meta mono">v0.1.12 · 直连</span></button>
+            <button class="status-cell clickable" data-ops-segment="processes"><span class="status-key">CPU</span><span class="status-value danger">96%</span><span class="status-meta">点击查看高占用进程</span></button>
+            <button class="status-cell clickable" data-ops-segment="processes"><span class="status-key">内存</span><span class="status-value">41%</span><span class="status-meta">1.6 / 3.9 GB</span></button>
+            <div class="status-cell"><span class="status-key">磁盘 /</span><span class="status-value warn">86%</span><span class="status-meta">34 / 40 GB</span></div>
+            <button class="status-cell clickable" data-ops-segment="services"><span class="status-key">服务</span><span class="status-value danger">1 失败</span><span class="status-meta">4 个受管单元</span></button>
+            <div class="status-cell"><span class="status-key">运行</span><span class="status-value">32 天</span><span class="status-meta">无需重启</span></div>
+          </div>
+          <div class="segmented ops-action" id="ops-tabs" role="tablist" aria-label="运维对象">
+            <button class="active" data-ops-tab="services">服务</button><button data-ops-tab="processes">进程</button><button data-ops-tab="firewall">防火墙</button><button data-ops-tab="keys">SSH 公钥</button><button data-ops-tab="cron">定时任务</button>
+          </div>
+          <div class="subpage active ops-action" id="ops-tab-services"><div class="card"><div class="table-wrap"><table>
+            <thead><tr><th>名称</th><th>状态</th><th class="low-priority">说明</th><th></th></tr></thead><tbody>
+              <tr class="row-link" data-service="caddy"><td class="cell-name mono">caddy</td><td><span class="badge ok">active</span></td><td class="low-priority">Caddy Web Server</td><td class="row-actions"><button class="btn sm" disabled title="服务重启能力尚未开放">重启未开放</button></td></tr>
+              <tr class="row-link" data-service="wg-quick@wg0"><td class="cell-name mono">wg-quick@wg0</td><td><span class="badge ok">active</span></td><td class="low-priority">WireGuard via wg-quick</td><td class="row-actions"><button class="btn sm" disabled title="服务重启能力尚未开放">重启未开放</button></td></tr>
+              <tr class="row-link" data-service="khc-agent"><td class="cell-name mono">khc-agent</td><td><span class="badge ok">active</span></td><td class="low-priority">KHC Hub Agent</td><td class="row-actions"><button class="btn sm" disabled title="服务重启能力尚未开放">重启未开放</button></td></tr>
+              <tr class="row-link" data-service="khc-fw"><td class="cell-name mono">khc-fw</td><td><span class="badge danger">failed</span></td><td class="low-priority">KHC 防火墙规则持久化</td><td class="row-actions"><button class="btn sm" data-service="khc-fw">查看</button></td></tr>
+            </tbody></table></div></div></div>
+          <div class="subpage ops-action" id="ops-tab-processes"><div class="card"><div class="table-toolbar"><span class="toolbar-copy">按 CPU 排序 · 只看业务进程</span><div class="toolbar-actions"><button class="btn sm" id="process-filter">显示全部</button></div></div><div class="table-wrap"><table>
+            <thead><tr><th>PID</th><th>CPU</th><th>内存</th><th class="low-priority">用户</th><th>启动时间</th></tr></thead><tbody>
+              <tr class="row-link" data-process="23847"><td class="mono cell-name">23847</td><td style="color:var(--danger);font-weight:600">182.4%</td><td>412 MB</td><td class="mono low-priority">www-data</td><td>12:03:11</td></tr>
+              <tr class="row-link" data-process="812"><td class="mono cell-name">812</td><td>2.1%</td><td>96 MB</td><td class="mono low-priority">root</td><td>10 天前</td></tr>
+              <tr class="row-link" data-process="913"><td class="mono cell-name">913</td><td>0.8%</td><td>61 MB</td><td class="mono low-priority">root</td><td>10 天前</td></tr>
+            </tbody></table></div><div class="card-body" style="padding-top:9px;padding-bottom:9px"><span class="inline-note" id="process-hidden">已隐藏 37 个系统进程</span></div></div></div>
+          <div class="subpage ops-action" id="ops-tab-firewall"><div class="card"><div class="table-toolbar"><span class="toolbar-copy">仅管理 <span class="mono">table inet khc_fw</span> · SSH / WG / 8880 强制保留</span><div class="toolbar-actions"><button class="btn primary sm" id="edit-firewall">编辑规则</button></div></div><div class="table-wrap"><table>
+            <thead><tr><th>动作</th><th>协议</th><th>端口</th><th class="low-priority">来源</th><th>备注</th></tr></thead><tbody><tr><td><span class="badge ok">allow</span></td><td>TCP</td><td class="mono">443</td><td class="mono low-priority">any</td><td>站点入口</td></tr><tr><td><span class="badge ok">allow</span></td><td>UDP</td><td class="mono">51820</td><td class="mono low-priority">any</td><td>WireGuard</td></tr><tr><td><span class="badge ok">allow</span></td><td>TCP</td><td class="mono">2222</td><td class="mono low-priority">any</td><td>转发 ssh-nas</td></tr></tbody></table></div><div class="firewall-banner" id="firewall-banner"><span>规则已下发，请在 <strong id="firewall-countdown">60</strong> 秒内确认保留，否则自动回滚。</span><button class="btn primary sm" id="confirm-firewall">确认保留</button></div></div></div>
+          <div class="subpage ops-action" id="ops-tab-keys"><div class="card"><div class="table-toolbar"><span class="toolbar-copy">只维护 authorized_keys 的 khc 托管块</span><div class="toolbar-actions"><button class="btn primary sm" data-demo-only="添加公钥">＋ 添加公钥</button></div></div><div class="table-wrap"><table><thead><tr><th>指纹</th><th>类型</th><th class="low-priority">备注</th><th>来源</th><th></th></tr></thead><tbody><tr><td class="mono cell-name">SHA256:9xK2…fQ</td><td class="mono">ed25519</td><td class="low-priority">xk@macbook</td><td><span class="badge info">khc 托管</span></td><td class="row-actions"><button class="btn sm" id="delete-key">删除</button></td></tr><tr><td class="mono cell-name">SHA256:Pp01…zA</td><td class="mono">rsa</td><td class="low-priority">ci-deploy</td><td><span class="badge">手工</span></td><td class="row-actions"><span class="route-chip">不可管理</span></td></tr></tbody></table></div></div></div>
+          <div class="subpage ops-action" id="ops-tab-cron"><div class="card"><div class="empty"><h3>没有定时任务</h3><p>这里展示 khc 托管的 cron 项，不影响手工配置。</p><button class="btn primary" data-demo-only="添加定时任务">＋ 添加定时任务</button></div></div></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- 每页复用同一个右侧抽屉；确认与结果只替换内容，不叠加 Dialog。 -->
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
+  <div class="drawer-head"><div class="drawer-heading"><h2 id="drawer-title">详情</h2><p class="drawer-context" id="drawer-context"></p></div><button class="drawer-close" id="drawer-close" aria-label="关闭抽屉">×</button></div>
+  <div class="drawer-body" id="drawer-body"></div>
+  <div class="drawer-foot" id="drawer-foot"></div>
+</aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var drawer = $('drawer'), overlay = $('overlay'), lastFocus = null, toastTimer = null;
+  var agentDismissed = false, currentRoute = 'overview', firewallTimer = null;
+  var routeNames = { overview:'概览', agents:'节点 · 添加 Agent', apps:'tyo-1 · 扩展应用', ops:'tyo-1 · 主机运维' };
+
+  function showToast(message) {
+    clearTimeout(toastTimer); $('toast').textContent = message; $('toast').classList.add('show');
+    toastTimer = setTimeout(function () { $('toast').classList.remove('show'); }, 2200);
+  }
+  function closeMobile() { $('sidebar').classList.remove('mobile-open'); $('mobile-scrim').classList.remove('open'); }
+  function openDrawer(title, context, body, foot) {
+    lastFocus = document.activeElement;
+    $('drawer-title').textContent = title; $('drawer-context').textContent = context;
+    $('drawer-body').innerHTML = body; $('drawer-foot').innerHTML = foot || '<button class="btn" data-close>关闭</button>';
+    drawer.classList.add('open'); overlay.classList.add('open'); drawer.setAttribute('aria-hidden','false');
+    document.body.style.overflow = 'hidden';
+    drawer.querySelectorAll('[data-close]').forEach(function (btn) { btn.addEventListener('click', closeDrawer); });
+    setTimeout(function () { var target = drawer.querySelector('input,select,button'); if (target) target.focus(); }, 20);
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open'); overlay.classList.remove('open'); drawer.setAttribute('aria-hidden','true');
+    document.body.style.overflow = '';
+    if (currentRoute === 'agents') agentDismissed = true;
+    if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+  }
+  $('overlay').addEventListener('click', closeDrawer); $('drawer-close').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { closeDrawer(); closeMobile(); } });
+
+  function navigate(route) {
+    if (location.hash !== '#' + route) location.hash = route; else renderRoute();
+  }
+  function renderRoute() {
+    var route = location.hash.slice(1) || 'overview'; if (!routeNames[route]) route = 'overview';
+    closeMobile(); closeDrawer();
+    if (route === 'agents' && currentRoute !== 'agents') agentDismissed = false;
+    currentRoute = route;
+    document.querySelectorAll('.page').forEach(function (page) { page.classList.toggle('active', page.id === 'page-' + route); });
+    document.querySelectorAll('.nav-item[data-route]').forEach(function (item) { item.classList.toggle('active', item.dataset.route === route); });
+    $('crumb').innerHTML = '控制台 / <b>' + routeNames[route] + '</b>'; document.title = 'KHC · ' + routeNames[route];
+    window.scrollTo(0,0);
+    if (route === 'agents' && !agentDismissed) setTimeout(openAgentForm, 40);
+  }
+  document.querySelectorAll('[data-route]').forEach(function (item) { item.addEventListener('click', function () { if (item.dataset.route === 'agents') agentDismissed = false; navigate(item.dataset.route); }); });
+  window.addEventListener('hashchange', renderRoute);
+  $('mobile-menu').addEventListener('click', function () { $('sidebar').classList.add('mobile-open'); $('mobile-scrim').classList.add('open'); });
+  $('mobile-scrim').addEventListener('click', closeMobile);
+  document.querySelectorAll('[data-demo-only]').forEach(function (item) { item.addEventListener('click', function (event) { event.stopPropagation(); showToast(item.dataset.demoOnly + '不在本次四页 Demo 范围内'); }); });
+
+  function setTheme(theme) { document.documentElement.dataset.theme = theme; $('theme-toggle').textContent = theme === 'dark' ? '浅色' : '深色'; $('theme-toggle').setAttribute('aria-label', theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'); }
+  setTheme(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  $('theme-toggle').addEventListener('click', function () { setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
+
+  function copyText(text) {
+    function done() { showToast('已复制到剪贴板'); }
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done).catch(function () { fallback(); }); } else fallback();
+    function fallback() { var area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); try { document.execCommand('copy'); done(); } catch (e) { showToast('复制失败，请手动选择命令'); } area.remove(); }
+  }
+  function bindCopy() { drawer.querySelectorAll('[data-copy]').forEach(function (btn) { btn.addEventListener('click', function () { copyText(btn.dataset.copy); }); }); }
+
+  function openAgentForm() {
+    openDrawer('创建节点并安装 Agent','全局 · 节点 · 一步完成信息填写与命令生成',
+      '<div class="form-section"><div class="form-title">基本信息</div>' +
+      '<div class="field" id="field-agent-name"><label for="agent-name">节点名称</label><input id="agent-name" value="osa-1" autocomplete="off"><div class="field-error">请输入节点名称</div></div>' +
+      '<div class="field" id="field-agent-endpoint"><label for="agent-endpoint">接入地址</label><input class="mono" id="agent-endpoint" value="http://192.0.2.24:8880" spellcheck="false"><div class="field-help">默认端口 8880；支持裸 IP 或可信 HTTPS 域名。</div><div class="field-error">请输入以 http:// 或 https:// 开头的地址</div></div></div>' +
+      '<div class="form-section"><div class="form-title">域名与证书（可选）</div><div class="field-row"><div class="field"><label for="agent-zone">Cloudflare Zone</label><select id="agent-zone"><option value="example.com">example.com</option><option value="">不使用 DNS 代建</option></select></div><div class="field"><label for="agent-domain">子域名</label><input class="mono" id="agent-domain" value="osa-1" spellcheck="false"><div class="field-help">完整域名：osa-1.example.com</div></div></div>' +
+      '<label class="check-row"><input type="checkbox" id="agent-caddy" checked><span>同时配置 Caddy 与自动证书<br><span class="muted" style="font-size:var(--fs-xs)">安装命令将带 --with-caddy --tls-cn，不默认添加 --tls。</span></span></label></div>' +
+      '<details class="advanced"><summary>高级：已有解析记录与手工 TLS</summary><div class="advanced-body"><div class="field"><label for="agent-record">已有解析记录</label><select id="agent-record"><option>不选择，创建新记录</option><option>osa-1.example.com · A · 192.0.2.24</option></select></div><p class="field-help">DNS 代建失败不会阻断节点创建，会在结果区显示具体原因。</p></div></details>',
+      '<span class="foot-note">创建后再到目标主机执行命令</span><button class="btn" data-close>取消</button><button class="btn primary wide" id="create-agent">创建并生成命令</button>');
+    $('agent-domain').addEventListener('input', function () { this.parentElement.querySelector('.field-help').textContent = '完整域名：' + (this.value || '—') + '.example.com'; });
+    $('create-agent').addEventListener('click', createAgent);
+  }
+  function createAgent() {
+    var name = $('agent-name').value.trim(), endpoint = $('agent-endpoint').value.trim();
+    var nameOk = !!name, endpointOk = /^https?:\/\/.+/.test(endpoint);
+    $('field-agent-name').classList.toggle('invalid', !nameOk); $('field-agent-endpoint').classList.toggle('invalid', !endpointOk);
+    if (!nameOk || !endpointOk) return;
+    var btn = $('create-agent'); btn.disabled = true; btn.textContent = '正在创建…';
+    setTimeout(function () {
+      var domain = $('agent-domain').value.trim() || name;
+      var command = 'curl -fsSL https://panel.example.com/agent/install.sh | sh -s -- \\\n  --hub ' + name + ' \\\n  --token khc_demo_token_not_real \\\n  --listen 0.0.0.0:8880 \\\n  --with-caddy --tls-cn=' + domain + '.example.com';
+      openDrawer(name + ' 已创建','全局 · 在目标主机执行以下命令完成 Agent 接入',
+        '<div class="result-mark">✓</div><h3 class="result-title">节点记录已就绪</h3><p class="result-copy">接入令牌只在本次显示。命令执行完成后，返回节点列表手动刷新状态。</p>' +
+        '<dl class="kv"><dt>节点</dt><dd class="mono">' + name + '</dd><dt>接入地址</dt><dd class="mono">' + endpoint + '</dd><dt>接入令牌</dt><dd class="mono">khc_demo_••••_not_real</dd></dl>' +
+        '<div class="code-wrap"><div class="code-label">安装命令<button class="btn sm" id="copy-agent-command">复制命令</button></div><div class="codeblock" id="agent-command">' + command + '</div></div>' +
+        '<div class="banner info" style="margin:16px 0 0">DNS 记录与证书配置将在安装过程中完成；若代建失败，节点记录仍会保留。</div>',
+        '<button class="btn" id="agent-back-form">返回修改</button><button class="btn primary" data-close>完成</button>');
+      $('copy-agent-command').addEventListener('click', function () { copyText(command); }); $('agent-back-form').addEventListener('click', openAgentForm);
+    }, 700);
+  }
+  $('add-agent').addEventListener('click', openAgentForm);
+  document.querySelectorAll('[data-install]').forEach(function (btn) { btn.addEventListener('click', function () {
+    var name = btn.dataset.install, command = 'curl -fsSL https://panel.example.com/agent/install.sh | sh -s -- --hub ' + name + ' --token khc_demo_token_not_real --listen 0.0.0.0:8880';
+    openDrawer('安装命令 · ' + name,'全局 · 在目标主机执行','<p class="result-copy">令牌为演示内容，不代表真实凭据。</p><div class="code-wrap"><div class="code-label">安装命令<button class="btn sm" id="copy-install">复制命令</button></div><div class="codeblock">' + command + '</div></div>','<button class="btn primary" data-close>完成</button>');
+    $('copy-install').addEventListener('click', function () { copyText(command); });
+  }); });
+  $('refresh-nodes').addEventListener('click', function () { var btn = this; btn.disabled = true; btn.textContent = '正在探测…'; setTimeout(function () { btn.disabled = false; btn.textContent = '刷新状态'; showToast('状态已刷新 · 本轮共 5 次请求'); }, 650); });
+
+  document.querySelectorAll('[data-node-enter]').forEach(function (row) { row.addEventListener('click', function () { if (row.dataset.nodeEnter === 'hk-1') { navigate('ops'); setOffline(true); } else navigate('apps'); }); });
+  document.querySelector('[data-triage="offline"]').addEventListener('click', function () { navigate('ops'); setOffline(true); });
+
+  $('open-app').addEventListener('click', function () { $('apps-list-view').style.display = 'none'; $('app-detail-view').style.display = 'block'; $('crumb').innerHTML = '控制台 / <b>tyo-1 · node-exporter</b>'; window.scrollTo(0,0); });
+  $('app-back').addEventListener('click', function () { $('app-detail-view').style.display = 'none'; $('apps-list-view').style.display = 'block'; $('crumb').innerHTML = '控制台 / <b>tyo-1 · 扩展应用</b>'; });
+  function selectAppTab(name) { document.querySelectorAll('[data-app-tab]').forEach(function (btn) { btn.classList.toggle('active', btn.dataset.appTab === name); }); document.querySelectorAll('#app-detail-view .subpage').forEach(function (page) { page.classList.toggle('active', page.id === 'app-tab-' + name); }); }
+  document.querySelectorAll('[data-app-tab]').forEach(function (btn) { btn.addEventListener('click', function () { selectAppTab(btn.dataset.appTab); }); });
+  document.querySelectorAll('[data-app-jump]').forEach(function (btn) { btn.addEventListener('click', function () { selectAppTab(btn.dataset.appJump); }); });
+  ['app-port','app-args'].forEach(function (id) { $(id).addEventListener('input', function () { $('app-savebar').classList.add('show'); }); });
+  $('app-discard').addEventListener('click', function () { $('app-port').value = '9100'; $('app-args').value = '--collector.systemd'; $('app-savebar').classList.remove('show'); showToast('已放弃修改'); });
+  $('app-save').addEventListener('click', function () { var btn = this; btn.disabled = true; btn.textContent = '正在生效…'; setTimeout(function () { btn.disabled = false; btn.textContent = '保存并生效'; $('app-savebar').classList.remove('show'); showToast('配置已保存并生效'); }, 700); });
+  $('app-rollback').addEventListener('click', function () { openDrawer('回滚到 rev 2？','tyo-1 · node-exporter · L2 危险操作','<div class="banner danger"><strong>配置将立即恢复并应用</strong><br>当前 rev 3 会保留在历史记录中，可再次回滚。</div><dl class="kv"><dt>目标版本</dt><dd class="mono">rev 2</dd><dt>影响</dt><dd>node-exporter 将短暂重启</dd></dl>','<button class="btn" data-close>取消</button><button class="btn danger" id="confirm-rollback">确认回滚</button>'); $('confirm-rollback').addEventListener('click', function () { closeDrawer(); showToast('已提交回滚任务'); }); });
+
+  function selectOpsTab(name) { document.querySelectorAll('[data-ops-tab]').forEach(function (btn) { btn.classList.toggle('active', btn.dataset.opsTab === name); }); document.querySelectorAll('#ops-live-content .subpage').forEach(function (page) { page.classList.toggle('active', page.id === 'ops-tab-' + name); }); }
+  document.querySelectorAll('[data-ops-tab]').forEach(function (btn) { btn.addEventListener('click', function () { selectOpsTab(btn.dataset.opsTab); }); });
+  document.querySelectorAll('[data-ops-segment]').forEach(function (cell) { cell.addEventListener('click', function () { selectOpsTab(cell.dataset.opsSegment); }); });
+  document.querySelectorAll('[data-service]').forEach(function (row) { row.addEventListener('click', function (event) { event.stopPropagation(); var name = row.dataset.service, failed = name === 'khc-fw';
+    openDrawer(name,'tyo-1 · 服务详情','<span class="badge ' + (failed ? 'danger' : 'ok') + '">' + (failed ? 'failed' : 'active (running)') + '</span><dl class="kv"><dt>单元</dt><dd class="mono">' + name + '.service</dd><dt>启动以来</dt><dd>' + (failed ? '—' : '10 天') + '</dd><dt>主 PID</dt><dd class="mono">' + (failed ? '—' : '812') + '</dd></dl><div class="code-wrap"><div class="code-label">最近日志</div><div class="codeblock">' + (failed ? '× khc-fw.service - KHC firewall persistence\nActive: failed (Result: exit-code)\nnft: /etc/khc-host/fw.nft:17: syntax error' : '● ' + name + '.service\nActive: active (running)\nTasks: 8 · Memory: 96M') + '</div></div><div class="banner info" style="margin:16px 0 0">服务重启能力尚未开放，本 Demo 不提供写操作。</div>','<button class="btn" data-close>关闭</button>');
+  }); });
+  document.querySelectorAll('[data-process]').forEach(function (row) { row.addEventListener('click', function () { var pid = row.dataset.process; openDrawer('PID ' + pid,'tyo-1 · 进程详情','<dl class="kv"><dt>用户</dt><dd class="mono">www-data</dd><dt>CPU</dt><dd style="color:var(--danger)">182.4%</dd><dt>内存</dt><dd>412 MB</dd><dt>启动时间</dt><dd>今天 12:03:11</dd></dl><div class="code-wrap"><div class="code-label">完整命令行</div><div class="codeblock">/usr/bin/php-fpm8.2 --fpm-config /etc/php/8.2/fpm/php-fpm.conf</div></div>','<button class="btn" data-close>关闭</button>'); }); });
+  $('process-filter').addEventListener('click', function () { var all = this.dataset.all === 'true'; this.dataset.all = String(!all); this.textContent = all ? '显示全部' : '只看业务进程'; $('process-hidden').textContent = all ? '已隐藏 37 个系统进程' : '其中 37 个系统进程'; showToast(all ? '已切换为业务进程' : '已显示全部进程'); });
+  $('edit-firewall').addEventListener('click', function () { openDrawer('编辑防火墙规则','tyo-1 · 防火墙 · 草稿尚未下发','<div class="banner info">仅编辑 khc 托管规则；SSH、WireGuard 与 Agent 端口会被强制保留。</div><div class="form-section"><div class="form-title">规则草稿</div><div class="field-row"><div class="field"><label for="fw-protocol">协议</label><select id="fw-protocol"><option>TCP</option><option>UDP</option></select></div><div class="field"><label for="fw-port">端口</label><input class="mono" id="fw-port" value="8443"></div></div><div class="field"><label for="fw-comment">备注</label><input id="fw-comment" value="临时运维入口"></div></div>','<span class="foot-note">保存后仍需应用并确认</span><button class="btn" data-close>取消</button><button class="btn primary" id="save-firewall">保存草稿</button>'); $('save-firewall').addEventListener('click', function () { closeDrawer(); showToast('草稿已保存'); startFirewallConfirm(); }); });
+  function startFirewallConfirm() { clearInterval(firewallTimer); var remaining = 60; $('firewall-countdown').textContent = remaining; $('firewall-banner').classList.add('show'); selectOpsTab('firewall'); firewallTimer = setInterval(function () { remaining -= 1; $('firewall-countdown').textContent = remaining; if (remaining <= 0) { clearInterval(firewallTimer); $('firewall-banner').classList.remove('show'); showToast('确认超时，规则已自动回滚'); } },1000); }
+  $('confirm-firewall').addEventListener('click', function () { clearInterval(firewallTimer); $('firewall-banner').classList.remove('show'); showToast('规则已确认保留，并完成回读校验'); });
+  $('delete-key').addEventListener('click', function () { openDrawer('删除 SSH 公钥？','tyo-1 · L2 危险操作','<div class="banner danger"><strong>对应设备将无法再使用此公钥登录</strong><br>只删除 khc 托管块中的这一条，不影响其他公钥。</div><dl class="kv"><dt>指纹</dt><dd class="mono">SHA256:9xK2…fQ</dd><dt>备注</dt><dd>xk@macbook</dd></dl>','<button class="btn" data-close>取消</button><button class="btn danger" id="confirm-delete-key">确认删除</button>'); $('confirm-delete-key').addEventListener('click', function () { closeDrawer(); showToast('公钥已删除'); }); });
+  $('ops-diagnostic').addEventListener('click', function () { openDrawer('诊断 · 2 项未通过','tyo-1 · 控制面只读诊断 · 刚刚检查','<div class="card"><div class="card-body"><span class="badge danger">未通过</span><h3 style="margin-top:10px;font-size:var(--fs-md)">khc-fw 处于 failed</h3><p class="result-copy">防火墙规则重启后不持久。建议检查 /etc/khc-host/fw.nft 第 17 行。</p></div></div><div class="card"><div class="card-body"><span class="badge warn">警告</span><h3 style="margin-top:10px;font-size:var(--fs-md)">磁盘 / 已用 86%</h3><p class="result-copy">写满会导致 Agent 与日志失败。建议清理日志或扩容。</p></div></div>','<button class="btn" data-close>关闭</button><button class="btn primary" id="rerun-diagnostic">重新检查</button>'); $('rerun-diagnostic').addEventListener('click', function () { showToast('诊断已刷新'); }); });
+  function setOffline(value) { $('page-ops').classList.toggle('offline',value); $('ops-offline-banner').style.display = value ? 'flex' : 'none'; $('ops-offline').textContent = value ? '恢复在线' : '模拟离线'; $('ops-node-name').textContent = value ? 'hk-1' : 'tyo-1'; }
+  $('ops-offline').addEventListener('click', function () { setOffline(!$('page-ops').classList.contains('offline')); });
+
+  renderRoute();
+})();
+</script>
+</body>
+</html>

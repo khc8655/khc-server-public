@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "generatedFrom": "agent/recipes/catalog.json",
+  "recipes": [
+    {
+      "id": "demo-echo",
+      "name": "示例服务（假服务）",
+      "version": "1.0.0",
+      "description": "启动一个只读的本地 HTTP 假服务，用于验证应用目录/安装任务/回滚链路。",
+      "requiresRoot": true,
+      "params": [
+        {
+          "key": "port",
+          "label": "监听端口",
+          "type": "integer",
+          "default": 19090,
+          "min": 1024,
+          "max": 65535
+        },
+        {
+          "key": "greeting",
+          "label": "问候语",
+          "type": "string",
+          "default": "hello from khc",
+          "maxLength": 64,
+          "pattern": "^[\\x20-\\x7E]*$"
+        }
+      ],
+      "access": [
+        {
+          "label": "本地地址",
+          "value": "http://127.0.0.1:19090/",
+          "kind": "url",
+          "copy": true
+        }
+      ]
+    },
+    {
+      "id": "sing-box",
+      "name": "sing-box",
+      "version": "1.0.0",
+      "description": "下载并安装 sing-box（systemd 服务），生成最小 VLESS/Trojan 入站配置。",
+      "requiresRoot": true,
+      "params": [
+        {
+          "key": "version",
+          "label": "版本",
+          "type": "string",
+          "default": "1.10.7",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "maxLength": 20
+        },
+        {
+          "key": "protocol",
+          "label": "协议",
+          "type": "string",
+          "default": "vless",
+          "pattern": "^(vless|trojan|vmess)$"
+        },
+        {
+          "key": "port",
+          "label": "监听端口",
+          "type": "integer",
+          "default": 2080,
+          "min": 1024,
+          "max": 65535
+        },
+        {
+          "key": "password",
+          "label": "密码 / UUID",
+          "type": "string",
+          "default": "",
+          "secret": true,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9-]*$"
+        }
+      ],
+      "access": [
+        {
+          "label": "服务",
+          "value": "khc-sing-box.service",
+          "kind": "service",
+          "copy": false
+        },
+        {
+          "label": "入站",
+          "value": "sing-box://<protocol>@<host>:<port>",
+          "kind": "text",
+          "copy": false
+        }
+      ]
+    },
+    {
+      "id": "generic-service",
+      "name": "通用 Docker / 二进制服务",
+      "version": "1.0.0",
+      "description": "用 Docker 镜像或二进制下载地址安装一个受管服务；端口与名称可配置。",
+      "requiresRoot": true,
+      "params": [
+        {
+          "key": "mode",
+          "label": "安装方式",
+          "type": "string",
+          "default": "docker",
+          "pattern": "^(docker|binary)$"
+        },
+        {
+          "key": "name",
+          "label": "服务名",
+          "type": "string",
+          "default": "khc-generic",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,31}$",
+          "maxLength": 32
+        },
+        {
+          "key": "image",
+          "label": "Docker 镜像",
+          "type": "string",
+          "default": "",
+          "maxLength": 200,
+          "pattern": "^[a-z0-9._/-]*$"
+        },
+        {
+          "key": "downloadUrl",
+          "label": "二进制下载地址",
+          "type": "string",
+          "default": "",
+          "maxLength": 500,
+          "pattern": "^(|https://[A-Za-z0-9._/-]+)$"
+        },
+        {
+          "key": "sha256",
+          "label": "二进制 sha256",
+          "type": "string",
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(?:[a-f0-9]{64})?$"
+        },
+        {
+          "key": "port",
+          "label": "端口",
+          "type": "integer",
+          "default": 18080,
+          "min": 1024,
+          "max": 65535
+        }
+      ],
+      "access": [
+        {
+          "label": "服务",
+          "value": "khc-generic.service",
+          "kind": "service",
+          "copy": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@khc/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@khc/contracts": "workspace:*",
+    "hono": "^4.9.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "vitest": "^3.2.0"
+  }
+}

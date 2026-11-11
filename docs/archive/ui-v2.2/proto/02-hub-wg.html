@@ -1,0 +1,65 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="components.css"></head>
+<body><div class="app">
+<aside class="sidebar">
+  <a class="nav-item back"><i data-i="left"></i>全部节点</a>
+  <div class="hub-switch"><span class="dot ok"></span><div><div class="hn">tyo-1</div><div class="hs">东京 · 在线</div></div><i data-i="chev"></i></div>
+  <a class="nav-item "><i data-i="home"></i>概况</a>
+  <a class="nav-item active"><i data-i="users"></i>WireGuard<span class="count">7</span></a>
+  <a class="nav-item "><i data-i="globe"></i>站点<span class="count">3</span></a>
+  <a class="nav-item "><i data-i="arrow"></i>转发<span class="count">2</span></a>
+  <a class="nav-item "><i data-i="lock"></i>证书<span class="count">2</span></a>
+  <a class="nav-item "><i data-i="box"></i>应用<span class="count">1</span></a>
+  <div class="nav-sep"></div>
+  <a class="nav-item "><i data-i="activity"></i>活动</a>
+  <a class="nav-item "><i data-i="settings"></i>节点设置</a>
+  <div class="foot"><span class="dot ok"></span>控制面正常 · v0.5.0</div>
+</aside>
+
+<main class="main">
+  <div class="topbar"><div class="crumbs">节点 <i data-i="right" data-s="14"></i> tyo-1 <i data-i="right" data-s="14"></i> <b>WireGuard</b></div>
+    <div class="search"><i data-i="search"></i>搜索…<span class="kbd">⌘K</span></div></div>
+  <div class="content">
+    <div class="page-head"><div><h1>WireGuard</h1><div class="sub"><span class="scope"><i data-i="server" data-s="12"></i>tyo-1</span><span>7 个客户端 · 5 个在线</span><span class="sync" style="color:var(--accent)"><span class="dot info pulse"></span>下发中 rev 42</span></div></div><div class="actions"><button class="btn">接口设置</button><button class="btn primary"><i data-i="plus"></i>添加客户端</button></div></div>
+
+    <div class="grid g3" style="margin-bottom:var(--s4)">
+      <div class="card stat"><div class="label">接口</div><div class="value mono" style="font-size:18px">wg0 · 51820/udp</div><div class="hint">10.8.0.1/24 · MTU 1420</div></div>
+      <div class="card stat"><div class="label">在线客户端</div><div class="value">5<small> / 7</small></div><div class="hint">最近握手 &lt; 3 分钟</div></div>
+      <div class="card stat"><div class="label">24 小时流量</div><div class="value">21.7<small> GB</small></div><div class="hint">↓ 18.9 GB · ↑ 2.8 GB</div></div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar"><div class="tbl-search"><i data-i="search" data-s="14"></i>筛选客户端</div><span class="filter on">状态：全部</span><span class="filter">+ 标签</span></div>
+      <table class="table">
+        <thead><tr><th>名称</th><th>地址</th><th>最近握手</th><th>流量（24h）</th><th>状态</th><th></th></tr></thead>
+        <tbody>
+        <tr class="selected"><td><div class="cell-main"><span class="dot info pulse"></span><span class="name">pixel-8</span><span class="tag">手机</span></div></td><td class="mono">10.8.0.12</td><td class="t3">—</td><td class="t3">—</td><td><span class="badge info">下发中</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><div class="cell-main"><span class="dot ok"></span><span class="name">macbook</span><span class="tag">电脑</span></div></td><td class="mono">10.8.0.2</td><td>42 秒前</td><td class="num">9.1 GB</td><td><span class="badge ok">在线</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><div class="cell-main"><span class="dot ok"></span><span class="name">iphone</span><span class="tag">手机</span></div></td><td class="mono">10.8.0.3</td><td>1 分钟前</td><td class="num">4.6 GB</td><td><span class="badge ok">在线</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><div class="cell-main"><span class="dot ok"></span><span class="name">nas-home</span><span class="tag">站点</span></div></td><td class="mono">10.8.0.5</td><td>2 分钟前</td><td class="num">5.8 GB</td><td><span class="badge ok">在线</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><div class="cell-main"><span class="dot off"></span><span class="name">ipad</span></div></td><td class="mono">10.8.0.7</td><td class="t3">3 天前</td><td class="num t3">0</td><td><span class="badge">空闲</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        <tr><td><div class="cell-main"><span class="dot off"></span><span class="name t3">old-laptop</span></div></td><td class="mono t3">10.8.0.9</td><td class="t3">—</td><td class="t3">—</td><td><span class="badge">已停用</span></td><td class="r"><button class="btn ghost icon sm"><i data-i="more"></i></button></td></tr>
+        </tbody></table>
+    </div>
+  </div>
+</main></div>
+
+<div class="scrim"></div>
+<div class="drawer">
+  <div class="drawer-h"><h2>添加客户端</h2><span class="t3 sm">tyo-1</span><button class="btn ghost icon x"><i data-i="x"></i></button></div>
+  <div class="drawer-b">
+    <div class="field"><label>名称</label><div class="input focus">pixel-8</div><div class="help">只能用小写字母、数字和短横线，会出现在配置文件名里</div></div>
+    <div class="field"><label>设备类型</label><div class="seg"><span class="on">手机</span><span>电脑</span><span>站点（路由器/NAS）</span></div></div>
+    <div class="row2">
+      <div class="field"><label>隧道地址</label><div class="input mono">10.8.0.12<span class="suffix">自动</span></div></div>
+      <div class="field"><label>路由</label><div class="input">全部流量<span class="suffix"><i data-i="right" data-s="14"></i></span></div></div>
+    </div>
+    <div class="section-title">高级</div>
+    <div class="check-row"><div><div>预共享密钥</div><div class="help t3 xs">额外一层对称加密，推荐开启</div></div><span class="toggle on"></span></div>
+    <div class="check-row"><div><div>保活间隔</div><div class="help t3 xs">手机在 NAT 后建议 25 秒</div></div><div class="input" style="width:110px">25<span class="suffix">秒</span></div></div>
+    <div class="check-row"><div><div>DNS</div><div class="help t3 xs">留空使用节点默认</div></div><div class="input mono" style="width:180px">1.1.1.1</div></div>
+
+    <div class="banner info" style="margin-top:var(--s5)"><i data-i="key"></i><div class="btxt">私钥在浏览器本地生成，保存后只显示一次配置与二维码。<div class="t2">关闭后如需重新获取，只能重新生成密钥。</div></div></div>
+  </div>
+  <div class="drawer-f"><span class="note">保存后约 2 秒生效</span><button class="btn">取消</button><button class="btn primary">保存并生效</button></div>
+</div>
+<script src="icons.js"></script></body></html>

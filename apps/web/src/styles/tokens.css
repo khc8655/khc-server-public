@@ -1,0 +1,67 @@
+/* Console UI — design tokens v1 (source of truth; components must only use these vars) */
+:root {
+  /* color · light */
+  --bg: #FAFAFA; --surface: #FFFFFF; --surface-2: #F4F4F5; --surface-3: #EDEDEF;
+  --border: #E4E4E7; --border-strong: #D4D4D8;
+  --text: #18181B; --text-2: #52525B; --text-3: #71717A; --text-on-accent: #FFFFFF;
+  --accent: #2F6BFF; --accent-hover: #1F57E6; --accent-solid: #2F6BFF; --accent-solid-hover: #1F57E6; --accent-soft: #EEF3FF;
+  --ok: #15803D; --ok-soft: #EAF7EE;
+  --warn: #B45309; --warn-soft: #FDF4E7;
+  --danger: #DC2626; --danger-hover: #B91C1C; --danger-solid: #DC2626; --danger-soft: #FDECEC;
+  --neutral-soft: #F1F1F3;
+  --focus: 0 0 0 3px rgba(47,107,255,.28);
+  --shadow-overlay: 0 12px 32px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.06);
+  --scrim: rgba(24,24,27,.32);
+
+  /* type */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "DejaVu Sans Mono", monospace;
+  --fs-2xs: 11px; /* 角标/告警等微字号 */
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 20px; --fs-2xl: 24px;
+  --fs-mono: 12.5px; /* 等宽数字/代码/密钥 */
+  --lh: 1.5; --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
+
+  /* space (4px grid) */
+  --s05: 2px; --s15: 6px; --s25: 10px; /* 半档位：紧凑内距/微间隙 */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
+  /* aliases used by the lifecycle-style components */
+  --s-2: var(--s2); --s-3: var(--s3); --s-4: var(--s4); --s-5: var(--s5);
+  --fg: var(--text); --fg-secondary: var(--text-2); --fg-muted: var(--text-3); --fg-subtle: var(--text-3);
+  --bg-elevated: var(--surface); --bg-hover: var(--surface-2); --bg-muted: var(--surface-2);
+  --line: var(--border); --line-strong: var(--border-strong);
+  --danger-line: var(--danger); --ok-line: var(--ok);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.04); --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+
+  /* shape */
+  --r-xs: 4px; /* 小圆角：标签/按键/复选项 */ --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+  --h-control-sm: 26px; /* 小控件：分段项/小按钮/分页 */ --h-control: 32px; /* 默认控件：按钮/输入框/菜单/工具栏搜索与筛选 */ --h-control-lg: 40px; /* 大控件：≤639 的输入框与主按钮 */ --h-row: 44px;
+  --h-nav: 34px; /* 导航行高 */
+  --size-dot-sm: 6px; /* 徽标内的小状态圆点 */ --size-dot: 8px; /* 状态圆点 */
+  --size-spinner: 14px; /* 加载指示器 */
+  --size-icon-sm: 16px; /* 开关旋钮/复选框 */
+  --size-icon-md: 22px; /* 22px 图标容器：品牌标/关闭/新增 */
+  --size-icon-lg: 32px; /* 快捷入口图标 */
+  --size-icon-xl: 40px; /* 空态图标 */
+  --max-popover: 320px; /* 日志/菜单/浮层最大高度 */
+
+  /* layout */
+  --sidebar: 220px; --sidebar-rail: 56px; --topbar: 52px; --content-max: 1200px; --drawer: 480px;
+
+  /* motion */
+  --t-fast: 120ms; --t-base: 200ms; --ease: cubic-bezier(.2,.8,.2,1);
+}
+[data-theme="dark"] {
+  --bg: #0A0A0B; --surface: #111113; --surface-2: #18181B; --surface-3: #202024;
+  --border: #26262B; --border-strong: #34343A;
+  --text: #F4F4F5; --text-2: #A1A1AA; --text-3: #8B8B94;
+  --accent: #6E9BFF; --accent-hover: #8FB1FF; --accent-solid: #3567EB; --accent-solid-hover: #4677F5; --accent-soft: #16203A;
+  --ok: #4ADE80; --ok-soft: #10261A;
+  --warn: #FBBF24; --warn-soft: #2A2110;
+  --danger: #F87171; --danger-hover: #FCA5A5; --danger-solid: #D93A3A; --danger-soft: #2C1414;
+  --neutral-soft: #1C1C20;
+  --focus: 0 0 0 3px rgba(91,140,255,.35);
+  --shadow-overlay: 0 16px 40px rgba(0,0,0,.6);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35); --shadow-md: 0 6px 18px rgba(0,0,0,.45);
+  --scrim: rgba(0,0,0,.55);
+}
+@media (prefers-reduced-motion: reduce) { :root { --t-fast: 0ms; --t-base: 0ms; } }

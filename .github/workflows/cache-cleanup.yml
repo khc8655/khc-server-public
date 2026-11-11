@@ -1,0 +1,48 @@
+name: Cache cleanup
+
+# GitHub 对 Actions cache 的默认回收是“7 天未访问”，但仓库存储配额是
+# 所有 cache/artifact 共享的；这里每天主动删除创建超过 7 天、或 7 天未访问
+# 的 cache，避免旧 pnpm store 长期占用配额。
+on:
+  schedule:
+    # 每天 03:17 UTC（北京时间 11:17），避开整点调度高峰。
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  prune:
+    name: Prune caches older than 7 days
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete expired caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cutoff="$(date -u -d '7 days ago' +%s)"
+          echo "cutoff=$(date -u -d @${cutoff} '+%Y-%m-%dT%H:%M:%SZ')"
+          # 默认按 last_accessed_at 倒序；这里取足够多的条目后按时间过滤。
+          gh cache list --repo "$REPO" --limit 100 \
+            --json id,key,createdAt,lastAccessedAt,sizeInBytes \
+            --jq '.[] | [.id, .lastAccessedAt, .createdAt, .key, .sizeInBytes] | @tsv' \
+          | while IFS=$'\t' read -r id last_accessed created key size; do
+              [ -n "$id" ] || continue
+              # lastAccessedAt 是 ISO 8601；拿不到时回退 createdAt。
+              stamp="${last_accessed:-$created}"
+              [ -n "$stamp" ] || continue
+              epoch="$(date -u -d "$stamp" +%s 2>/dev/null || true)"
+              created_epoch="$(date -u -d "$created" +%s 2>/dev/null || true)"
+              [ -n "$epoch" ] || continue
+              [ -n "$created_epoch" ] || continue
+              if [ "$epoch" -lt "$cutoff" ] || [ "$created_epoch" -lt "$cutoff" ]; then
+                echo "delete cache id=${id} key=${key} created=${created} last=${stamp} size=${size}"
+                gh cache delete "$id" --repo "$REPO"
+              fi
+            done
+          echo "cache cleanup done"

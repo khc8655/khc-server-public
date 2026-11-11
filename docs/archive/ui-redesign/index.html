@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>khc-server 面板 · 早期 UI 示意（已归档 · 历史记录）</title>
+<style>
+  :root {
+    --bg: #f5f6f7;
+    --panel: #ffffff;
+    --border: #e3e6e9;
+    --text: #1c2024;
+    --text-2: #5b6470;
+    --text-3: #8b94a0;
+    --accent: #2563eb;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.55;
+  }
+  .shell { display: flex; min-height: 100vh; }
+
+  /* ===== 左侧栏 ===== */
+  .sidebar {
+    width: 232px; flex-shrink: 0; background: var(--panel);
+    border-right: 1px solid var(--border); padding: 16px 12px;
+    display: flex; flex-direction: column; gap: 20px;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  .brand { font-weight: 700; font-size: 15px; padding: 0 8px; }
+  .brand small { display: block; font-weight: 400; color: var(--text-3); font-size: 12px; }
+  .nav-group-label { font-size: 11px; color: var(--text-3); padding: 0 8px 6px; text-transform: uppercase; letter-spacing: .05em; }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px; padding: 7px 8px;
+    border-radius: 6px; color: var(--text-2); cursor: pointer; user-select: none;
+  }
+  .nav-item:hover { background: #f0f2f4; }
+  .nav-item.active { background: #eaf1fd; color: var(--accent); font-weight: 600; }
+  .nav-item .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+  .nav-item .dot.ok { background: var(--ok); }
+  .nav-item .dot.danger { background: var(--danger); }
+  .sidebar-footer { margin-top: auto; font-size: 12px; color: var(--text-3); padding: 8px; border-top: 1px solid var(--border); }
+  .sidebar-footer a { color: var(--accent); cursor: pointer; text-decoration: none; }
+
+  /* ===== 主区 ===== */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    height: 52px; background: var(--panel); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; padding: 0 24px;
+    font-size: 13px; color: var(--text-3);
+  }
+  .topbar .crumb b { color: var(--text); font-weight: 600; }
+  .topbar .spacer { flex: 1; }
+  .topbar .kbd { border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; font-size: 12px; color: var(--text-2); background: var(--bg); }
+
+  /* 节点一级导航 */
+  .hubbar {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 10px 24px 0; display: flex; align-items: flex-end; gap: 4px; flex-wrap: wrap;
+  }
+  .hub-switch {
+    display: flex; align-items: center; gap: 8px; margin-right: 18px; margin-bottom: 10px;
+    border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; cursor: pointer; background: var(--bg);
+  }
+  .hub-switch b { font-size: 13px; }
+  .hub-switch .mono { font-size: 12px; color: var(--text-3); font-family: ui-monospace, monospace; }
+  .hubtab {
+    padding: 8px 14px; font-size: 13.5px; color: var(--text-2); cursor: pointer;
+    border-bottom: 2px solid transparent; user-select: none;
+  }
+  .hubtab:hover { color: var(--text); }
+  .hubtab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+  .content { padding: 24px; max-width: 1200px; width: 100%; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .pagehead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+  .pagehead h1 { font-size: 20px; font-weight: 650; }
+  .pagehead .sub { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+  .pagehead .actions { margin-left: auto; display: flex; gap: 8px; }
+
+  .btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 7px; padding: 6px 13px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { background: #f0f2f4; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #1d4fc4; }
+  .btn.sm { padding: 3px 9px; font-size: 12px; }
+  .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+
+  .banner {
+    border: 1px solid #f3d9a4; background: #fdf6e7; color: #92610a;
+    border-radius: var(--radius); padding: 10px 14px; font-size: 13px; margin-bottom: 16px;
+  }
+  .banner.danger { border-color: #f2c4c4; background: #fdeeee; color: #a02a2a; }
+
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .grid4 { grid-template-columns: repeat(2, 1fr); } .grid2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; font-weight: 650; margin-bottom: 4px; }
+  .card .card-head { display: flex; align-items: center; margin-bottom: 10px; }
+  .card .card-head .link { margin-left: auto; font-size: 12.5px; color: var(--accent); cursor: pointer; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--text-3); }
+  .stat .value { font-size: 22px; font-weight: 650; margin: 2px 0; }
+  .stat .hint { font-size: 12px; color: var(--text-2); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--text-3); font-weight: 500; font-size: 12px; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 10px; border-bottom: 1px solid #eef0f2; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border-radius: 99px; padding: 1px 9px; border: 1px solid var(--border); color: var(--text-2); }
+  .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+  .badge.ok { color: var(--ok); border-color: #c4e8d0; background: #f0faf3; } .badge.ok::before { background: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: #f0dcae; background: #fdf6e7; } .badge.warn::before { background: var(--warn); }
+  .badge.danger { color: var(--danger); border-color: #f2c4c4; background: #fdeeee; } .badge.danger::before { background: var(--danger); }
+  .badge.info { color: var(--accent); border-color: #c8dcfa; background: #eef4fd; } .badge.info::before { background: var(--accent); }
+
+  .kv { display: grid; grid-template-columns: 130px 1fr; row-gap: 8px; font-size: 13px; }
+  .kv dt { color: var(--text-3); }
+  .kv dd { color: var(--text); }
+
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 14px; background: var(--panel); }
+  .seg button { border: none; background: none; padding: 6px 16px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+  .seg button.active { background: var(--accent); color: #fff; }
+
+  .section-note { font-size: 12px; color: var(--text-3); margin: -8px 0 16px; }
+  details.advanced { margin-top: 4px; }
+  details.advanced summary { cursor: pointer; color: var(--text-2); font-size: 13px; padding: 6px 0; }
+  .todo-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .todo-chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+
+  /* 表单 */
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12.5px; color: var(--text-2); margin-bottom: 4px; }
+  .field input, .field select {
+    width: 100%; border: 1px solid var(--border); border-radius: 7px;
+    padding: 7px 10px; font-size: 13px; font-family: inherit; background: #fff; color: var(--text);
+  }
+  .field input:focus, .field select:focus { outline: 2px solid #c8dcfa; border-color: var(--accent); }
+
+  /* 空态 */
+  .empty { text-align: center; padding: 36px 16px; color: var(--text-3); }
+  .empty .t { font-size: 14px; color: var(--text-2); margin-bottom: 4px; }
+  .empty .d { font-size: 12.5px; margin-bottom: 12px; }
+
+  /* ===== 状态带 ===== */
+  .statusbar {
+    display: flex; align-items: stretch; gap: 0; background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 16px; overflow: hidden; flex-wrap: wrap;
+  }
+  .statusbar .cell {
+    padding: 10px 16px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 1px; min-width: 96px;
+  }
+  .statusbar .cell.clickable { cursor: pointer; }
+  .statusbar .cell.clickable:hover { background: #f0f2f4; }
+  .statusbar .cell .k { font-size: 11.5px; color: var(--text-3); }
+  .statusbar .cell .v { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 6px; }
+  .statusbar .cell .v.ok { color: var(--ok); }
+  .statusbar .cell .v.warn { color: var(--warn); }
+  .statusbar .cell .v.danger { color: var(--danger); }
+  .statusbar .cell .v.muted { color: var(--text-3); }
+  .statusbar .grow { flex: 1; border-right: none; display: flex; align-items: center; justify-content: flex-end; padding: 0 14px; }
+  .dotmini { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--text-3); }
+  .dotmini.ok { background: var(--ok); } .dotmini.warn { background: var(--warn); } .dotmini.danger { background: var(--danger); }
+
+  /* ===== 统一右侧抽屉 ===== */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(20,24,28,.35);
+    display: none; z-index: 40;
+  }
+  .overlay.open { display: block; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 460px; max-width: 92vw;
+    background: var(--panel); border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0,0,0,.08); z-index: 41;
+    display: none; flex-direction: column;
+  }
+  .drawer.open { display: flex; }
+  .drawer .d-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); }
+  .drawer .d-head h3 { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .drawer .d-head .ctx { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+  .drawer .d-body { padding: 16px; overflow-y: auto; flex: 1; }
+  .drawer .d-foot { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+  .codeblock {
+    background: #16191d; color: #d6dde6; border-radius: 7px; padding: 10px 12px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-all; margin-top: 10px;
+  }
+  .table-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .table-toolbar .spacer { flex: 1; }
+  tr.rowlink { cursor: pointer; }
+  tr.rowlink:hover td { background: #f7f8f9; }
+  .page-off .statusbar, .page-off .card { opacity: .55; }
+
+  /* 保存条（配置表单型） */
+  .savebar {
+    position: sticky; bottom: 0; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px; display: none;
+    align-items: center; gap: 10px; font-size: 13px; color: var(--text-2);
+    box-shadow: 0 -4px 16px rgba(0,0,0,.05);
+  }
+  .savebar.show { display: flex; }
+
+  /* 二维码占位（示意） */
+  .qr {
+    width: 132px; height: 132px; margin: 10px auto; border: 6px solid #fff;
+    outline: 1px solid var(--border); border-radius: 4px;
+    background:
+      conic-gradient(#000 25%, #fff 0 50%, #000 0 75%, #fff 0) 0 0/22px 22px,
+      #fff;
+  }
+
+  /* 登录页 */
+  .login-veil {
+    position: fixed; inset: 0; background: var(--bg); z-index: 60;
+    display: none; align-items: center; justify-content: center;
+  }
+  .login-veil.open { display: flex; }
+  .login-card {
+    width: 340px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px 24px;
+  }
+  .login-card h1 { font-size: 18px; margin-bottom: 2px; }
+  .login-card .sub { font-size: 12.5px; color: var(--text-3); margin-bottom: 18px; }
+  .login-err { display: none; color: var(--danger); font-size: 12.5px; margin: 8px 0; }
+  .login-veil .back { position: fixed; top: 16px; left: 20px; font-size: 12.5px; color: var(--text-3); cursor: pointer; }
+</style>
+</head>
+<body>
+<p style="margin:0;padding:8px 16px;background:#fdf6e7;color:#92610a;font-size:13px;border-bottom:1px solid #f0dcae">
+  已归档 · 历史记录（非现行规范，其自带色板/字阶已废止）。现行规范以 <strong>docs/ui-redesign/ui-guidelines.md</strong>、<strong>page-specs.md</strong> 与 <strong>apps/web/src/styles/tokens.css</strong> 为准；本文件仅保留作历史对照。
+</p>
+<div class="shell">
+
+  <!-- ================= 左侧栏（全局层） ================= -->
+  <aside class="sidebar">
+    <div class="brand">Console<small>服务器运维遥控器</small></div>
+
+    <nav>
+      <div class="nav-group-label">全局</div>
+      <div class="nav-item active" data-gpage="g-overview">概览</div>
+      <div class="nav-item" data-gpage="g-hubs">节点</div>
+      <div class="nav-item" data-gpage="g-settings">设置</div>
+    </nav>
+
+    <nav>
+      <div class="nav-group-label">节点（直达）</div>
+      <div class="nav-item" data-node="sg-1"><span class="dot ok"></span>sg-1</div>
+      <div class="nav-item" data-node="tyo-1"><span class="dot ok"></span>tyo-1</div>
+      <div class="nav-item" data-node="hk-1"><span class="dot danger"></span>hk-1</div>
+    </nav>
+
+    <div class="sidebar-footer">控制面已连接 · v0.5.x<br><a id="show-login">预览登录页</a></div>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb" id="crumb">控制台 › <b>概览</b></span>
+      <span class="spacer"></span>
+      <span class="kbd">⌘K 搜索节点 / 动作</span>
+    </div>
+
+    <!-- 节点一级导航：5 项，不再有二级胶囊（全局页时隐藏） -->
+    <div class="hubbar" id="hubbar" style="display:none">
+      <div class="hub-switch"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span><b id="hub-name">tyo-1</b><span class="mono">http://203.0.113.10:8880</span></div>
+      <div class="hubtab active" data-page="overview">概况</div>
+      <div class="hubtab" data-page="sites">站点</div>
+      <div class="hubtab" data-page="peer">内网穿透</div>
+      <div class="hubtab" data-page="ops">主机运维</div>
+      <div class="hubtab" data-page="settings">节点设置</div>
+    </div>
+
+    <div class="content">
+
+      <!-- ==================== 全局层 ==================== -->
+
+      <!-- ========== G1：全局概览（类型 A） ========== -->
+      <section class="page active" id="page-g-overview">
+        <div class="pagehead">
+          <div>
+            <h1>概览</h1>
+            <div class="sub">整个集群的健康与待办 · 管理操作在各节点页面</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>需要处理</h2></div>
+          <div class="todo-strip" style="margin-bottom:0">
+            <div class="todo-chip" data-node="hk-1"><span class="badge danger">节点</span>hk-1 已离线 3 小时</div>
+            <div class="todo-chip" data-gpage-link="g-settings"><span class="badge warn">证书</span>nas-wildcard 还有 11 天到期</div>
+          </div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat"><div class="label">节点在线</div><div class="value">2 / 3</div><div class="hint">hk-1 离线</div></div>
+          <div class="stat"><div class="label">Peer</div><div class="value">9</div><div class="hint">3 个节点合计</div></div>
+          <div class="stat"><div class="label">站点 + 转发</div><div class="value">7</div><div class="hint">5 站点 · 2 转发</div></div>
+          <div class="stat"><div class="label">证书</div><div class="value">4</div><div class="hint">1 张 30 天内到期</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>节点</h2></div>
+          <table>
+            <thead><tr><th>名称</th><th>状态</th><th>模式</th><th>接入地址</th><th>负载</th><th></th></tr></thead>
+            <tbody>
+              <tr class="rowlink" data-node="sg-1"><td><b>sg-1</b></td><td><span class="badge ok">在线</span></td><td>纯 Caddy 网关</td><td class="mono">https://sg-1.example.com</td><td style="color:var(--text-2)">CPU 8% · 内存 33%</td><td><span class="link" style="color:var(--accent);font-size:12.5px">进入节点 →</span></td></tr>
+              <tr class="rowlink" data-node="tyo-1"><td><b>tyo-1</b></td><td><span class="badge ok">在线</span></td><td>组网节点</td><td class="mono">http://203.0.113.10:8880</td><td style="color:var(--danger)">CPU 96% · 内存 41%</td><td><span class="link" style="color:var(--accent);font-size:12.5px">进入节点 →</span></td></tr>
+              <tr class="rowlink" data-node="hk-1"><td><b>hk-1</b></td><td><span class="badge danger">离线</span></td><td>组网节点</td><td class="mono">http://198.51.100.7:8880</td><td style="color:var(--text-3)">3 小时前的缓存</td><td><span class="link" style="color:var(--accent);font-size:12.5px">进入节点 →</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="section-note">类型 A：分诊条 → 指标 → 节点矩阵。页头无创建按钮，唯一动作是"进入节点"。</p>
+      </section>
+
+      <!-- ========== G2：节点列表（类型 B） ========== -->
+      <section class="page" id="page-g-hubs">
+        <div class="pagehead">
+          <div>
+            <h1>节点</h1>
+            <div class="sub">3 个节点 · 创建、删除与安装接入</div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="btn-create-hub">＋ 创建节点</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <table>
+            <thead><tr><th>名称</th><th>状态</th><th>接入地址</th><th>路由</th><th>最近在线</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr class="rowlink" data-node="sg-1"><td><b>sg-1</b></td><td><span class="badge ok">在线</span></td><td class="mono">https://sg-1.example.com</td><td>域名直连</td><td>刚刚</td><td><button class="btn sm" data-install="sg-1">安装命令</button></td></tr>
+              <tr class="rowlink" data-node="tyo-1"><td><b>tyo-1</b></td><td><span class="badge ok">在线</span></td><td class="mono">http://203.0.113.10:8880</td><td>IP 直连</td><td>刚刚</td><td><button class="btn sm" data-install="tyo-1">安装命令</button></td></tr>
+              <tr class="rowlink" data-node="hk-1"><td><b>hk-1</b></td><td><span class="badge danger">离线</span></td><td class="mono">http://198.51.100.7:8880</td><td>IP 直连</td><td>3 小时前</td><td><button class="btn sm" data-install="hk-1">安装命令</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="section-note">类型 B：一张对象表 + 页头唯一主操作。行点击进节点概况；「删除节点」移至节点设置 · 危险区（L3）。</p>
+      </section>
+
+      <!-- ========== G3：全局设置（类型 B 表 + 分段） ========== -->
+      <section class="page" id="page-g-settings">
+        <div class="pagehead">
+          <div>
+            <h1>设置</h1>
+            <div class="sub">证书库与系统变量凭据 · 全局生效</div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="btn-issue-cert">＋ 签发或导入证书</button>
+          </div>
+        </div>
+
+        <div class="seg" data-seg="gset">
+          <button class="active" data-sub="gset-certs">证书库</button>
+          <button data-sub="gset-vars">系统变量</button>
+        </div>
+
+        <div class="subpage" id="sub-gset-certs">
+          <div class="card">
+            <table>
+              <thead><tr><th>名称</th><th>域名</th><th>签发方</th><th>到期</th><th>来源</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr><td><b>nas-wildcard</b></td><td class="mono">*.example.com</td><td>Let's Encrypt</td><td><span class="badge warn">11 天后</span></td><td>ACME DNS-01</td><td><button class="btn sm">导出</button> <button class="btn sm" data-del-cert="nas-wildcard">删除</button></td></tr>
+                <tr><td><b>blog-cert</b></td><td class="mono">blog.example.com</td><td>Let's Encrypt</td><td>74 天后</td><td>ACME HTTP-01</td><td><button class="btn sm">导出</button> <button class="btn sm" data-del-cert="blog-cert">删除</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="section-note">到期 ≤30 天琥珀徽标，≤7 天红。删除 = L2 抽屉确认（说明影响范围）。</p>
+        </div>
+
+        <div class="subpage" id="sub-gset-vars" style="display:none">
+          <div class="card">
+            <div class="empty">
+              <div class="t">还没有配置项</div>
+              <div class="d">系统变量用于保存 DNS API 凭据等加密配置（如 CF_DNS_API_TOKEN）。</div>
+              <button class="btn primary">＋ 添加变量</button>
+            </div>
+          </div>
+          <p class="section-note">空态：EmptyState + 唯一引导按钮，不留空表。</p>
+        </div>
+      </section>
+
+      <!-- ==================== 节点层 ==================== -->
+
+      <!-- ========== 页 1：节点概况（类型 A） ========== -->
+      <section class="page" id="page-overview">
+        <div class="pagehead">
+          <div>
+            <h1>tyo-1 <span class="badge info" style="vertical-align:2px">组网节点</span></h1>
+            <div class="sub">节点概况 · 第一眼只看健康与待办，管理入口在各分区页</div>
+          </div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat"><div class="label">连接</div><div class="value">在线</div><div class="hint">直连 · Agent v0.1.4</div></div>
+          <div class="stat"><div class="label">站点</div><div class="value">3</div><div class="hint">2 个已启用 · 自动 TLS</div></div>
+          <div class="stat"><div class="label">Peer 在线</div><div class="value">4 / 5</div><div class="hint">最近握手 2 分钟前</div></div>
+          <div class="stat"><div class="label">负载</div><div class="value" style="color:var(--danger)">96%</div><div class="hint">内存 41% · 磁盘 86%</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>需要处理</h2></div>
+          <div class="todo-strip" style="margin-bottom:0">
+            <div class="todo-chip" data-goto="ops"><span class="badge danger">服务</span>khc-fw 处于 failed</div>
+            <div class="todo-chip" data-goto="sites"><span class="badge warn">证书</span>nas-wildcard 还有 11 天到期</div>
+            <div class="todo-chip" data-goto="peer"><span class="badge warn">Peer</span>ipad 已停用 30 天</div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="card-head"><h2>运行信息</h2><span class="link" data-goto="settings">节点设置 →</span></div>
+            <dl class="kv">
+              <dt>接入地址</dt><dd class="mono">http://203.0.113.10:8880</dd>
+              <dt>主机与系统</dt><dd>tyo-1 · Debian 12</dd>
+              <dt>服务版本</dt><dd class="mono">Agent v0.1.4 · Caddy 2.8</dd>
+              <dt>最近在线</dt><dd>刚刚</dd>
+            </dl>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>最近操作</h2></div>
+            <table>
+              <tr><td>应用站点配置</td><td class="mono">caddy-site</td><td style="color:var(--text-3)">2 小时前</td></tr>
+              <tr><td>新增 Peer</td><td class="mono">pixel-8</td><td style="color:var(--text-3)">昨天</td></tr>
+              <tr><td>导出备份</td><td class="mono">backup.json</td><td style="color:var(--text-3)">3 天前</td></tr>
+            </table>
+          </div>
+        </div>
+        <p class="section-note">类型 A：概况页不再重复堆站点/Peer 明细列表，只保留指标、待办与最近操作；待办 chip 可点直达对应页。</p>
+      </section>
+
+      <!-- ========== 页 2：站点（类型 B + 抽屉表单） ========== -->
+      <section class="page" id="page-sites">
+        <div class="pagehead">
+          <div>
+            <h1>站点</h1>
+            <div class="sub">tyo-1 · 3 个站点 · Caddy 反向代理 / 静态站 / 重定向</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="btn-caddy-svc">Caddy 服务</button>
+            <button class="btn primary" id="btn-add-site">＋ 添加站点</button>
+          </div>
+        </div>
+
+        <div class="seg" data-seg="sites">
+          <button class="active" data-sub="sites-list">站点</button>
+          <button data-sub="sites-apps">扩展应用</button>
+          <button data-sub="sites-certs">证书</button>
+        </div>
+
+        <div class="subpage" id="sub-sites-list">
+          <div class="card">
+            <table>
+              <thead><tr><th>域名</th><th>类型</th><th>上游 / 目标</th><th>TLS</th><th>状态</th><th></th></tr></thead>
+              <tbody>
+                <tr class="rowlink" data-site="blog.example.com"><td class="mono"><b>blog.example.com</b></td><td><span class="badge info">反代</span></td><td class="mono">10.0.0.12:8080</td><td>自动</td><td><span class="badge ok">已启用</span></td><td><button class="btn sm" data-site="blog.example.com">编辑</button></td></tr>
+                <tr class="rowlink" data-site="nas.example.com"><td class="mono"><b>nas.example.com</b></td><td><span class="badge info">反代</span></td><td class="mono">10.0.0.15:5000</td><td>绑定证书</td><td><span class="badge ok">已启用</span></td><td><button class="btn sm" data-site="nas.example.com">编辑</button></td></tr>
+                <tr class="rowlink" data-site="old.example.com"><td class="mono"><b>old.example.com</b></td><td><span class="badge">重定向</span></td><td class="mono">→ blog.example.com</td><td>自动</td><td><span class="badge">已停用</span></td><td><button class="btn sm" data-site="old.example.com">编辑</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <details class="advanced card">
+            <summary>高级：批量导入 / 导出 JSON · 清空站点（危险）</summary>
+            <p style="color:var(--text-2);font-size:13px;margin-top:8px">低频操作统一收进这里，不占首屏。</p>
+          </details>
+          <p class="section-note">类型 B：行点击或「编辑」= 站点抽屉；抽屉默认只展开 基本 / 反代 / TLS，安全、日志、观测收进"高级"。</p>
+        </div>
+
+        <div class="subpage" id="sub-sites-apps" style="display:none">
+          <div class="card">
+            <div class="card-head"><h2>扩展应用</h2></div>
+            <table>
+              <thead><tr><th>应用</th><th>版本</th><th>状态</th><th>配置版本</th><th></th></tr></thead>
+              <tbody>
+                <tr class="rowlink" data-app="node-exporter"><td class="mono"><b>node-exporter</b></td><td class="mono">1.8.2</td><td><span class="badge ok">已生效</span></td><td class="mono">rev 3 / 已应用 3</td><td><span class="link" style="color:var(--accent);font-size:12.5px">打开 →</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="section-note">扩展应用从一级入口降级为站点页分段；行点击进应用详情页（类型 C）。</p>
+        </div>
+
+        <div class="subpage" id="sub-sites-certs" style="display:none">
+          <div class="card">
+            <div class="card-head"><h2>本节点关联证书</h2><span class="link" data-gpage-link="g-settings">管理全局证书库 →</span></div>
+            <table>
+              <thead><tr><th>名称</th><th>域名</th><th>签发</th><th>到期</th></tr></thead>
+              <tbody>
+                <tr><td>nas-wildcard</td><td class="mono">*.example.com</td><td>ACME DNS-01</td><td><span class="badge warn">11 天后</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="section-note">节点侧证书只读；签发与删除统一在全局证书库。</p>
+        </div>
+      </section>
+
+      <!-- ========== 页 2b：应用详情（类型 C + D） ========== -->
+      <section class="page" id="page-app">
+        <div class="pagehead">
+          <div>
+            <h1>node-exporter <span class="badge ok" style="vertical-align:2px">已生效</span></h1>
+            <div class="sub">tyo-1 · 扩展应用 · v1.8.2 · 配置 rev 3</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="btn-app-uninstall">卸载</button>
+          </div>
+        </div>
+
+        <div class="seg" data-seg="app">
+          <button class="active" data-sub="app-config">配置</button>
+          <button data-sub="app-diff">变更</button>
+          <button data-sub="app-tasks">任务</button>
+          <button data-sub="app-history">历史</button>
+        </div>
+
+        <div class="subpage" id="sub-app-config">
+          <div class="card">
+            <div class="field"><label>监听端口</label><input class="mono" id="app-port" value="9100"></div>
+            <div class="field"><label>额外参数</label><input class="mono" id="app-args" value="--collector.systemd"></div>
+            <div class="field"><label>仅监听内网</label><select><option>是（10.0.0.0/24）</option><option>否</option></select></div>
+          </div>
+          <div class="savebar" id="app-savebar">
+            有未保存的修改
+            <span style="flex:1"></span>
+            <button class="btn sm" id="app-discard">放弃</button>
+            <button class="btn sm primary" id="app-save">保存并生效</button>
+          </div>
+          <p class="section-note" style="margin-top:10px">类型 D：修改任一字段 → 底部出现保存条（点输入框改个值试试）。</p>
+        </div>
+
+        <div class="subpage" id="sub-app-diff" style="display:none">
+          <div class="card">
+            <div class="codeblock" style="margin-top:0">--- 已生效 (rev 3)
++++ 待保存
+  listen: 0.0.0.0:9100
+- args: "--collector.systemd"
++ args: "--collector.systemd --collector.processes"</div>
+            <div style="margin-top:10px"><button class="btn sm">plan</button> <button class="btn sm primary">应用</button></div>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-app-tasks" style="display:none">
+          <div class="card">
+            <table>
+              <thead><tr><th>动作</th><th>状态</th><th>时间</th></tr></thead>
+              <tbody>
+                <tr><td>apply</td><td><span class="badge ok">成功</span></td><td style="color:var(--text-3)">2 天前</td></tr>
+                <tr><td>install</td><td><span class="badge ok">成功</span></td><td style="color:var(--text-3)">12 天前</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-app-history" style="display:none">
+          <div class="card">
+            <table>
+              <thead><tr><th>版本</th><th>说明</th><th>时间</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">rev 3</td><td>当前</td><td style="color:var(--text-3)">2 天前</td><td>—</td></tr>
+                <tr><td class="mono">rev 2</td><td>改端口 9100</td><td style="color:var(--text-3)">9 天前</td><td><button class="btn sm" data-rollback="rev 2">回滚</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 页 3：内网穿透（类型 B + E 抽屉） ========== -->
+      <section class="page" id="page-peer">
+        <div class="pagehead">
+          <div>
+            <h1>内网穿透</h1>
+            <div class="sub">tyo-1 · 5 个 Peer · 2 条端口转发（Peer / 端口转发 / Peer 运维合并为一页）</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="btn-wg-iface">接口设置</button>
+            <button class="btn primary" id="btn-add-peer">＋ 添加 Peer</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Peer</h2></div>
+          <table>
+            <thead><tr><th>名称</th><th>隧道地址</th><th>状态</th><th>最近握手</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr class="rowlink" data-peer="pixel-8"><td><b>pixel-8</b></td><td class="mono">10.0.0.12/32</td><td><span class="badge ok">在线</span></td><td>2 分钟前</td><td><button class="btn sm" data-peer="pixel-8">导出配置</button> <button class="btn sm" data-peerops="pixel-8">运维</button></td></tr>
+              <tr class="rowlink" data-peer="macbook"><td><b>macbook</b></td><td class="mono">10.0.0.13/32</td><td><span class="badge ok">在线</span></td><td>1 小时前</td><td><button class="btn sm" data-peer="macbook">导出配置</button> <button class="btn sm" data-peerops="macbook">运维</button></td></tr>
+              <tr class="rowlink" data-peer="nas-peer"><td><b>nas-peer</b></td><td class="mono">10.0.0.15/32</td><td><span class="badge ok">在线</span></td><td>5 分钟前</td><td><button class="btn sm" data-peer="nas-peer">导出配置</button> <button class="btn sm" data-peerops="nas-peer">运维</button></td></tr>
+              <tr class="rowlink" data-peer="ipad"><td><b>ipad</b></td><td class="mono">10.0.0.16/32</td><td><span class="badge">已停用</span></td><td>—</td><td><button class="btn sm">启用</button> <button class="btn sm" data-del-peer="ipad">删除</button></td></tr>
+            </tbody>
+          </table>
+          <p class="section-note" style="margin:10px 0 0">行点击 / 「导出配置」= Peer 抽屉（含二维码与 .conf 下载）；「运维」= Peer 主机运维抽屉（进程 / 防火墙 / SSH 公钥 Tabs），不再单独占导航页。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>端口转发</h2><button class="btn sm primary">＋ 添加转发</button></div>
+          <div class="banner" style="margin:0 0 12px">有未生效的更改。<b>应用更改</b> 后生效。&nbsp; <button class="btn sm primary">应用更改</button> <button class="btn sm">放弃</button></div>
+          <table>
+            <thead><tr><th>名称</th><th>监听</th><th>目标</th><th>协议</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td><b>ssh-nas</b></td><td class="mono">:2222</td><td class="mono">10.0.0.15:22</td><td>TCP</td><td><span class="badge ok">已生效</span></td></tr>
+              <tr><td><b>game-udp</b></td><td class="mono">:27015</td><td class="mono">10.0.0.15:27015</td><td>UDP</td><td><span class="badge warn">待生效</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ========== 页 4：主机运维（类型 E：状态带 + 对象表 + 抽屉） ========== -->
+      <section class="page" id="page-ops">
+        <div class="pagehead">
+          <div>
+            <h1>主机运维</h1>
+            <div class="sub">tyo-1 · 本页只有一套范式：上面状态带总览，下面一张对象表，所有详情与操作都进右侧抽屉</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="ops-offline-toggle">模拟 Agent 离线</button>
+            <button class="btn">刷新</button>
+          </div>
+        </div>
+
+        <!-- ① 状态带 -->
+        <div class="statusbar" id="ops-statusbar">
+          <div class="cell" id="ops-agent-cell"><span class="k">Agent</span><span class="v ok"><span class="dotmini ok"></span>在线</span><span class="k mono">v0.1.4 · 直连</span></div>
+          <div class="cell clickable" data-ops-goto="processes" title="点击查看进程"><span class="k">CPU</span><span class="v danger">96%</span><span class="k">负载 4.12 / 3.88 / 2.31</span></div>
+          <div class="cell clickable" data-ops-goto="processes" title="点击查看进程"><span class="k">内存</span><span class="v">41%</span><span class="k">1.6 / 3.9 GB</span></div>
+          <div class="cell"><span class="k">磁盘 /</span><span class="v warn">86%</span><span class="k">34 / 40 GB</span></div>
+          <div class="cell clickable" data-ops-goto="services" title="点击查看服务"><span class="k">服务</span><span class="v danger"><span class="dotmini danger"></span>1 个失败</span><span class="k">4 个受管单元</span></div>
+          <div class="cell"><span class="k">运行</span><span class="v">32 天</span><span class="k">无需重启</span></div>
+          <div class="grow">
+            <button class="btn sm" style="color:var(--danger);border-color:#f2c4c4" id="ops-open-diag">诊断 · 2 项未通过 →</button>
+          </div>
+        </div>
+        <p class="section-note">异常才变色；点击 CPU / 内存 / 服务格可切到下方对应分组；诊断仅在未通过时出现。</p>
+
+        <!-- ② 对象表 -->
+        <div class="seg" id="ops-seg" data-seg="ops">
+          <button class="active" data-sub="ops-services">服务</button>
+          <button data-sub="ops-processes">进程</button>
+          <button data-sub="ops-firewall">防火墙</button>
+          <button data-sub="ops-keys">SSH 公钥</button>
+        </div>
+
+        <div class="card subpage" id="sub-ops-services">
+          <table>
+            <thead><tr><th>名称</th><th>状态</th><th>说明</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr class="rowlink" data-drawer="svc-caddy"><td class="mono"><b>caddy</b></td><td><span class="badge ok">active</span></td><td style="color:var(--text-2)">Caddy Web Server</td><td><button class="btn sm" data-restart="caddy">重启</button></td></tr>
+              <tr class="rowlink" data-drawer="svc-wg"><td class="mono"><b>wg-quick@wg0</b></td><td><span class="badge ok">active</span></td><td style="color:var(--text-2)">WireGuard via wg-quick(8)</td><td><button class="btn sm" data-restart="wg-quick@wg0">重启</button></td></tr>
+              <tr class="rowlink" data-drawer="svc-khc"><td class="mono"><b>khc-agent</b></td><td><span class="badge ok">active</span></td><td style="color:var(--text-2)">KHC Hub Agent</td><td><button class="btn sm" data-restart="khc-agent">重启</button></td></tr>
+              <tr class="rowlink" data-drawer="svc-fw"><td class="mono"><b>khc-fw</b></td><td><span class="badge danger">failed</span></td><td style="color:var(--text-2)">KHC 防火墙规则持久化</td><td><button class="btn sm" data-restart="khc-fw">重启</button></td></tr>
+            </tbody>
+          </table>
+          <p class="section-note" style="margin:10px 0 0">行点击 = 服务详情抽屉（状态 + 最近日志）；「重启」= 抽屉内 L2 确认。</p>
+        </div>
+
+        <div class="card subpage" id="sub-ops-processes" style="display:none">
+          <div class="table-toolbar">
+            <span style="font-size:12.5px;color:var(--text-2)">按 CPU 排序 · Top 200 · 只读</span>
+          </div>
+          <table>
+            <thead><tr><th>PID</th><th>CPU</th><th>内存</th><th>用户</th><th>启动时间</th></tr></thead>
+            <tbody>
+              <tr class="rowlink" data-drawer="proc-1"><td class="mono">23847</td><td style="color:var(--danger);font-weight:600">182.4%</td><td>412 MB</td><td class="mono">www-data</td><td>12:03:11</td></tr>
+              <tr class="rowlink" data-drawer="proc-2"><td class="mono">812</td><td>2.1%</td><td>96 MB</td><td class="mono">root</td><td>10 天前</td></tr>
+              <tr class="rowlink" data-drawer="proc-3"><td class="mono">913</td><td>0.8%</td><td>61 MB</td><td class="mono">root</td><td>10 天前</td></tr>
+            </tbody>
+          </table>
+          <p class="section-note" style="margin:10px 0 0">状态带 CPU 变红 → 点一下 → 落到这张表，第一名就是元凶；行点击看完整命令行。</p>
+        </div>
+
+        <div class="card subpage" id="sub-ops-firewall" style="display:none">
+          <div class="table-toolbar">
+            <span style="font-size:12.5px;color:var(--text-2)">只管理 <span class="mono">table inet khc_fw</span>；SSH / WG / 8880 强制保留</span>
+            <span class="spacer"></span>
+            <button class="btn sm primary">＋ 添加规则</button>
+          </div>
+          <table>
+            <thead><tr><th>动作</th><th>协议</th><th>端口</th><th>来源</th><th>备注</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td><span class="badge ok">allow</span></td><td>TCP</td><td class="mono">443</td><td class="mono">any</td><td style="color:var(--text-2)">站点入口</td><td><button class="btn sm">删除</button></td></tr>
+              <tr><td><span class="badge ok">allow</span></td><td>UDP</td><td class="mono">51820</td><td class="mono">any</td><td style="color:var(--text-2)">WireGuard</td><td><span class="badge">锁定</span></td></tr>
+              <tr><td><span class="badge ok">allow</span></td><td>TCP</td><td class="mono">2222</td><td class="mono">any</td><td style="color:var(--text-2)">转发 ssh-nas</td><td><button class="btn sm">删除</button></td></tr>
+            </tbody>
+          </table>
+          <div class="banner" style="margin:12px 0 0">有未生效的更改。<b>应用更改</b> 后 60 秒内需「确认保留」，否则自动回滚（防锁死）。&nbsp; <button class="btn sm primary">应用更改</button> <button class="btn sm">放弃</button></div>
+        </div>
+
+        <div class="card subpage" id="sub-ops-keys" style="display:none">
+          <div class="table-toolbar">
+            <span style="font-size:12.5px;color:var(--text-2)">只维护 authorized_keys 的 khc 托管块，手工添加的公钥不受影响</span>
+            <span class="spacer"></span>
+            <button class="btn sm primary">＋ 添加公钥</button>
+          </div>
+          <table>
+            <thead><tr><th>指纹</th><th>类型</th><th>备注</th><th>来源</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">SHA256:9xK2…fQ</td><td class="mono">ed25519</td><td>xk@macbook</td><td><span class="badge info">khc 托管</span></td><td><button class="btn sm">删除</button></td></tr>
+              <tr><td class="mono">SHA256:Pp01…zA</td><td class="mono">rsa</td><td>ci-deploy</td><td><span class="badge">手工</span></td><td style="color:var(--text-3);font-size:12px">不可管理</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ========== 页 5：节点设置（类型 D） ========== -->
+      <section class="page" id="page-settings">
+        <div class="pagehead">
+          <div>
+            <h1>节点设置</h1>
+            <div class="sub">tyo-1 · Agent 接入、节点模式、备份与恢复</div>
+          </div>
+        </div>
+
+        <div class="seg" data-seg="nset">
+          <button class="active" data-sub="nset-agent">Agent 与接入</button>
+          <button data-sub="nset-mode">节点模式</button>
+          <button data-sub="nset-backup">备份与恢复</button>
+          <button data-sub="nset-danger">危险区</button>
+        </div>
+
+        <div class="subpage" id="sub-nset-agent">
+          <div class="card">
+            <dl class="kv">
+              <dt>Agent 版本</dt><dd class="mono">v0.1.4 <span class="badge warn">有新版 v0.1.5</span></dd>
+              <dt>接入地址</dt><dd class="mono">http://203.0.113.10:8880</dd>
+              <dt>实时观测地址</dt><dd class="mono">https://tyo-1.example.com</dd>
+            </dl>
+            <div style="margin-top:12px">
+              <button class="btn sm primary" data-agent-cmd="升级">生成升级命令</button>
+              <button class="btn sm" data-agent-cmd="重装">重装命令</button>
+              <button class="btn sm" data-agent-cmd="卸载">卸载命令</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-nset-mode" style="display:none">
+          <div class="card">
+            <dl class="kv">
+              <dt>当前模式</dt><dd><span class="badge info">组网节点</span>（Caddy 站点 + WireGuard 组网）</dd>
+            </dl>
+            <div style="margin-top:12px"><button class="btn sm" id="btn-mode-switch">切换为纯 Caddy 网关…</button></div>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-nset-backup" style="display:none">
+          <div class="card">
+            <div class="card-head"><h2>备份与恢复</h2></div>
+            <p style="font-size:13px;color:var(--text-2);margin-bottom:10px">导出内容：节点配置、站点、Peer、转发、应用配置（不含私钥与系统变量凭据）。</p>
+            <button class="btn sm primary">导出配置备份</button>
+            <button class="btn sm" id="btn-import-backup">导入备份…</button>
+          </div>
+        </div>
+
+        <div class="subpage" id="sub-nset-danger" style="display:none">
+          <div class="card" style="border-color:#f2c4c4">
+            <div class="card-head"><h2 style="color:var(--danger)">删除节点</h2></div>
+            <p style="font-size:13px;color:var(--text-2);margin-bottom:10px">将同时移除 3 个站点、5 个 Peer、2 条转发的配置记录。主机上的 Agent 需另行卸载。</p>
+            <button class="btn sm danger" id="btn-del-hub">删除节点…</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ③ 全站统一右侧抽屉 -->
+<div class="overlay" id="drawer-overlay"></div>
+<aside class="drawer" id="drawer">
+  <div class="d-head"><h3 id="drawer-title">详情</h3><div class="ctx" id="drawer-ctx"></div></div>
+  <div class="d-body" id="drawer-body"></div>
+  <div class="d-foot" id="drawer-foot"></div>
+</aside>
+
+<!-- 登录页（类型 L） -->
+<div class="login-veil" id="login-veil">
+  <span class="back" id="login-back">← 返回示意</span>
+  <div class="login-card">
+    <h1>Console</h1>
+    <div class="sub">服务器运维遥控器</div>
+    <div class="field"><label>密码</label><input type="password" id="login-pwd" placeholder="输入任意内容后点登录"></div>
+    <div class="login-err" id="login-err">密码不正确</div>
+    <button class="btn primary" style="width:100%" id="login-btn">登录</button>
+    <p style="font-size:12px;color:var(--text-3);margin-top:12px">类型 L：居中窄卡单表单；错误内联，不跳页不弹窗。</p>
+  </div>
+</div>
+
+<script>
+  /* ================= 抽屉（全站唯一） ================= */
+  var drawer = document.getElementById('drawer');
+  var overlay = document.getElementById('drawer-overlay');
+  var dTitle = document.getElementById('drawer-title');
+  var dCtx = document.getElementById('drawer-ctx');
+  var dBody = document.getElementById('drawer-body');
+  var dFoot = document.getElementById('drawer-foot');
+
+  function openDrawer(title, ctx, bodyHtml, footHtml) {
+    dTitle.innerHTML = title;
+    dCtx.textContent = ctx;
+    dBody.innerHTML = bodyHtml;
+    dFoot.innerHTML = footHtml || '<button class="btn" id="drawer-close">关闭</button>';
+    drawer.classList.add('open');
+    overlay.classList.add('open');
+    bindDrawerButtons();
+  }
+  function closeDrawer() { drawer.classList.remove('open'); overlay.classList.remove('open'); }
+  overlay.addEventListener('click', closeDrawer);
+
+  function bindDrawerClose() {
+    var c = document.getElementById('drawer-close');
+    if (c) c.addEventListener('click', closeDrawer);
+  }
+
+  /* ================= 导航：全局层 / 节点层 ================= */
+  var hubbar = document.getElementById('hubbar');
+  var crumb = document.getElementById('crumb');
+  var PAGE_NAMES = {
+    'g-overview': '概览', 'g-hubs': '节点', 'g-settings': '设置',
+    'overview': '概况', 'sites': '站点', 'peer': '内网穿透', 'ops': '主机运维', 'settings': '节点设置', 'app': '应用详情'
+  };
+
+  function showPage(id, crumbText) {
+    document.querySelectorAll('.page').forEach(function (p) { p.classList.remove('active'); });
+    document.getElementById('page-' + id).classList.add('active');
+    crumb.innerHTML = crumbText;
+    window.scrollTo(0, 0);
+  }
+  function enterGlobal(id) {
+    hubbar.style.display = 'none';
+    document.querySelectorAll('.sidebar .nav-item').forEach(function (n) { n.classList.remove('active'); });
+    var nav = document.querySelector('.nav-item[data-gpage="' + id + '"]');
+    if (nav) nav.classList.add('active');
+    showPage(id, '控制台 › <b>' + PAGE_NAMES[id] + '</b>');
+  }
+  function enterNode(name, pageId) {
+    hubbar.style.display = 'flex';
+    document.getElementById('hub-name').textContent = name;
+    document.querySelectorAll('.sidebar .nav-item').forEach(function (n) { n.classList.remove('active'); });
+    var nav = document.querySelector('.nav-item[data-node="' + name + '"]');
+    if (nav) nav.classList.add('active');
+    document.querySelectorAll('.hubtab').forEach(function (t) { t.classList.toggle('active', t.dataset.page === (pageId || 'overview')); });
+    showPage(pageId || 'overview', '控制台 › <b>' + name + '</b> › ' + PAGE_NAMES[pageId || 'overview']);
+  }
+
+  document.querySelectorAll('[data-gpage]').forEach(function (el) {
+    el.addEventListener('click', function () { enterGlobal(el.dataset.gpage); });
+  });
+  document.querySelectorAll('[data-gpage-link]').forEach(function (el) {
+    el.addEventListener('click', function () { enterGlobal(el.dataset.gpageLink); });
+  });
+  document.querySelectorAll('[data-node]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.closest('button')) return;
+      enterNode(el.dataset.node);
+    });
+  });
+  document.querySelectorAll('.hubtab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var name = document.getElementById('hub-name').textContent;
+      enterNode(name, tab.dataset.page);
+    });
+  });
+  document.querySelectorAll('[data-goto]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var name = document.getElementById('hub-name').textContent;
+      enterNode(name, el.dataset.goto);
+    });
+  });
+  // 应用详情入口
+  document.querySelectorAll('[data-app]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.closest('button')) return;
+      hubbar.style.display = 'flex';
+      document.querySelectorAll('.hubtab').forEach(function (t) { t.classList.remove('active'); });
+      showPage('app', '控制台 › <b>tyo-1</b> › 站点 › node-exporter');
+    });
+  });
+
+  /* ================= 通用 Segmented 切换 ================= */
+  document.querySelectorAll('.seg[data-seg]').forEach(function (seg) {
+    seg.querySelectorAll('button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        var group = seg.dataset.seg;
+        document.querySelectorAll('.subpage').forEach(function (p) {
+          if (p.id.indexOf('sub-' + group + '-') === 0) p.style.display = 'none';
+        });
+        document.getElementById('sub-' + btn.dataset.sub).style.display = 'block';
+      });
+    });
+  });
+  // 主机运维状态带下钻（复用 seg 切换）
+  function opsSelect(name) {
+    var btn = document.querySelector('#ops-seg button[data-sub="ops-' + name + '"]');
+    if (btn) btn.click();
+  }
+  document.querySelectorAll('[data-ops-goto]').forEach(function (cell) {
+    cell.addEventListener('click', function () { opsSelect(cell.dataset.opsGoto); });
+  });
+
+  /* ================= 抽屉内容注册 ================= */
+  function bindDrawerButtons() {
+    bindDrawerClose();
+    // L2 重启确认
+    var rb = document.querySelector('[data-confirm-restart]');
+    if (rb) rb.addEventListener('click', function () {
+      openDrawer('已下发重启', 'tyo-1 · ' + rb.dataset.confirmRestart,
+        '<p style="font-size:13px;color:var(--text-2)">命令已通过 Agent 下发，审计已记录。可点「刷新」查看最新状态。</p>',
+        '<button class="btn" id="drawer-close">关闭</button>');
+    });
+    // 添加 Peer：保存 → 同一抽屉显示二维码
+    var ps = document.getElementById('peer-save');
+    if (ps) ps.addEventListener('click', function () {
+      openDrawer('pixel-9 已创建', 'tyo-1 · 内网穿透 · 扫码或下载配置导入客户端',
+        '<div class="qr"></div>' +
+        '<dl class="kv"><dt>隧道地址</dt><dd class="mono">10.0.0.17/32</dd><dt>公钥</dt><dd class="mono">aB3d…9fQw</dd></dl>',
+        '<button class="btn" id="drawer-close">完成</button><button class="btn primary">下载 .conf</button>');
+    });
+    // 创建节点：下一步 → token + 安装命令
+    var hs = document.getElementById('hub-create-save');
+    if (hs) hs.addEventListener('click', function () {
+      openDrawer('节点 osa-1 已创建', '全局 · 在目标主机执行以下命令完成接入',
+        '<dl class="kv"><dt>接入令牌</dt><dd class="mono">khc_tok_7f3a…c91e <button class="btn sm">复制</button></dd></dl>' +
+        '<div class="codeblock">curl -fsSL https://panel.example.com/agent/install.sh | sh -s -- \\\n  --hub osa-1 \\\n  --token khc_tok_7f3a…c91e \\\n  --listen 0.0.0.0:8880</div>',
+        '<button class="btn primary" id="drawer-close">完成</button>');
+    });
+    // 危险区 L3：输入名称解锁
+    var di = document.getElementById('del-hub-input');
+    if (di) di.addEventListener('input', function () {
+      document.getElementById('del-hub-confirm').disabled = di.value.trim() !== 'tyo-1';
+    });
+    var dc = document.getElementById('del-hub-confirm');
+    if (dc) dc.addEventListener('click', function () {
+      openDrawer('节点已删除', '全局 · tyo-1',
+        '<p style="font-size:13px;color:var(--text-2)">配置记录已移除，审计已记录。主机上的 Agent 请使用卸载命令清理。</p>',
+        '<button class="btn primary" id="drawer-close">完成</button>');
+    });
+    // 删除证书 L2
+    var cd = document.getElementById('del-cert-confirm');
+    if (cd) cd.addEventListener('click', function () {
+      openDrawer('证书已删除', '全局 · 设置 · 证书库',
+        '<p style="font-size:13px;color:var(--text-2)">nas-wildcard 已删除。引用它的站点将回退到自动签发。</p>',
+        '<button class="btn primary" id="drawer-close">完成</button>');
+    });
+  }
+
+  /* ---- 主机运维：服务/进程详情抽屉 ---- */
+  var DRAWERS = {
+    'proc-1': {
+      title: 'PID 23847', ctx: 'tyo-1 · 进程详情',
+      body: '<span class="badge danger">CPU 182.4%</span>' +
+        '<dl class="kv" style="margin-top:12px"><dt>用户</dt><dd class="mono">www-data</dd><dt>内存</dt><dd>412 MB</dd><dt>启动时间</dt><dd>今天 12:03:11</dd></dl>' +
+        '<div class="codeblock">/usr/bin/php-fpm8.2 --fpm-config /etc/php/8.2/fpm/php-fpm.conf</div>',
+      foot: '<button class="btn" id="drawer-close">关闭</button>'
+    },
+    'proc-2': {
+      title: 'PID 812', ctx: 'tyo-1 · 进程详情',
+      body: '<span class="badge ok">正常</span><dl class="kv" style="margin-top:12px"><dt>用户</dt><dd class="mono">root</dd><dt>CPU</dt><dd>2.1%</dd><dt>内存</dt><dd>96 MB</dd><dt>启动时间</dt><dd>10 天前</dd></dl><div class="codeblock">/usr/sbin/caddy run --config /etc/caddy/Caddyfile</div>',
+      foot: '<button class="btn" id="drawer-close">关闭</button>'
+    },
+    'proc-3': {
+      title: 'PID 913', ctx: 'tyo-1 · 进程详情',
+      body: '<span class="badge ok">正常</span><dl class="kv" style="margin-top:12px"><dt>用户</dt><dd class="mono">root</dd><dt>CPU</dt><dd>0.8%</dd><dt>内存</dt><dd>61 MB</dd></dl><div class="codeblock">/usr/bin/khc-agent serve --listen 0.0.0.0:8880</div>',
+      foot: '<button class="btn" id="drawer-close">关闭</button>'
+    },
+    'svc-fw': {
+      title: 'khc-fw <span class="badge danger">failed</span>', ctx: 'tyo-1 · 服务详情',
+      body: '<dl class="kv"><dt>状态</dt><dd><span class="badge danger">failed</span></dd><dt>说明</dt><dd>KHC 防火墙规则持久化</dd><dt>失败时间</dt><dd>今天 11:58</dd></dl>' +
+        '<div class="codeblock">× khc-fw.service - KHC firewall persistence\n   Loaded: loaded (/etc/systemd/system/khc-fw.service; enabled)\n   Active: failed (Result: exit-code) since 11:58\n   Main PID: 22031 (code=exited, status=1/FAILURE)\n   nft: /etc/khc-host/fw.nft:17: syntax error</div>',
+      foot: '<button class="btn" id="drawer-close">关闭</button><button class="btn primary" data-confirm-restart="khc-fw">重启服务</button>'
+    }
+  };
+  ['svc-caddy', 'svc-wg', 'svc-khc'].forEach(function (key) {
+    var name = { 'svc-caddy': 'caddy', 'svc-wg': 'wg-quick@wg0', 'svc-khc': 'khc-agent' }[key];
+    DRAWERS[key] = {
+      title: name + ' <span class="badge ok">active</span>', ctx: 'tyo-1 · 服务详情',
+      body: '<dl class="kv"><dt>状态</dt><dd><span class="badge ok">active (running)</span></dd><dt>启动以来</dt><dd>10 天</dd><dt>主 PID</dt><dd class="mono">812</dd></dl>' +
+        '<div class="codeblock">● ' + name + '.service\n   Active: active (running)\n   Tasks: 8 · Memory: 96M</div>',
+      foot: '<button class="btn" id="drawer-close">关闭</button><button class="btn primary" data-confirm-restart="' + name + '">重启服务</button>'
+    };
+  });
+  document.querySelectorAll('#page-ops tr[data-drawer]').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      if (e.target.closest('button')) return;
+      var d = DRAWERS[row.dataset.drawer];
+      openDrawer(d.title, d.ctx, d.body, d.foot);
+    });
+  });
+  document.querySelectorAll('[data-restart]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var name = btn.dataset.restart;
+      openDrawer(
+        '重启 ' + name + '？', 'tyo-1 · 危险操作 · 需确认',
+        '<div class="banner">将执行 <span class="mono">systemctl restart ' + name + '</span>（host-ops 白名单动词 svc.restart）。服务会短暂中断，已建立的连接可能断开。</div>',
+        '<button class="btn" id="drawer-close">取消</button><button class="btn danger" data-confirm-restart="' + name + '">确认重启</button>'
+      );
+    });
+  });
+  document.getElementById('ops-open-diag').addEventListener('click', function () {
+    openDrawer('诊断 · 2 项未通过', 'tyo-1 · 刚刚检查 · 控制面只读诊断',
+      '<table><tbody>' +
+      '<tr><td><span class="badge danger">未通过</span></td><td>服务 khc-fw 处于 failed</td></tr>' +
+      '<tr><td colspan="2" style="color:var(--text-2);font-size:12.5px">影响：防火墙规则重启后不持久。建议：在「服务」分组重启 khc-fw，或检查 /etc/khc-host/fw.nft 第 17 行。</td></tr>' +
+      '<tr><td><span class="badge warn">警告</span></td><td>磁盘 / 已用 86%</td></tr>' +
+      '<tr><td colspan="2" style="color:var(--text-2);font-size:12.5px">影响：写满会导致 Agent 与日志失败。建议：清理日志或扩容。</td></tr>' +
+      '</tbody></table>',
+      '<button class="btn" id="drawer-close">关闭</button><button class="btn">重新检查</button>');
+  });
+
+  /* ---- Agent 离线态演示 ---- */
+  var offline = false;
+  document.getElementById('ops-offline-toggle').addEventListener('click', function () {
+    offline = !offline;
+    var page = document.getElementById('page-ops');
+    page.classList.toggle('page-off', offline);
+    this.textContent = offline ? '恢复在线' : '模拟 Agent 离线';
+    var agentCell = document.getElementById('ops-agent-cell');
+    agentCell.innerHTML = offline
+      ? '<span class="k">Agent</span><span class="v danger"><span class="dotmini danger"></span>离线</span><span class="k">最后在线 3 小时前</span>'
+      : '<span class="k">Agent</span><span class="v ok"><span class="dotmini ok"></span>在线</span><span class="k mono">v0.1.4 · 直连</span>';
+    if (offline) {
+      var banner = document.createElement('div');
+      banner.className = 'banner danger'; banner.id = 'ops-offline-banner';
+      banner.innerHTML = 'Agent 离线：以下为 3 小时前的缓存状态，所有操作不可用。建议：点「诊断」查看连接排查步骤，或到「节点设置」重新生成安装命令。';
+      page.querySelector('.statusbar').after(banner);
+    } else {
+      var b = document.getElementById('ops-offline-banner'); if (b) b.remove();
+    }
+  });
+
+  /* ---- 站点抽屉（分组折叠） ---- */
+  document.querySelectorAll('[data-site]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.closest('button') && !e.target.closest('[data-site]')) return;
+      var domain = el.dataset.site;
+      openDrawer(domain, 'tyo-1 · 站点 · 编辑',
+        '<div class="field"><label>域名</label><input class="mono" value="' + domain + '"></div>' +
+        '<div class="field"><label>类型</label><select><option>反向代理</option><option>静态站</option><option>重定向</option></select></div>' +
+        '<div class="field"><label>上游地址</label><input class="mono" value="10.0.0.12:8080"></div>' +
+        '<div class="field"><label>TLS</label><select><option>自动签发</option><option>绑定证书库证书</option><option>关闭</option></select></div>' +
+        '<details class="advanced"><summary>高级：安全 / 日志 / 观测</summary>' +
+        '<div class="field" style="margin-top:8px"><label>访问控制</label><input placeholder="如 10.0.0.0/24"></div>' +
+        '<div class="field"><label>访问日志</label><select><option>继承全局</option><option>关闭</option></select></div></details>',
+        '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">保存并生效</button>');
+    });
+  });
+  document.getElementById('btn-add-site').addEventListener('click', function () {
+    openDrawer('添加站点', 'tyo-1 · 站点',
+      '<div class="field"><label>域名</label><input class="mono" placeholder="app.example.com"></div>' +
+      '<div class="field"><label>类型</label><select><option>反向代理</option><option>静态站</option><option>重定向</option></select></div>' +
+      '<div class="field"><label>上游地址</label><input class="mono" placeholder="10.0.0.12:8080"></div>' +
+      '<div class="field"><label>TLS</label><select><option>自动签发</option><option>绑定证书库证书</option></select></div>' +
+      '<details class="advanced"><summary>高级：安全 / 日志 / 观测</summary><p style="font-size:12.5px;color:var(--text-3);margin-top:8px">默认继承全局配置，一般无需修改。</p></details>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">保存并生效</button>');
+  });
+  document.getElementById('btn-caddy-svc').addEventListener('click', function () {
+    openDrawer('Caddy 服务 <span class="badge ok">active</span>', 'tyo-1 · 站点 · 服务管理',
+      '<dl class="kv"><dt>版本</dt><dd class="mono">Caddy 2.8</dd><dt>配置</dt><dd>校验通过 · 3 个站点</dd><dt>上次 reload</dt><dd>2 小时前</dd></dl>',
+      '<button class="btn" id="drawer-close">关闭</button><button class="btn">导出配置</button><button class="btn">校验</button><button class="btn primary">reload</button>');
+  });
+
+  /* ---- Peer 抽屉 / Peer 运维抽屉 ---- */
+  document.querySelectorAll('[data-peer]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.closest('button') && e.target.dataset.peer === undefined && !e.target.closest('[data-peer]')) return;
+      var name = el.dataset.peer;
+      openDrawer(name + ' <span class="badge ok">在线</span>', 'tyo-1 · 内网穿透 · Peer',
+        '<div class="qr"></div>' +
+        '<dl class="kv"><dt>隧道地址</dt><dd class="mono">10.0.0.12/32</dd><dt>最近握手</dt><dd>2 分钟前</dd><dt>传输</dt><dd>↓ 12 MB · ↑ 3 MB</dd></dl>' +
+        '<details class="advanced"><summary>高级：keepalive / AllowedIPs / 无损换钥</summary><p style="font-size:12.5px;color:var(--text-3);margin-top:8px">PersistentKeepalive 25s · AllowedIPs 10.0.0.0/24</p></details>',
+        '<button class="btn" id="drawer-close">关闭</button><button class="btn">下载 .conf</button><button class="btn primary">编辑</button>');
+    });
+  });
+  document.querySelectorAll('[data-peerops]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var name = btn.dataset.peerops;
+      openDrawer(name + ' · 运维', 'tyo-1 · 内网穿透 · 经 WireGuard 对 Peer 执行',
+        '<div class="seg" style="margin-bottom:12px"><button class="active">进程</button><button>防火墙</button><button>SSH 公钥</button></div>' +
+        '<table><thead><tr><th>PID</th><th>CPU</th><th>内存</th><th>命令</th></tr></thead><tbody>' +
+        '<tr><td class="mono">512</td><td>1.2%</td><td>88 MB</td><td class="mono">sshd</td></tr>' +
+        '<tr><td class="mono">901</td><td>0.4%</td><td>45 MB</td><td class="mono">smbd</td></tr></tbody></table>',
+        '<button class="btn" id="drawer-close">关闭</button>');
+    });
+  });
+  document.getElementById('btn-add-peer').addEventListener('click', function () {
+    openDrawer('添加 Peer', 'tyo-1 · 内网穿透',
+      '<div class="field"><label>名称</label><input value="pixel-9"></div>' +
+      '<div class="field"><label>隧道地址</label><input class="mono" value="10.0.0.17/32（自动分配）" readonly></div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="peer-save">保存并生效</button>');
+  });
+  document.getElementById('btn-wg-iface').addEventListener('click', function () {
+    openDrawer('接口设置', 'tyo-1 · 内网穿透 · WireGuard',
+      '<div class="field"><label>监听端口</label><input class="mono" value="51820"></div>' +
+      '<div class="field"><label>地址段</label><input class="mono" value="10.0.0.1/24"></div>' +
+      '<div class="field"><label>MTU</label><input class="mono" value="1420"></div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">保存并生效</button>');
+  });
+  document.querySelectorAll('[data-del-peer]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openDrawer('删除 ' + btn.dataset.delPeer + '？', 'tyo-1 · 危险操作 · 需确认',
+        '<div class="banner">该 Peer 的密钥将失效，设备立即无法接入内网。</div>',
+        '<button class="btn" id="drawer-close">取消</button><button class="btn danger" id="drawer-close">确认删除</button>');
+    });
+  });
+
+  /* ---- 节点列表：创建 / 安装命令 ---- */
+  document.getElementById('btn-create-hub').addEventListener('click', function () {
+    openDrawer('创建节点', '全局 · 节点',
+      '<div class="field"><label>名称</label><input value="osa-1"></div>' +
+      '<div class="field"><label>接入地址</label><input class="mono" placeholder="http://<IP>:8880 或 https://域名"></div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="hub-create-save">创建</button>');
+  });
+  document.querySelectorAll('[data-install]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openDrawer('安装命令 · ' + btn.dataset.install, '全局 · 在目标主机执行',
+        '<div class="codeblock">curl -fsSL https://panel.example.com/agent/install.sh | sh -s -- \\\n  --hub ' + btn.dataset.install + ' \\\n  --token khc_tok_•••• \\\n  --listen 0.0.0.0:8880</div>',
+        '<button class="btn" id="drawer-close">关闭</button><button class="btn primary">复制命令</button>');
+    });
+  });
+
+  /* ---- 全局设置：签发证书 / 删除证书 ---- */
+  document.getElementById('btn-issue-cert').addEventListener('click', function () {
+    openDrawer('签发或导入证书', '全局 · 设置 · 证书库',
+      '<div class="seg" style="margin-bottom:12px"><button class="active">ACME 签发</button><button>导入 PEM</button></div>' +
+      '<div class="field"><label>名称</label><input placeholder="如 api-wildcard"></div>' +
+      '<div class="field"><label>域名</label><input class="mono" placeholder="*.example.com"></div>' +
+      '<div class="field"><label>验证方式</label><select><option>DNS-01（使用系统变量中的凭据）</option><option>HTTP-01</option></select></div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">签发</button>');
+  });
+  document.querySelectorAll('[data-del-cert]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openDrawer('删除 ' + btn.dataset.delCert + '？', '全局 · 危险操作 · 需确认',
+        '<div class="banner">nas.example.com 正在使用这张证书。删除后该站点将回退到自动签发。</div>',
+        '<button class="btn" id="drawer-close">取消</button><button class="btn danger" id="del-cert-confirm">确认删除</button>');
+    });
+  });
+
+  /* ---- 应用详情：保存条 / 回滚 / 卸载 ---- */
+  ['app-port', 'app-args'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', function () {
+      document.getElementById('app-savebar').classList.add('show');
+    });
+  });
+  document.getElementById('app-discard').addEventListener('click', function () {
+    document.getElementById('app-savebar').classList.remove('show');
+  });
+  document.getElementById('app-save').addEventListener('click', function () {
+    document.getElementById('app-savebar').classList.remove('show');
+  });
+  document.querySelectorAll('[data-rollback]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openDrawer('回滚到 ' + btn.dataset.rollback + '？', 'tyo-1 · node-exporter · 危险操作',
+        '<div class="banner">配置将恢复到 ' + btn.dataset.rollback + ' 的内容并立即应用。</div>',
+        '<button class="btn" id="drawer-close">取消</button><button class="btn danger" id="drawer-close">确认回滚</button>');
+    });
+  });
+  document.getElementById('btn-app-uninstall').addEventListener('click', function () {
+    openDrawer('卸载 node-exporter？', 'tyo-1 · 危险操作 · 需确认',
+      '<div class="banner">将停止并移除该应用及其配置。监控数据采集中断。</div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn danger" id="drawer-close">确认卸载</button>');
+  });
+
+  /* ---- 节点设置：Agent 命令 / 模式切换 / 导入 / 删除节点 ---- */
+  document.querySelectorAll('[data-agent-cmd]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openDrawer(btn.dataset.agentCmd + '命令', 'tyo-1 · 节点设置 · 在目标主机执行',
+        '<div class="codeblock">curl -fsSL https://panel.example.com/agent/' + btn.dataset.agentCmd + '.sh | sh -s -- --hub tyo-1</div>',
+        '<button class="btn" id="drawer-close">关闭</button><button class="btn primary">复制命令</button>');
+    });
+  });
+  document.getElementById('btn-mode-switch').addEventListener('click', function () {
+    openDrawer('切换为纯 Caddy 网关？', 'tyo-1 · 节点模式 · 预检通过',
+      '<table><tbody>' +
+      '<tr><td><span class="badge ok">通过</span></td><td>5 个 Peer 将停用（配置保留，可切回）</td></tr>' +
+      '<tr><td><span class="badge ok">通过</span></td><td>2 条端口转发将随组网停用</td></tr>' +
+      '<tr><td><span class="badge ok">通过</span></td><td>3 个站点不受影响</td></tr></tbody></table>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">确认切换</button>');
+  });
+  document.getElementById('btn-import-backup').addEventListener('click', function () {
+    openDrawer('导入备份', 'tyo-1 · 节点设置 · 第 2 步 / 共 3 步 · 预览',
+      '<dl class="kv"><dt>备份文件</dt><dd class="mono">tyo-1-backup-2026-10-30.json</dd><dt>将变更</dt><dd>站点 +1 · Peer +2 · 转发 +1</dd></dl>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn primary" id="drawer-close">确认导入</button>');
+  });
+  document.getElementById('btn-del-hub').addEventListener('click', function () {
+    openDrawer('删除节点 tyo-1？', '危险区 · 需输入名称确认',
+      '<div class="banner danger">将同时移除 3 个站点、5 个 Peer、2 条转发的配置记录。此操作不可撤销。</div>' +
+      '<div class="field"><label>输入节点名 <span class="mono">tyo-1</span> 以确认</label><input id="del-hub-input" autocomplete="off"></div>',
+      '<button class="btn" id="drawer-close">取消</button><button class="btn danger" id="del-hub-confirm" disabled>删除节点</button>');
+  });
+
+  /* ---- 登录页演示 ---- */
+  var veil = document.getElementById('login-veil');
+  document.getElementById('show-login').addEventListener('click', function () { veil.classList.add('open'); });
+  document.getElementById('login-back').addEventListener('click', function () { veil.classList.remove('open'); });
+  document.getElementById('login-btn').addEventListener('click', function () {
+    var err = document.getElementById('login-err');
+    if (!document.getElementById('login-pwd').value) { err.style.display = 'block'; return; }
+    err.style.display = 'none';
+    veil.classList.remove('open');
+  });
+</script>
+</body>
+</html>

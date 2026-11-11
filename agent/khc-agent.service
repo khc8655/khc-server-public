@@ -1,0 +1,52 @@
+[Unit]
+Description=khc-agent (KHC node agent)
+Documentation=https://github.com/khc/khc-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 由 install.sh 渲染：@PYTHON@ / @PREFIX@ / @PORT@ / 各 KHC_* 路径
+ExecStart=@PYTHON@ @PREFIX@/khc_agent.py run --host @HOST@ --port @PORT@ --token-file @CONFIG_DIR@/token --adapters-dir @PREFIX@/adapters
+Environment=PYTHONUNBUFFERED=1
+Environment=KHC_PROFILE=@PROFILE@
+Environment=KHC_ROOT=@ROOT@
+Environment=KHC_ETC_DIR=@ETC_DIR@
+Environment=KHC_OPT_DIR=@OPT_DIR@
+Environment=KHC_DATA_DIR=@DATA_DIR@
+Environment=KHC_CONFIG_DIR=@CONFIG_DIR@
+Environment=KHC_UNIT_DIR=@UNIT_DIR@
+Environment=KHC_CADDY_DIR=@CADDY_DIR@
+Environment=KHC_CADDYFILE=@CADDYFILE@
+# TLS（install.sh --tls 生成自签证书后填写；留空 = 保持 HTTP）
+Environment=KHC_TLS_CERT=@TLS_CERT@
+Environment=KHC_TLS_KEY=@TLS_KEY@
+# A-4：观测层 Origin allowlist（逗号分隔面板域名）与票据节点绑定；留空 = 不校验（旧行为）
+Environment=KHC_LIVE_ORIGINS=@LIVE_ORIGINS@
+Environment=KHC_NODE_ID=@NODE_ID@
+Environment=KHC_LOG_LEVEL=INFO
+# acme.sh --reloadcmd "systemctl reload khc-agent"：SIGHUP 让 Agent 就地重载 TLS 证书
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# 只允许写自己管理的目录；systemctl 通过 D-Bus 与 PID1 通信，不受 ProtectSystem 影响。
+# 前缀 "-" 表示路径不存在时忽略——仅用于可能不存在的 @CADDYFILE@（未装 Caddy）、
+# /root/.ssh 与 @ETC_DIR@/wireguard；其余 khc 自有目录由 install.sh 与 Paths.ensure_dirs
+# 保证存在，不加 "-"，否则全新机器上目录缺失时白名单被静默跳过，首个应用 apply 必写盘
+# 失败（走查阻断 #2）。
+# @ETC_DIR@/wireguard 例外：目录一旦被手工删除，硬路径会让整个 unit 起不来
+# （ProtectSystem=full 下 sandbox 内也建不出该目录）。带 "-" 后 Agent 正常启动，
+# WireGuard 适配器以 wireguard_dir_missing 上报「应用不可用」并由 install.sh/手册修复。
+# ProtectHome=read-only：host-ops keys.* 需要读取用户家目录（authorized_keys 所在）；
+# agent 以 root 运行本可读全盘，read-only 不构成额外暴露。写权限仅通过
+# ReadWritePaths=-/root/.ssh 开放（hub self keys.* 的默认用户是 root），其余家目录只读。
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=-@ETC_DIR@/wireguard @APPS_ETC_DIR@ @CONFIG_DIR@ @UNIT_DIR@ @CADDY_PARENT@ @CADDY_DIR@ -@CADDYFILE@ @APPS_OPT_DIR@ @DATA_DIR@ -/root/.ssh -/etc/cron.d
+
+[Install]
+WantedBy=multi-user.target

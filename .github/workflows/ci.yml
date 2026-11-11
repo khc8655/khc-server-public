@@ -1,0 +1,378 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    name: Agent tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile
+        run: python3 -m compileall -q agent
+      - name: Unit tests
+        run: python3 -m unittest discover -s agent/tests -t agent -v
+
+  verify:
+    name: Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 版本取自 package.json 的 packageManager（pnpm@9.15.0），这里不能再写 version，否则报 Multiple versions of pnpm specified
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      # 真实 SQLite 语义（wrangler local D1）：迁移顺序/幂等 + 存量数据前向兼容。
+      - name: D1 migrations (local)
+        run: ./scripts/d1-migration-local-test.sh
+
+      # 走查卡点 1 防回归：Agent 代码改动必须 bump VERSION 并出包入库，杜绝"代码修了线上跑旧包"
+      # 基线必须取本次 push 的起点（event.before）；用 origin/main 时它已等于 HEAD，
+      # diff 恒为空，规则 1/2 从不触发。PR 用 base.sha，手动触发用上一提交。
+      - name: Agent release consistency
+        env:
+          DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || (github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD~1') }}
+        run: |
+          git fetch --no-tags origin main
+          node scripts/verify-agent-release.mjs --diff "$DIFF_BASE" --repo
+
+      # 面板侧对称门禁（ADR-0013）：改了 apps/(api|web)/src 的功能代码就必须 bump
+      # package.json version，且 CHANGELOG 必须有对应版本段。此前面板版本无任何校验，
+      # 结果 v0.2.0 · 2026-10-31 挂了 8 天的改动。基线口径与上一行一致。
+      - name: Panel release consistency
+        env:
+          DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || (github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD~1') }}
+        run: |
+          git fetch --no-tags origin main
+          node scripts/check-release-consistency.mjs --diff "$DIFF_BASE" --repo
+
+      # 旧 Agent 包留存上限（ADR-0013）：避免 assets 随历史包无限膨胀
+      - name: Agent package retention
+        run: node scripts/prune-agent-packages.mjs --check
+
+      - name: Build web
+        run: pnpm build
+
+  deploy:
+    name: Deploy production Worker
+    needs: [agent, verify]
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # 部署成功后自动打发布标签（ADR-0013 L1：发布锚点），需要写仓库权限
+    permissions:
+      contents: write
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        run: pnpm build
+
+      # 公开仓库不提交真实 Worker/D1/入口标识：部署前用 repository secrets 注入（public 仓的 variables 不加密，secrets 会在日志中打码）。
+      # 需要配置：KHC_WORKER_NAME / KHC_D1_NAME / KHC_D1_ID / KHC_PANEL_ORIGIN / KHC_WORKERS_DEV_ORIGIN。
+      - name: Render wrangler.toml
+        env:
+          KHC_WORKER_NAME: ${{ secrets.KHC_WORKER_NAME }}
+          KHC_D1_NAME: ${{ secrets.KHC_D1_NAME }}
+          KHC_D1_ID: ${{ secrets.KHC_D1_ID }}
+          KHC_PANEL_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+          KHC_WORKERS_DEV_ORIGIN: ${{ secrets.KHC_WORKERS_DEV_ORIGIN }}
+        run: |
+          set -euo pipefail
+          : "${KHC_WORKER_NAME:?请在仓库 Secrets 配置 KHC_WORKER_NAME}"
+          : "${KHC_D1_NAME:?请在仓库 Secrets 配置 KHC_D1_NAME}"
+          : "${KHC_D1_ID:?请在仓库 Secrets 配置 KHC_D1_ID}"
+          : "${KHC_PANEL_ORIGIN:?请在仓库 Secrets 配置 KHC_PANEL_ORIGIN}"
+          : "${KHC_WORKERS_DEV_ORIGIN:?请在仓库 Secrets 配置 KHC_WORKERS_DEV_ORIGIN}"
+          python3 - <<'PY'
+          import os, re, sys
+
+          path = 'wrangler.toml'
+          text = open(path, encoding='utf-8').read()
+
+          def replace_line(pattern, value, label):
+              global text
+              new, n = re.subn(pattern, value, text, count=1, flags=re.M)
+              if n != 1:
+                  sys.exit(f'ERROR: 未在 wrangler.toml 找到 {label} 行')
+              text = new
+
+          replace_line(r'^name = ".*"$',
+                       f'name = "{os.environ["KHC_WORKER_NAME"]}"', 'name')
+          replace_line(r'^database_name = ".*"$',
+                       f'database_name = "{os.environ["KHC_D1_NAME"]}"', 'database_name')
+          replace_line(r'^database_id = ".*"$',
+                       f'database_id = "{os.environ["KHC_D1_ID"]}"', 'database_id')
+          replace_line(r'^LIVE_ORIGINS = ".*"$',
+                       'LIVE_ORIGINS = "'
+                       + os.environ['KHC_PANEL_ORIGIN'] + ',' + os.environ['KHC_WORKERS_DEV_ORIGIN']
+                       + '"', 'LIVE_ORIGINS')
+
+          open(path, 'w', encoding='utf-8').write(text)
+          print('OK: wrangler.toml 已用 Secrets 覆盖部署标识')
+          PY
+          # 部署前自检：绝不把本地默认值带到生产
+          if grep -qE 'khc-local-dev|khc-db-local|localhost:5173' wrangler.toml; then
+            echo "ERROR: wrangler.toml 仍含本地默认值，阻断部署"; exit 1
+          fi
+
+      # §3.6 部署前强制冒烟：先上传一个「不切生产流量」的 Worker 版本，
+      # 用其预览 URL 探活（/api/v1/health 200 且 ok:true、/api/v1/version 200）；
+      # 任何失败都 exit 1，阻断下面的 Deploy。
+      # §3.7 + §3.6：workers_dev=false 关闭生产 workers.dev 入口；wrangler.toml 显式
+      # preview_urls=true（两者相互独立），预览 URL 仍可用，冒烟验证的是本次新构建。
+      # 仅在预览 URL 极端不可用时退化为检查自定义域名（只能发现生产已挂）。
+      # 不引入任何新 Secret，复用既有 CLOUDFLARE_* 凭据。
+      - name: Pre-deploy smoke (version upload)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROD_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+        run: |
+          set -euo pipefail
+
+          # 1) 上传版本但不切生产流量；构建/上传报错直接阻断部署。
+          if ! npx wrangler versions upload 2>&1 | tee versions-upload.log; then
+            echo "ERROR: wrangler versions upload 失败，阻断部署"
+            exit 1
+          fi
+
+          # 2) 从输出解析预览 URL（wrangler versions upload 输出的 *.workers.dev 预览域名，
+          #    与 --preview-alias 生成的别名 URL 同形态）。占位形如
+          #    https://<VERSION_PREFIX>-... 含 <>，不会被字符类匹配到。
+          PREVIEW_URL="$(grep -oE 'https://[A-Za-z0-9._-]+\.workers\.dev' versions-upload.log | head -1 || true)"
+
+          # 探活：把 health / version 的 HTTP 状态码写到全局变量；000 = 连不上。
+          probe() {
+            : > /tmp/khc-smoke-health.json
+            HEALTH_CODE="$(curl -sS -o /tmp/khc-smoke-health.json -w '%{http_code}' --max-time 20 "$1/api/v1/health")" || HEALTH_CODE="000"
+            VERSION_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1/api/v1/version")" || VERSION_CODE="000"
+          }
+          healthy() {
+            [ "$HEALTH_CODE" = "200" ] && [ "$VERSION_CODE" = "200" ] \
+              && grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' /tmp/khc-smoke-health.json
+          }
+
+          PASSED=0
+          if [ -n "$PREVIEW_URL" ]; then
+            echo "预览 URL: $PREVIEW_URL"
+            probe "$PREVIEW_URL"
+            if [ "$HEALTH_CODE" != "000" ]; then
+              # 预览域名可达：必须真正通过冒烟；不通过即视为新构建故障，直接阻断，不兜底。
+              if healthy; then
+                echo "OK: 预览版本 /api/v1/health=200 ok:true、/api/v1/version=200"
+                PASSED=1
+              else
+                echo "ERROR: 预览版本可达但冒烟失败（health=${HEALTH_CODE} version=${VERSION_CODE}），阻断部署"
+                exit 1
+              fi
+            else
+              echo "WARN: 预览 URL 不可达（workers_dev=false 时预览域名通常关闭），走自定义域名兜底"
+            fi
+          else
+            echo "WARN: 未能从 versions upload 输出解析预览 URL（workers_dev=false 常见），走自定义域名兜底"
+          fi
+
+          # 3) 兜底：预览不可用 → 检查已部署自定义域名；连生产都不健康则阻断部署。
+          if [ "$PASSED" -ne 1 ]; then
+            echo "兜底健康检查: ${PROD_ORIGIN}"
+            probe "${PROD_ORIGIN}"
+            if healthy; then
+              echo "OK: 自定义域名 health/version 正常（预览不可用，按兜底放行）"
+            else
+              echo "ERROR: 预览不可用且自定义域名 health/version 异常（health=${HEALTH_CODE} version=${VERSION_CODE}），阻断部署"
+              exit 1
+            fi
+          fi
+
+      # 拓扑闸门（2026-11-07 事故后新增）：生产入口 panel.example.com 是第三方边缘，
+      # 其**源站**就是 <worker>.<subdomain>.workers.dev。用 /cdn-cgi/trace 的 h= 字段实测，
+      # 若源站确实是 workers.dev，则 workers_dev 必须为 true，否则边缘回源全部 404。
+      # 静态推断不可靠（自定义域名可以完全不在仓库里），所以这里做真实探测再比对配置。
+      - name: Guard deploy topology (workers.dev as origin)
+        env:
+          PROD_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+        run: |
+          set -euo pipefail
+          H="$(curl -sS --max-time 20 "${PROD_ORIGIN}/cdn-cgi/trace" | awk -F= '/^h=/{print $2}' || true)"
+          echo "生产入口实测 h=${H:-<空>}"
+          GOPATH_DEV=false
+          if [ -z "$H" ]; then
+            echo "WARN: /cdn-cgi/trace 未返回 h=，跳过拓扑闸门"
+            exit 0
+          fi
+          case "$H" in
+            *.workers.dev) GOPATH_DEV=true ;;
+          esac
+          CFG="$(grep -E '^[[:space:]]*workers_dev[[:space:]]*=' wrangler.toml | tail -1 | grep -oE '(true|false)' || true)"
+          echo "wrangler.toml workers_dev=${CFG:-<未设置，默认 true>}"
+          if [ "$GOPATH_DEV" = "true" ] && [ "$CFG" = "false" ]; then
+            echo "ERROR: 生产入口的源站是 workers.dev，关闭 workers_dev 会让整站 404（error code: 1042）。"
+            echo "       要关闭请先把 Worker 挂上真正的 Cloudflare 自定义域名，再把第三方边缘源站改到该域名。"
+            echo "       详见 docs/auto-deploy.md「事故记录 2026-11-07」。"
+            exit 1
+          fi
+          echo "OK: 拓扑与 workers_dev 配置一致"
+
+      - name: Deploy
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # --tag 写入 Worker version metadata，运行时经 env.CF_VERSION_METADATA.tag 暴露为
+          # /api/v1/version 的 commit（ADR-0013 L3）——线上能反查到具体提交。
+          SHA12="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
+          PANEL="$(node -p "require('./package.json').version")"
+          AGENT="$(python3 agent/khc_agent.py version | awk '{print $2}')"
+          npx wrangler deploy --tag "$SHA12" --message "panel v${PANEL} / agent v${AGENT} (${SHA12})" \
+            | tee /tmp/deploy.log
+          # 权威 Version ID 取自部署输出，不从边缘 curl（边缘/回源有传播延迟，
+          # 2026-11-07 实测标签注解拿到了上一个版本 ID）。
+          WID="$(sed -nE 's/.*Current Version ID:[[:space:]]*([0-9a-f-]+).*/\1/p' /tmp/deploy.log | tail -1)"
+          if [ -z "$WID" ]; then
+            echo "ERROR: 未能从 deploy 输出解析 Current Version ID"
+            exit 1
+          fi
+          echo "version_id=$WID" >> "$GITHUB_OUTPUT"
+          echo "sha12=$SHA12" >> "$GITHUB_OUTPUT"
+          echo "OK: 已部署 version_id=$WID（tag=$SHA12）"
+
+      # 部署后第一道校验：生产入口必须整体可用，且**线上的确跑着本次提交**。
+      # 单独成步的原因：整站 404 时下表「包 sha 不一致」会把真正病因埋掉
+      # （2026-11-07 事故即 curl 到 404 空体，报成 e3b0c44… 空文件 sha256 不匹配）。
+      # L3 溯源断言：/api/v1/version 的 commit 必须等于本次提交前 12 位、versionId 必须
+      # 等于 Deploy 输出的 Version ID —— 这是「构建标识真的生效」的唯一硬证据。
+      - name: Verify production entry
+        env:
+          PROD_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+          WORKERS_DEV_ORIGIN: ${{ secrets.KHC_WORKERS_DEV_ORIGIN }}
+        run: |
+          set -uo pipefail
+          URL="${PROD_ORIGIN}"
+          WANT_SHA="${{ steps.deploy.outputs.sha12 }}"
+          WANT_WID="${{ steps.deploy.outputs.version_id }}"
+          HEALTH_CODE="$(curl -sS -o /tmp/prod-health.json -w '%{http_code}' --max-time 20 "$URL/api/v1/health" || echo 000)"
+          VERSION_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$URL/api/v1/version" || echo 000)"
+          if [ "$HEALTH_CODE" != "200" ] || [ "$VERSION_CODE" != "200" ] \
+             || ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' /tmp/prod-health.json; then
+            echo "ERROR: 生产入口异常 health=${HEALTH_CODE} version=${VERSION_CODE}"
+            echo "--- /api/v1/health body ---"; head -c 300 /tmp/prod-health.json || true; echo
+            echo "--- /cdn-cgi/trace ---"; curl -sS --max-time 20 "$URL/cdn-cgi/trace" | head -6 || true
+            echo "--- 直连 workers.dev ---"; curl -sS -i --max-time 20 "${WORKERS_DEV_ORIGIN}/api/v1/health" | head -6 || true
+            exit 1
+          fi
+          echo "OK: 生产入口 health=200 ok:true、version=200"
+
+          # 边缘回源与 version metadata 都有传播延迟，最多等 60s 让 commit 追上本次提交
+          OK=0
+          for i in $(seq 1 20); do
+            BODY="$(curl -sS --max-time 20 "$URL/api/v1/version?cb=${i}-${RANDOM}" || true)"
+            GOT_SHA="$(printf '%s' "$BODY" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"
+            GOT_WID="$(printf '%s' "$BODY" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("versionId",""))' 2>/dev/null || true)"
+            if [ "$GOT_SHA" = "$WANT_SHA" ] && [ "$GOT_WID" = "$WANT_WID" ]; then
+              OK=1
+              echo "OK: 线上溯源一致 commit=${GOT_SHA} versionId=${GOT_WID}（第 ${i} 次探测）"
+              break
+            fi
+            sleep 3
+          done
+          if [ "$OK" -ne 1 ]; then
+            echo "ERROR: 线上溯源不一致（期望 commit=${WANT_SHA} versionId=${WANT_WID}，实际 commit=${GOT_SHA:-<空>} versionId=${GOT_WID:-<空>}）"
+            echo "       含义：要么部署未生效，要么 version metadata binding 没绑上 —— 检查 wrangler.toml 的 [version_metadata]。"
+            exit 1
+          fi
+
+
+      # 部署后一致性校验：线上下发的 Agent 包 sha256 必须等于本次部署携带的包。
+      # 使用固定的生产入口（repository variable KHC_PANEL_ORIGIN，不再从 deploy.log 解析 URL）。
+      - name: Verify deployed agent package
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROD_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
+        run: |
+          VERSION="$(python3 agent/khc_agent.py version | awk '{print $2}')"
+          EXPECTED="$(awk '{print $1}' "apps/web/public/agent/khc-agent-${VERSION}.tar.gz.sha256")"
+          URL="${PROD_ORIGIN}"
+          # 与签名清单同款 cache-buster：同名包重建时避免 CDN 命中旧字节
+          V="${EXPECTED:0:12}"
+          CODE="$(curl -sSL -o /tmp/deployed-agent.tar.gz -w '%{http_code}' --max-time 60 "$URL/agent/khc-agent-${VERSION}.tar.gz?v=$V" || echo 000)"
+          ACTUAL="$(sha256sum /tmp/deployed-agent.tar.gz | awk '{print $1}')"
+          if [ "$CODE" != "200" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: 线上包校验失败 http=${CODE} sha256=${ACTUAL} 期望=${EXPECTED}（版本 ${VERSION}）"
+            exit 1
+          fi
+          echo "OK: 线上 khc-agent-${VERSION} 与仓库一致 ($ACTUAL)"
+
+      # 发布锚点（ADR-0013 L1）：每次成功的生产部署打一个 release-YYYY-MM-DD 标签，
+      # 标签注解同时记录「面板版本 / Agent 版本 / Worker Version ID / 提交」，
+      # 让「线上跑的是哪个版本、要回滚到哪个提交」有唯一答案（此前 0 个 tag）。
+      # 同一天多次发布时自动加 -2 / -3 后缀。
+      - name: Tag release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PANEL="$(node -p "require('./package.json').version")"
+          RELEASE_DATE="$(node -p "require('./package.json').khcRelease")"
+          AGENT="$(python3 agent/khc_agent.py version | awk '{print $2}')"
+          # 取自 Deploy 输出（权威），不从边缘 curl —— 边缘回源有传播延迟，
+          # 2026-11-07 首次落地时标签就因此记到了上一个版本的 ID。
+          SHA12="${{ steps.deploy.outputs.sha12 }}"
+          WID="${{ steps.deploy.outputs.version_id }}"
+
+          BASE="release-${RELEASE_DATE}"
+          TAG="$BASE"
+          N=1
+          while git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; do
+            N=$((N + 1))
+            TAG="${BASE}-${N}"
+          done
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "panel v${PANEL} · agent v${AGENT} · worker ${WID} · ${SHA12}"
+          git push origin "refs/tags/${TAG}"
+          echo "OK: 已打发布标签 ${TAG}（panel v${PANEL} / agent v${AGENT} / worker ${WID} / ${SHA12}）"
+

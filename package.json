@@ -1,0 +1,31 @@
+{
+  "name": "khc-server",
+  "private": true,
+  "version": "0.10.0",
+  "khcRelease": "2026-11-11",
+  "description": "KHC multi-node control plane: Cloudflare Workers + React + Python Node Agent + signed app modules",
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @khc/web dev",
+    "dev:api": "wrangler dev",
+    "build": "pnpm --filter @khc/web build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "pnpm build && wrangler deploy --tag \"$(git rev-parse --short=12 HEAD)\"",
+    "release:check": "node scripts/check-release-consistency.mjs --repo",
+    "agent:prune": "node scripts/prune-agent-packages.mjs",
+    "db:migrate:local": "wrangler d1 execute DB --local --file=migrations/0001_init.sql",
+    "db:migrate:remote": "wrangler d1 execute DB --remote --file=migrations/0001_init.sql",
+    "hash-password": "node scripts/hash-password.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  }
+}

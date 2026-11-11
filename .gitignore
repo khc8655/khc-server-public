@@ -1,0 +1,64 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+apps/web/dist/
+.wrangler/
+.turbo/
+
+# secrets / local env
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+.envrc
+!.env.example
+*.local.*
+wrangler.local.toml
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+credentials*.json
+service-account*.json
+id_rsa*
+keys/
+.direnv/
+
+# local ops memory / audit artifacts / reports (never publish)
+.workbuddy/
+.screenshots/
+.khc-local/
+/e2e-acceptance-report-*.md
+/ux-interaction-audit-*.md
+
+# local data / dumps
+*.sqlite
+*.db
+d1-dumps/
+backups/
+# 本地临时清单（签名产物只在 apps/web/public/agent/release-manifest.json 入库）
+/release-manifest.json
+
+# Agent 发布产物：公开版不提交，由私有发版流程生成并注入（见 apps/web/public/agent/README.md）
+apps/web/public/agent/*.tar.gz
+apps/web/public/agent/*.sha256
+apps/web/public/agent/release-manifest.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# UI audit browser artifacts
+.audit-*/
+
+# IDE 临时产物（html 分享包），不入库
+.trae-html-share-packages/
