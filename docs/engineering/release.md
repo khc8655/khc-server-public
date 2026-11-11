@@ -1,6 +1,6 @@
 # 发版流程
 
-> 状态：现行 ｜ 适用范围：版本号、发版分层、部署、部署前强制冒烟、D1 迁移、回滚、secrets、发布签名密钥轮换 ｜ 最后核验：2026-11-11（§7.4 补发布签名密钥轮换记录：方案 B 直接换钥、SIGN_KEY_FILE 加固、0.1.39 双节点切换与旧钥封存） ｜ 关联：`docs/release-versioning.md`、`docs/auto-deploy.md`、`docs/engineering/d1-migrations.md`、`docs/engineering/adr/ADR-0011-manifest-with-deploy.md`、`docs/engineering/adr/ADR-0013-release-layering.md`
+> 状态：现行 ｜ 适用范围：版本号、发版分层、人工发版、部署前强制冒烟、D1 迁移、回滚、secrets、发布签名密钥轮换 ｜ 最后核验：2026-11-11（§3 改为人工发版：main 合并 = 过 CI，不再等于生产部署，见 ADR-0015） ｜ 关联：`docs/release-versioning.md`、`docs/engineering/d1-migrations.md`、`docs/engineering/adr/ADR-0008-production-reuses-staging.md`、`docs/engineering/adr/ADR-0011-manifest-with-deploy.md`、`docs/engineering/adr/ADR-0013-release-layering.md`、`docs/engineering/adr/ADR-0015-manual-release.md`
 
 ## 0. 资源拓扑（ADR-0008，必读）
 
@@ -18,7 +18,7 @@
 - **面板版本唯一来源**：仓库根 `package.json` 的 `version` + `khcRelease`；`apps/web/src/version.ts` 与 `apps/api/src/version.ts` 都从它 import（不再双写硬编码）。
 - **Agent 版本**：`agent/khc/util.py` 的 `VERSION`，独立于面板；改了 Agent 运行时代码就必须 bump 并出包（`scripts/verify-agent-release.mjs` 强卡）。
 - **构建标识**：`wrangler deploy --tag <commit sha12>` 写入 Cloudflare `[version_metadata]`，`GET /api/v1/version` 与 `/api/v1/health` 返回 `commit` / `builtAt` / `versionId`。线上任何时刻都能反查到提交。
-- **发布单元**：每次成功的生产部署由 CI 自动打 `release-<khcRelease>` 标签（同日多次加 `-2`/`-3`），注解含「面板版本 / Agent 版本 / Worker Version ID / 提交」。
+- **发布单元**：人工发版成功后由主人打 `release-<khcRelease>` 标签（同日多次加 `-2`/`-3`），注解含「面板版本 / Agent 版本 / Worker Version ID / 提交」；若走 CI 手动部署路径，标签由 job 自动创建（ADR-0013 L1、ADR-0015）。
 - 每次发版更新 `CHANGELOG.md`（Keep a Changelog 格式），发布时 `[Unreleased]` 整段改为 `## [x.y.z] - 日期`。
 - **门禁**：`scripts/check-release-consistency.mjs`（面板 bump + CHANGELOG 段）、`scripts/prune-agent-packages.mjs --check`（包留存），均已接入 CI 与 `./scripts/verify.sh`。
 
@@ -42,23 +42,62 @@
 
 ## 2. 分支与合并
 
-- `main` 始终可部署；功能在 `feat/*`，修复在 `fix/*`，文档在 `docs/*`。
+- `main` 始终是**已过 CI 的可发布基线**；功能在 `feat/*`，修复在 `fix/*`，文档在 `docs/*`。
 - PR 必须：`./scripts/verify.sh` 通过、文档更新、UI 附截图、风险与回滚说明。
-- 合并由主人执行（或明确授权）。
+- PR **不设文档路径豁免**（ADR-0015 B2）：纯文档 PR 也会跑 `Agent tests (Python)` 与 `Typecheck / Test / Build`，避免被分支保护卡死。
+- 合并由主人执行（或明确授权）。合并**不再触发生产部署**。
 
-## 3. 部署（即生产部署）
+## 3. 部署 = 人工发版（ADR-0015）
 
-合并到 `main` 后 GitHub Actions 先跑**部署前强制冒烟**，通过后才 `wrangler deploy`（见 `docs/auto-deploy.md` 与 §4）。也可手动触发 Actions 里的 `Deploy production Worker`（workflow_dispatch）。deploy job 顺序：Install / Build web → **Pre-deploy smoke** → Deploy → Verify deployed agent package；任一步失败即 `exit 1` 阻断后续步骤。
+**默认路径是本机发版**：合并 `main` 只代表代码通过 CI；上线由主人本机执行 `./scripts/deploy-local.sh`。原因：公开仓库不携带签名发布产物，也不应长期持有生产 token 与发布私钥（决策与取舍见 ADR-0015）。
 
-本地部署（CI 不可用时的兜底）：
+### 3.1 两条路径
+
+| 路径 | 触发 | 适用 | 前置 |
+|---|---|---|---|
+| **本机（默认）** | 主人执行 `./scripts/deploy-local.sh` | 日常发版 | 本机有 `wrangler.local.toml`、CF 凭据、发布私钥与已生成的签名产物 |
+| CI 手动（可选） | Actions → `Deploy production Worker` → Run workflow（仅 `main`） | 本机不可用时的兜底 | 仓库 Secrets 配 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`，且产物必须已在仓库内（公开库不含，见 §7.1） |
+
+deploy job 已不再由 `push main` 触发；缺凭据时第一步即打印中文错误并 `exit 1`（fail-closed，不静默跳过）。
+
+### 3.2 本机准备（一次性）
 
 ```bash
-export CLOUDFLARE_API_TOKEN=...
-export CLOUDFLARE_ACCOUNT_ID=...
-./scripts/deploy-local.sh        # 内部先跑 verify.sh 再构建部署
+cp wrangler.toml wrangler.local.toml     # 该文件已被 .gitignore 忽略，不会提交
+# 改 4 处：name / database_name / database_id / [vars] LIVE_ORIGINS
+# LIVE_ORIGINS 形如 "https://panel.example.com,https://<worker>.<subdomain>.workers.dev"
 ```
 
-首次/重建资源（一般不需要，现有资源已就绪）：
+`scripts/deploy-local.sh` 优先读 `wrangler.local.toml`，缺失时回落 `wrangler.toml` 并告警（仓库内的 `wrangler.toml` 是本地默认值 `khc-local-dev` / 占位 D1，直接用它部署会指向错误资源）。
+
+### 3.3 发版前：先生成并注入签名产物（必须在 build 之前）
+
+公开库不含 `apps/web/public/agent/` 的 `khc-agent-<VERSION>.tar.gz`、`.sha256` 与 `release-manifest.json`。`pnpm build` 会把该目录打进 Worker assets，**因此产物必须在 build 前就位**，否则会发出一个没有可用 Agent 包的站点：
+
+```bash
+SIGN_KEY_FILE=<Ed25519 私钥文件路径> PUBLIC_BASE=https://<面板入口>/agent \
+  ./scripts/build-agent-release.sh
+```
+
+- 私钥只以**文件路径**传入（脚本拒绝环境变量/命令行里的私钥内容）；私钥不入仓库、不入 CI。
+- 产物生成后不要 `git add`（`.gitignore` 已排除），它们只随本次本机部署上线。
+- `deploy-local.sh` 会预检这三个文件，缺失直接失败并打印上面的命令。
+
+### 3.4 执行发版
+
+```bash
+export CLOUDFLARE_API_TOKEN=...        # 只放环境变量，不写文件
+export CLOUDFLARE_ACCOUNT_ID=...
+./scripts/deploy-local.sh             # verify → build → wrangler deploy --config wrangler.local.toml --tag <sha12>
+```
+
+发版后：
+
+1. 按 §5 做部署后冒烟；
+2. 打发布标签：`git tag -a release-<khcRelease> -m "panel vX / agent vY / versionId Z / commit abc123"` 并 `git push origin <tag>`；
+3. 若 Agent 有版本变化，再把节点升级命令发出去（§7.2）。
+
+### 3.5 首次/重建资源（一般不需要，现有资源已就绪）
 
 ```bash
 npx wrangler d1 create my-khc-db        # 若库不存在
@@ -78,9 +117,9 @@ npx wrangler secret put AGENT_RELEASE_PUBKEY
 
 ## 4. 部署前强制冒烟（CI，D-6 / §3.6）
 
-**现状（2026-11-07）**：上线前冒烟已由 CI deploy job 强制执行，不再依赖人工先 `versions upload` 再合并。`wrangler.toml` 为 `workers_dev = false` + `preview_urls = true`（§3.7 / §3.6）：生产 workers.dev 入口关闭，但版本预览 URL 仍可用，下面「用预览 URL 冒烟」同时是 CI 的实际门禁逻辑；本地手动执行仅作排障参考。
+**现状（2026-11-11，ADR-0015）**：默认发版路径是本机脚本，**不会自动跑** CI 的部署前冒烟；只有手动 dispatch deploy job 时才执行下面的门禁。本机发版应自行完成同等验证：先 `npx wrangler versions upload --config wrangler.local.toml`（不切流量）拿预览 URL 探活，或部署后立刻按 §5 验证并准备回滚。
 
-CI deploy job 在 `Deploy` 步骤之前的实际顺序（详见 `docs/auto-deploy.md`）：
+CI 手动部署路径（`workflow_dispatch`）中，`Deploy` 之前的实际顺序（详见 `docs/auto-deploy.md`）：
 
 1. `npx wrangler versions upload`：只上传版本、**不切生产流量**；上传命令失败即 `exit 1` 阻断 Deploy。
 2. 从输出解析 `*.workers.dev` 预览 URL（或 `--preview-alias` 的别名 URL）→ curl `<预览URL>/api/v1/health` 与 `/api/v1/version`，要求均 **200** 且 health 返回 **`ok:true`**；预览 URL 可达但冒烟不通过即 `exit 1` 阻断（不兜底）。
@@ -123,7 +162,7 @@ npx wrangler versions upload  # 不带 --env，读 wrangler.toml；只上传版�
 3. 一次 plan（不 apply）；
 4. 首页面板版本号与 `version.ts` 一致。
 
-`wrangler deploy` 之后，CI 还会用**固定自定义域名** `https://panel.example.com/agent/khc-agent-<VERSION>.tar.gz?v=<sha 前 12 位>` 核对线上 Agent 包 sha256 与仓库一致（§3.7；不再从 deploy 输出解析 `*.workers.dev` URL）。该校验只能事后报警，不能替代 §4 的部署前冒烟。
+若走 CI 手动部署路径，`wrangler deploy` 之后 CI 还会用**固定自定义域名** `https://panel.example.com/agent/khc-agent-<VERSION>.tar.gz?v=<sha 前 12 位>` 核对线上 Agent 包 sha256 与仓库一致（§3.7；不再从 deploy 输出解析 `*.workers.dev` URL）。本机发版则手动执行同样的 curl + sha256 对比。该校验只能事后报警，不能替代 §4 的部署前冒烟。
 
 出问题立即回滚：`npx wrangler rollback`（回到上一部署版本）或重新部署上一个 commit；Agent 侧保留旧版本目录（`.prev`）。
 
@@ -166,7 +205,7 @@ npx wrangler versions upload  # 不带 --env，读 wrangler.toml；只上传版�
 ### 7.3 自动校验（防回归）
 
 - **CI（verify job）**：`node scripts/verify-agent-release.mjs --diff "$DIFF_BASE" --repo`，`DIFF_BASE` 取 push 的 `github.event.before`（PR 用 `base.sha`，手动触发用 `HEAD~1`）——规则 1：agent 运行代码（`khc/`、`adapters/`、入口脚本）变更必须 bump `VERSION`；规则 2：`VERSION` 变更必须已出包入库。此前用 `origin/main` 作基线，push main 时它已等于 HEAD，diff 恒为空、两条规则从不触发；
-- **CI（deploy job）**：`workflow_dispatch` 同样要求 `github.ref == refs/heads/main`；`Deploy` 前先跑部署前强制冒烟（§4），部署后 curl **固定自定义域名** `https://panel.example.com/agent/khc-agent-<VERSION>.tar.gz?v=<sha 前 12 位>`（与签名清单同款 cache-buster）算 sha256，与仓库包不一致即失败（§3.7 起不再从 deploy 输出解析 `*.workers.dev` URL，关闭 workers_dev 后也解析不到）；
+- **CI（deploy job，仅手动 dispatch）**：`workflow_dispatch` 且 `github.ref == refs/heads/main`；缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 时第一步 fail-closed 退出；`Deploy` 前先跑部署前强制冒烟（§4），部署后 curl **固定自定义域名** `https://panel.example.com/agent/khc-agent-<VERSION>.tar.gz?v=<sha 前 12 位>`（与签名清单同款 cache-buster）算 sha256，与仓库包不一致即失败（§3.7 起不再从 deploy 输出解析 `*.workers.dev` URL，关闭 workers_dev 后也解析不到）；
 - **本地**：`./scripts/verify.sh` 包含 `--repo` 一致性检查（`VERSION` == 包内版本 == 文件名、`.sha256` == 实际哈希），用 Agent 内置公钥验证 `apps/web/public/agent/release-manifest.json` 的签名并核对其 sha256 覆盖当前包，且**逐文件比对包内 Agent 源码与仓库 `agent/`**——改了 `agent/khc/*.py` 却没重打包会直接失败。
 
 - Agent 包 = `agent/package.sh` 产出的 tar.gz + sha256；
