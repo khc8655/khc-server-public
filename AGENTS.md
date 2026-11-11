@@ -48,10 +48,10 @@ scripts/             hash-password、verify.sh
 2. **核心冻结**：Worker 路由/契约/D1 核心表/Agent 内核改动必须说明必要性；"跟某个软件有关的知识"只能进 `agent/adapters/<app>.py` 与 `apps/web/src/apps/<app>/page.tsx`。
 3. **UI 规范**：所有界面改动必须遵守 `docs/ui-redesign/ui-guidelines.md` 与 `docs/ui-redesign/page-specs.md`（先归类六类页面类型、复用既有组件与范式，见 §6.4）；设计令牌唯一来源为 `apps/web/src/styles/tokens.css`，不新增色板与字号；UI 方案仍属红线 1 的确认范围。PR 模板含 UI 自检清单（浅/深/390 截图 + 四态）。
 4. **安全**：不提交真实凭据；错误响应零凭据回显；写盘白名单/防符号链接逃逸；私钥 0600；Agent 升级只允许拉取式。
-5. **不破坏生产**：main 合并即生产部署（ADR-0008），禁止其他分支/本地脚本自动部署；生产操作只由主人执行；上线前用 `wrangler versions upload` + 预览 URL 冒烟。
+5. **不破坏生产**：main 合并 = 过 CI，**不再等于生产部署**（ADR-0015 部分取代 ADR-0008）；发版由主人本机执行 `./scripts/deploy-local.sh`（或手动 dispatch deploy job），禁止其他分支/脚本自动部署；上线前用 `wrangler versions upload` + 预览 URL 冒烟。
 6. **文档同步**：改 API/契约/配置/流程，必须同步更新对应文档与本文件（如适用）。
 7. **测试**：提交前 `./scripts/verify.sh` 全绿；UI 改动附浅/深/390 截图。
-8. **单仓库**：所有开发、设计、PR、验证只在 `khc8655/khc-server`；旧 `khc8655/wireguard` 只允许作为历史来源引用，不得驱动新实现。需要旧设计时，先迁入本仓库再引用。
+8. **单仓库**：所有开发、设计、PR、验证只在 `khc8655/khc-server-public`（公开库，2026-11-11 起为唯一开发仓库）；旧 `khc8655/khc-server` 已归档只读，仅作历史归档；旧 `khc8655/wireguard` 只允许作为历史来源引用，不得驱动新实现。
 9. **文档门禁**：
    a) 新增 `docs/**/*.md` 必须先归类（现行规范 / 工程流程 / 决策记录 / 提案 / 历史资料），头部带状态块（状态 / 适用范围 / 最后核验 / 关联），并在同一 PR 登记 `docs/README.md` 索引；缺任一不予合入。
    b) 文档被取代或成为一次性产物时不删除：`git mv` 入 `docs/archive/`，状态块改为"已取代/历史记录"并写明取代者，同步更新两个索引（`docs/README.md` 与 `docs/archive/README.md`）。
@@ -79,7 +79,8 @@ pnpm dev:api                        # Worker http://127.0.0.1:8787
 pnpm dev:web                        # 前端 http://127.0.0.1:5173
 pnpm typecheck && pnpm test && pnpm build
 python3 -m unittest discover -s agent/tests -t agent -v
-# 部署：合并 main 后 CI 自动部署（即生产，ADR-0008）；本地兜底 ./scripts/deploy-local.sh
+# 部署：发版是人工动作（ADR-0015）——合并 main 只跑 CI；上线在本机执行 ./scripts/deploy-local.sh
+# 或在 Actions 手动 dispatch deploy job（需仓库配置 CLOUDFLARE_* secrets，公开库默认不配）
 # 上线前冒烟：npx wrangler versions upload → 预览 URL（不切生产流量）；配置唯一来源 wrangler.toml
 ```
 
@@ -120,7 +121,7 @@ python3 -m unittest discover -s agent/tests -t agent -v
 
 - 每阶段验收标准见 `docs/plan-v4.md`；测试与验收步骤见 `docs/engineering/testing.md`。
 - 发版流程（版本、部署、回滚、secrets）见 `docs/engineering/release.md`；D1 迁移执行见 `docs/engineering/d1-migrations.md`。
-- 生产与"staging"复用同一 Worker/D1（ADR-0008）：main 推送即生产部署，无独立预发环境；配置唯一来源是 `wrangler.toml`（原 `wrangler.staging.toml` 已于 2026-11-03 删除）。上线前冒烟用 `npx wrangler versions upload` + 预览 URL，见 `docs/engineering/release.md` §4。
+- 生产与"staging"复用同一 Worker/D1（ADR-0008）：无独立预发环境；配置唯一来源是 `wrangler.toml`（原 `wrangler.staging.toml` 已于 2026-11-03 删除）。**main 推送只跑 CI，不再部署**（ADR-0015）；发版 = 本机 `./scripts/deploy-local.sh`（读 `wrangler.local.toml`，构建前注入签名 Agent 产物）或手动 dispatch deploy job，见 `docs/engineering/release.md` §3。上线前冒烟用 `npx wrangler versions upload` + 预览 URL，见 §4。
 - 架构决策记录见 `docs/engineering/adr/`；新决策必须补 ADR。
 
 ## 8. 高频坑（别重复踩）
