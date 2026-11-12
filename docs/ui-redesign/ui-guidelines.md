@@ -1,6 +1,6 @@
 # 面板 UI 规范（ui-guidelines）
 
-> 状态：现行（强制） ｜ 适用范围：`apps/web/src` 全部页面与后续 UI 改动 ｜ 最后核验：2026-11-08（节点状态词与失联标记） ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)、AGENTS.md §6.4
+> 状态：现行（强制） ｜ 适用范围：`apps/web/src` 全部页面与后续 UI 改动 ｜ 最后核验：2026-11-12（§8.12 自动探测预算与 ADR-0014 对齐） ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)、AGENTS.md §6.4
 > 日期：2026-11-02（初版）· 2026-11-05（规范补齐）· 2026-11-08（节点状态词）· 按页面类型归纳，逐页细节见 [page-specs.md](page-specs.md)。
 > 总原则：**一页一套范式**。看状态用状态带/指标，看明细用一张对象表，所有详情与操作都进全页唯一的右侧抽屉。
 > 轻量约束：只复用 `apps/web/src/ui/` 现有组件（Card / Table / Drawer / Dialog / ConfirmDialog / Banner / Badge / Button / Segmented / KeyValue / Stat / Field / CodeBlock / InlineError / EmptyState / Skeleton / Toast / Menu），**不引入任何重型组件库**（不加 antd/MUI/echarts/xterm 等），不做多层弹窗与重动效。
@@ -289,7 +289,7 @@
 - **禁用必须给原因**：`disabledReason`/`title` 或相邻说明，不能只置灰。能力未开放的动作（如服务重启）保持禁用并写明"能力尚未开放"。
 - **提交锁**：保存/应用/删除进行中按钮 loading 且不可再次点击；不允许乐观更新主机状态。
 - **焦点与键盘**：抽屉/确认框打开时焦点移入，Esc 关闭，关闭后焦点回到触发元素；Tab 不逃出浮层。
-- **不做自动写/探测**：打开页面只允许读取既有列表/快照；不自动 probe、apply、删除；探测与刷新必须由用户显式触发（概览只读节点与证书两份列表）。
+- **自动探测只读且有上限**：打开页面只允许读取既有列表/快照；不自动 apply、删除，不自动改写配置。概览与节点列表允许挂载时探测一次 `POST /nodes/probe`（15 秒内复用），发现离线节点时按 60/120/240 秒最多自动复核 3 次，全部在线或手动刷新即停；**每次打开最多 1 次探测 + 3 次复核**，不做常驻轮询（ADR-0014）。
 
 ### 8.13 响应式
 
