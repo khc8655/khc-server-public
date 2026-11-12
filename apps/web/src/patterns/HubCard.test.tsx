@@ -107,6 +107,49 @@ describe('HubCard（身份 → 可用性 → 承载 三层）', () => {
     expect(container.querySelectorAll('.ui-node-card-fact')).toHaveLength(0);
   });
 
+  it('离线且 apps 为空数组：全部按 D1 期望显示未读取，不出现「未安装」或告警色', () => {
+    const { container } = render(
+      <HubCard
+        hub={hub({
+          status: 'offline',
+          apps: [],
+          summary: { mode: 'wg', peers: 0, sites: { total: 0, disabled: 0 }, forwards: 0 },
+        })}
+        phase="done"
+        onOpen={() => {}}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('未安装');
+
+    const states = [...container.querySelectorAll('.ui-node-app-state')];
+    expect(states.map((node) => node.textContent)).toEqual(['未读取', '未读取', '未读取']);
+    for (const node of states) {
+      expect(node.className).toContain('ui-node-app-state--neutral');
+      expect(node.className).not.toContain('--warn');
+      expect(node.className).not.toContain('--ok');
+    }
+  });
+
+  it('应用配置行存在但计数为 0 时显示 0，不留空也不用 — 代替', () => {
+    const { container } = render(
+      <HubCard
+        hub={hub({
+          apps: reported,
+          summary: { mode: 'wg', peers: 0, sites: { total: 0, disabled: 0 }, forwards: 0 },
+        })}
+        phase="done"
+        onOpen={() => {}}
+      />,
+    );
+
+    const facts = [...container.querySelectorAll('.ui-node-card-fact')].map((node) => node.textContent);
+    expect(facts).toEqual(['Peer 0', '站点 0', '转发 0']);
+    expect(container.textContent).not.toContain('Peer —');
+    expect(container.textContent).not.toContain('站点 —');
+  });
+
   it('整卡可点，Enter 也能进入节点', () => {
     const onOpen = vi.fn();
     const { container } = render(<HubCard hub={hub({ apps: reported })} phase="done" onOpen={onOpen} />);
