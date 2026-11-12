@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Docs
+
+- 新增面板信息架构与 UI 重组提案 `docs/plans/ui-ia-redesign-2026-11-12.md` 及 ADR-0014 / 0017 / 0018（提议，未改产品代码）。
+
 ### Security
 
 - Agent 发布签名换钥（2026-11-11，方案 B）：旧 Ed25519 私钥按疑似泄露处理，新钥仅用于
