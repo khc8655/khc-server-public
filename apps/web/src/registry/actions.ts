@@ -526,6 +526,15 @@ export const actions = {
     form: 'confirm',
     audit: 'site.deleted',
   },
+  'site.copyAddress': {
+    object: 'site',
+    kind: 'read',
+    scope: 'hub',
+    parent: 'hub',
+    label: 'site.copyAddress',
+    form: 'none',
+    icon: 'copy',
+  },
   'site.enable': {
     object: 'site',
     kind: 'update',
@@ -765,6 +774,15 @@ export const actions = {
     form: 'confirm',
     audit: 'forward.deleted',
     icon: 'x',
+  },
+  'forward.copyCommand': {
+    object: 'forward',
+    kind: 'read',
+    scope: 'hub',
+    parent: 'hub',
+    label: 'forward.copyCommand',
+    form: 'none',
+    icon: 'copy',
   },
   'forward.toggle': {
     object: 'forward',

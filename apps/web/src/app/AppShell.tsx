@@ -123,6 +123,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
         active: Boolean(match) && !section && !match?.app,
       },
       {
+        key: 'services',
+        label: zh.nav.services,
+        href: paths.hubSection(hubId, 'services'),
+        icon: 'activity',
+        active: section === 'services',
+      },
+      {
         key: 'sites',
         label: zh.nav.sites,
         href: paths.hubSection(hubId, 'sites'),

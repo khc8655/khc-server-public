@@ -7,6 +7,7 @@ import { zh, fmt } from '../i18n/zh';
 import type { IconName } from '../ui/icons';
 
 const sectionIcon: Record<HubSection, IconName> = {
+  services: 'activity',
   wireguard: 'users',
   ops: 'activity',
   sites: 'globe',
