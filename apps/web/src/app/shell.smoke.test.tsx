@@ -124,7 +124,7 @@ describe('AppShell 与页面渲染', () => {
     await renderRoute('/');
     expect(await screen.findByText(PANEL_LABEL_TEXT)).toBeTruthy();
     expect((await screen.findAllByText('tyo-1')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('进入节点 →')).toBeTruthy();
+    expect(await screen.findByText('进入节点')).toBeTruthy();
   });
 
   it('概览页打开只发一次批量探测 + 既有两份列表', async () => {

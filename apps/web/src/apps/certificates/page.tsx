@@ -806,7 +806,7 @@ export default function CertificatesPage({
       {scopeHubId && scopeSites.length > 0 ? (
         <Card
           title={`本节点已发布域名 (${scopeSites.length})`}
-          action={<Link to={paths.hubSection(scopeHubId, 'sites')} label="管理 Caddy 站点 →" />}
+          action={<Link to={paths.hubSection(scopeHubId, 'sites')} label="管理 Caddy 站点" />}
         >
           <Stack gap={2}>
             {scopeSites.map((site) => {

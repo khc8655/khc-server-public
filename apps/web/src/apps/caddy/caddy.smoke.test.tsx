@@ -295,7 +295,7 @@ describe('站点页分段（ui-redesign ⑤）', () => {
     await renderRoute('/hubs/tyo-1/sites');
     await userEvent.click(await screen.findByRole('button', { name: '证书' }));
     expect((await screen.findAllByText('blog-cert')).length).toBeGreaterThan(0);
-    expect(screen.getByText('管理全局证书库 →')).toBeTruthy();
+    expect(screen.getByText('管理全局证书库')).toBeTruthy();
   });
 
   it('扩展应用分段过滤内置模块并展示空态', async () => {
