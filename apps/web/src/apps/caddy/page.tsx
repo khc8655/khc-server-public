@@ -6,7 +6,8 @@ import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
 import { hubAppsQueryOptions, hubQueryOptions } from '../../data/queries';
 import { certificatesQueryOptions } from '../../data/certs';
-import { wireGuardConfigQueryOptions } from '../../data/wireguard';
+import { wireGuardConfigQueryOptions, parseWireGuardStatus } from '../../data/wireguard';
+import { classifyBackend } from '../../data/services';
 import {
   CADDY_SITE_APP,
   DEFAULT_REDIRECT_CODE,
@@ -498,6 +499,45 @@ export default function SitesPage() {
     ? { reachable: true, error: null, status: parseCaddyStatus(liveState.adapters ?? []) }
     : null;
   const status = runtime?.status ?? null;
+  // 站点表「后端」列：只复用本页已拉取的 /state（WireGuard 运行态），零新增请求。
+  const wgRuntime = parseWireGuardStatus(liveState?.adapters);
+  const backendContext = {
+    wireguard: wgRuntime
+      ? {
+          installed: wgRuntime.installed,
+          peers: wgRuntime.peers.map((peer) => ({
+            name: peer.name,
+            allowedIps: peer.allowedIps,
+            online: peer.online,
+          })),
+        }
+      : undefined,
+  };
+  const backendText = (site: (typeof config.sites)[number]): string => {
+    if (site.kind !== 'proxy') return '—';
+    const upstreams = site.upstreams.length > 0 ? site.upstreams : site.upstream ? [site.upstream] : [];
+    const info = classifyBackend(upstreams[0] ?? '', backendContext, Math.max(0, upstreams.length - 1));
+    const suffix = info.extra > 0 ? ` +${info.extra}` : '';
+    switch (info.kind) {
+      case 'unix':
+        return zh.sites.backendUnix;
+      case 'local':
+        return `${zh.sites.backendLocal} ${info.target}${suffix}`;
+      case 'vm': {
+        const peer =
+          info.peerOnline === true
+            ? zh.sites.backendPeerOnline
+            : info.peerOnline === false
+              ? zh.sites.backendPeerOffline
+              : zh.sites.backendPeerUnknown;
+        return `${zh.sites.backendVm} ${info.peerName ?? ''} ${info.target} · ${peer}${suffix}`.replace(/\s+/g, ' ');
+      }
+      case 'internal':
+        return `${zh.sites.backendInternal} ${info.target}${suffix}`;
+      default:
+        return `${zh.sites.backendExternal} ${info.target}${suffix}`;
+    }
+  };
   const hubName = hubQuery.data?.name ?? hubId;
   // 以控制面探测结果为准：节点列表状态可能是旧缓存，不能单独判定离线。
   const nodeOffline = channels.presence === 'offline';
@@ -1410,6 +1450,13 @@ export default function SitesPage() {
       type: 'mono',
       header: zh.sites.colTarget,
       value: (row) => siteTarget(row.site),
+    },
+    {
+      key: 'backend',
+      type: 'mono',
+      header: zh.sites.colBackend,
+      value: (row) => backendText(row.site),
+      priority: 'low',
     },
     {
       key: 'tls',

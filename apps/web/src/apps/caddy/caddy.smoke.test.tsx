@@ -304,6 +304,12 @@ describe('站点页分段（ui-redesign ⑤）', () => {
     expect(await screen.findByText('还没有应用')).toBeTruthy();
   });
 
+  it('站点表新增「后端」列：WG 状态未读取时 10.x 归「内网（未登记）」', async () => {
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByText('后端')).toBeTruthy();
+    expect(await screen.findByText(/内网（未登记）\s*10\.99\.0\.2:8080/)).toBeTruthy();
+  });
+
   it('旧 /apps 暗路由 302 到站点页', async () => {
     const router = await renderRoute('/hubs/tyo-1/apps');
     expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);

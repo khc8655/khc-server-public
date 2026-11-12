@@ -1,0 +1,149 @@
+/**
+ * 对外服务 · 后端识别（page-specs §2.2a / ADR-0017）。
+ *
+ * **纯函数，不发请求、不读时钟、不依赖 React。** 输入只有站点的上游地址与
+ * `/state` 里 WireGuard 的运行态（已由页面拉取），输出「后端是谁、通不通」。
+ *
+ * 边界：
+ * - 端口转发**不参与**判定：它只是把端口映射出去，不代表站点后端；
+ * - WireGuard 未安装（`installed === false`）时，10.x 等私网地址一律归「外部」；
+ * - 只有拿不到 WireGuard 状态（`undefined`）时，私网地址才归「内网（未登记）」，
+ *   不猜测 Peer；
+ * - 多上游只识别第一个，其余以 `extra` 计数。
+ */
+
+export type BackendKind = 'local' | 'vm' | 'internal' | 'external' | 'unix';
+
+export interface BackendPeerInput {
+  name: string;
+  allowedIps: readonly string[];
+  online?: boolean | null;
+}
+
+export interface BackendContext {
+  /** `/state` 的 wireguard 适配器；`undefined` = 状态未读取。 */
+  wireguard?: { installed: boolean; peers: readonly BackendPeerInput[] } | null;
+}
+
+export interface BackendInfo {
+  kind: BackendKind;
+  /** 去 scheme/路径后的 `host:port`（unix 套接字为原值）。 */
+  target: string;
+  host: string;
+  port: string | null;
+  peerName?: string;
+  peerOnline?: boolean | null;
+  /** 同站点其它上游的数量（pathRoutes / 多 upstreams）。 */
+  extra: number;
+}
+
+/** 本机回环（含 IPv6 方括号）。 */
+function isLoopback(host: string): boolean {
+  const value = host.toLowerCase();
+  return (
+    value === 'localhost' ||
+    value === '::1' ||
+    value === '[::1]' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value)
+  );
+}
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  const nums = parts.map((part) => (/^\d{1,3}$/.test(part) ? Number(part) : NaN));
+  if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
+  const [a, b, c, d] = nums;
+  if (a === undefined || b === undefined || c === undefined || d === undefined) return null;
+  return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
+}
+
+/** IPv4 是否在 `addr/prefix` 内；非 IPv4 或非法 CIDR 返回 false。 */
+export function ipv4InCidr(ip: string, cidr: string): boolean {
+  const parts = cidr.trim().split('/');
+  const base = parts[0] ?? '';
+  const prefix = parts[1] === undefined ? 32 : Number(parts[1]);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+  const value = ipv4ToInt(ip);
+  const start = ipv4ToInt(base);
+  if (value === null || start === null) return false;
+  if (prefix === 0) return true;
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  return (value & mask) >>> 0 === (start & mask) >>> 0;
+}
+
+/** RFC1918 + IPv6 ULA（fc00::/7）。 */
+function isPrivate(host: string): boolean {
+  const value = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (/^fc|^fd/.test(value) && value.includes(':')) return true;
+  return (
+    ipv4InCidr(value, '10.0.0.0/8') ||
+    ipv4InCidr(value, '172.16.0.0/12') ||
+    ipv4InCidr(value, '192.168.0.0/16')
+  );
+}
+
+function parseUpstream(raw: string): { unix: boolean; target: string; host: string; port: string | null } {
+  let value = raw.trim();
+  if (value.startsWith('unix//') || value.startsWith('unix:')) {
+    return { unix: true, target: value, host: '', port: null };
+  }
+  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const slash = value.indexOf('/');
+  if (slash >= 0) value = value.slice(0, slash);
+
+  // [IPv6]:port
+  const v6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(value);
+  if (v6) return { unix: false, target: value, host: v6[1] ?? '', port: v6[2] ?? null };
+
+  const idx = value.lastIndexOf(':');
+  // 裸 IPv6（无方括号）没有端口概念：冒号多于 1 个时整串当 host。
+  if (idx > 0 && value.indexOf(':') === idx) {
+    return { unix: false, target: value, host: value.slice(0, idx), port: value.slice(idx + 1) };
+  }
+  return { unix: false, target: value, host: value, port: null };
+}
+
+function matchPeer(host: string, peers: readonly BackendPeerInput[]): BackendPeerInput | undefined {
+  const value = host.toLowerCase();
+  return peers.find((peer) =>
+    peer.allowedIps.some((cidr) => {
+      const parts = cidr.trim().split('/');
+      const base = (parts[0] ?? '').toLowerCase();
+      const prefix = parts[1];
+      if (prefix === undefined || prefix === '32' || prefix === '128') {
+        return base === value;
+      }
+      return ipv4InCidr(value, cidr);
+    }),
+  );
+}
+
+/**
+ * 识别站点后端的归属。
+ *
+ * @param raw 站点的第一个上游（`host:port` / `scheme://host:port` / `unix//path`）
+ * @param ctx `undefined` 或 `wireguard` 缺失 = 状态未读取；`installed === false` = 未安装
+ * @param extra 额外上游/pathRoutes 数量
+ */
+export function classifyBackend(raw: string, ctx: BackendContext, extra = 0): BackendInfo {
+  const parsed = parseUpstream(raw);
+  const base = { target: parsed.target, host: parsed.host, port: parsed.port, extra };
+  if (parsed.unix) return { ...base, kind: 'unix' };
+  if (isLoopback(parsed.host)) return { ...base, kind: 'local' };
+
+  const wg = ctx.wireguard;
+  if (!wg) {
+    // 状态未读取：只能按地址形态给出中性判断，不猜 Peer。
+    return { ...base, kind: isPrivate(parsed.host) ? 'internal' : 'external' };
+  }
+  if (!wg.installed) {
+    // WireGuard 未安装：私网地址没有可达路径，按「外部」显示。
+    return { ...base, kind: 'external' };
+  }
+  const peer = matchPeer(parsed.host, wg.peers);
+  if (peer) {
+    return { ...base, kind: 'vm', peerName: peer.name, peerOnline: peer.online ?? null };
+  }
+  return { ...base, kind: isPrivate(parsed.host) ? 'internal' : 'external' };
+}
