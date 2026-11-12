@@ -650,6 +650,28 @@
   min-width: 0;
 }
 
+/* 窄屏补充文案：≥1024 隐藏（用独立列），<1024 并入名称列第二段。 */
+.ui-cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ui-cell-narrow {
+  display: none;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1023px) {
+  .ui-cell-narrow {
+    display: block;
+  }
+}
+
 .ui-cell-name {
   font-weight: var(--fw-medium);
   min-width: 0;

@@ -177,14 +177,17 @@ export default function HubOverviewPage() {
   };
 
   // 单徽标口径：待生效（配置未应用）> 运行中 / 未运行 > 未读取；不叠「已安装 + 运行中」。
-  const appBadge = (dirty: boolean, running?: boolean) =>
-    dirty
-      ? { tone: 'warn' as const, label: zh.hub.appPending }
-      : running === true
-        ? { tone: 'ok' as const, label: zh.hub.appRunning }
-        : running === false
-          ? { tone: 'warn' as const, label: zh.hub.appStopped }
-          : { tone: 'neutral' as const, label: zh.hub.appUnknown };
+  // 未安装（installed === false）显示中性「未安装」；只有拿不到状态才是「未读取」。
+  const appBadge = (dirty: boolean, status?: { installed?: boolean | null; running?: boolean | null }) =>
+    status?.installed === false
+      ? { tone: 'neutral' as const, label: zh.hub.appNotInstalled }
+      : dirty
+        ? { tone: 'warn' as const, label: zh.hub.appPending }
+        : status?.running === true
+          ? { tone: 'ok' as const, label: zh.hub.appRunning }
+          : status?.running === false
+            ? { tone: 'warn' as const, label: zh.hub.appStopped }
+            : { tone: 'neutral' as const, label: zh.hub.appUnknown };
 
   const wgDirty = (wgQuery.data?.rev ?? 0) > (wgQuery.data?.appliedRev ?? 0);
   const sitesDirty = (sitesQuery.data?.rev ?? 0) > (sitesQuery.data?.appliedRev ?? 0);
@@ -200,9 +203,6 @@ export default function HubOverviewPage() {
   const caddyConfigured = sitesQuery.data?.exists === true;
   const pfConfigured = forwardQuery.data?.exists === true;
   const wgReady = peerEnabled;
-  // 未安装（installed === false）不把「未运行」当告警，回落「未读取」。
-  const runningOf = (status?: { installed?: boolean | null; running?: boolean | null }) =>
-    status?.installed === false ? undefined : (status?.running ?? undefined);
 
   // 站点类型分布（反代/静态/跳转计数）；停用才追加注记。
   const siteKindSummary =
@@ -242,7 +242,7 @@ export default function HubOverviewPage() {
             key: 'wireguard',
             name: zh.hub.appWireguard,
             icon: 'users' as const,
-            badge: appBadge(wgDirty, runningOf(wgStatus)),
+            badge: appBadge(wgDirty, wgStatus),
             facts: (
               <>
                 {wgInterface ? (
@@ -263,7 +263,7 @@ export default function HubOverviewPage() {
             key: 'caddy',
             name: zh.hub.appCaddy,
             icon: 'globe' as const,
-            badge: appBadge(sitesDirty, runningOf(caddyStatus)),
+            badge: appBadge(sitesDirty, caddyStatus),
             facts: firstSite ? (
               <>
                 <span className="mono">{firstSite.domain}</span>
@@ -286,7 +286,7 @@ export default function HubOverviewPage() {
             key: 'port-forward',
             name: zh.hub.appPortForward,
             icon: 'arrow' as const,
-            badge: appBadge(forwardDirty, runningOf(pfStatus)),
+            badge: appBadge(forwardDirty, pfStatus),
             facts: firstForward ? (
               <>
                 <span className="mono">

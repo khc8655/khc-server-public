@@ -232,15 +232,22 @@ describe('节点概况页 · 应用与发布', () => {
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
   });
 
-  it('D1 声明 WG、节点未安装：不告警，行仍按 D1 展示，状态中性「未读取」', async () => {
+  it('Agent 明确 installed=false：显示中性「未安装」，不是「未读取」', async () => {
     wgInstalled = false;
     await renderOverview();
 
-    await waitFor(() => expect(screen.getAllByText('未读取').length).toBeGreaterThan(0));
-    expect(screen.queryByText('未安装 / 未生效')).toBeNull();
-    expect(screen.queryByText(/未安装/)).toBeNull();
+    await waitFor(() => expect(screen.getAllByText('未安装').length).toBeGreaterThan(0));
+    expect(screen.queryByText('未读取')).toBeNull();
     // 模式徽标只看 D1 期望配置，离线/未装也可见
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
+  });
+
+  it('拿不到 /state：显示「未读取」，不冒充「未安装」', async () => {
+    stateOk = false;
+    await renderOverview();
+
+    await waitFor(() => expect(screen.getAllByText('未读取').length).toBeGreaterThanOrEqual(3));
+    expect(screen.queryByText('未安装')).toBeNull();
   });
 
   it('Caddy 有配置行但 0 站点：行不消失，显示「0 个站点」，不出现「暂无站点 / 未纳管」', async () => {

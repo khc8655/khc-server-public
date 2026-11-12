@@ -304,6 +304,21 @@ describe('站点页分段（ui-redesign ⑤）', () => {
     expect(await screen.findByText('还没有应用')).toBeTruthy();
   });
 
+  it('站点表后端列：宽屏独立列，窄屏并入名称列第二段（390 不丢项）', async () => {
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByText('后端')).toBeTruthy();
+    const matches = await screen.findAllByText(/内网（未登记）\s*10\.99\.0\.2:8080/);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+
+    const narrow = document.querySelector('.ui-cell-narrow');
+    expect(narrow?.textContent).toContain('内网（未登记）');
+    expect(narrow?.textContent).toContain('10.99.0.2:8080');
+
+    window.innerWidth = 390;
+    window.dispatchEvent(new Event('resize'));
+    expect(document.querySelector('.ui-cell-narrow')?.textContent).toContain('内网（未登记）');
+  });
+
   it('旧 /apps 暗路由 302 到站点页', async () => {
     const router = await renderRoute('/hubs/tyo-1/apps');
     expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
