@@ -342,6 +342,8 @@ export const zh = {
     summarySites: '站点',
     summaryForwards: '转发',
     summaryDisabled: '{count} 停用',
+    cardApps: '应用',
+    cardLastSeen: '最后在线 {time}',
   },
 
   hubs: {
