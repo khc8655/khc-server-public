@@ -1431,8 +1431,11 @@ class WireGuard(Adapter):
             )
         # peer 数期望兼容轮换覆盖（内核 conf 不含覆盖、轮换流程写入覆盖）：
         # 与配置数或覆盖数任一匹配即通过；数量少于两者 = 部分 peer 未生效。
-        overlayed = self._overlay_rotations(ctx, interface, peers)
-        candidates = {len(peers), len(overlayed)}
+        # 只统计 enabled peer：build_conf 会跳过 disabled（停用 Peer 后内核里
+        # 本来就没有它，按全部 peer 计数会误判为"部分未生效"并回滚）。
+        enabled_peers = [peer for peer in peers if bool(peer.get("enabled", True))]
+        overlayed = self._overlay_rotations(ctx, interface, enabled_peers)
+        candidates = {len(enabled_peers), len(overlayed)}
         show = ctx.run(["wg", "show", name, "peers"], check=False)
         if show.rc != 0:
             raise CommandFailed(

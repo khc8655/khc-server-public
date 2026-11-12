@@ -46,6 +46,10 @@ MAX_NOTE_LENGTH = 128
 MAX_HOST_LENGTH = 255
 PROTOCOLS = ("tcp", "udp")
 ACTIVE_STATES = ("active", "activating", "reloading")
+# 面板与 Agent 自身占用的端口：转发监听这些端口会顶掉 SSH/控制面/Caddy，
+# 或形成 8880 → 127.0.0.1:8880 这类自环转发。Agent 端口可被 KHC_PORT 覆盖，
+# 运行时再按环境补进来（见 reserved_listen_ports）。
+RESERVED_LISTEN_PORTS = frozenset({22, 80, 443, 8880, 8899})
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 UNIT_RE = re.compile(r"^khc-forward-[A-Za-z0-9_-]{1,32}\.service$")
@@ -148,6 +152,35 @@ def normalize_listen_host(value: Any, field: str = "listenHost") -> str:
     return address.compressed
 
 
+def reserved_listen_ports() -> set[int]:
+    """保留监听端口：静态名单 + 本次运行的 Agent API/观测端口（KHC_PORT/KHC_LIVE_PORT）。"""
+
+    ports = set(RESERVED_LISTEN_PORTS)
+    for env, default in (("KHC_PORT", 8880), ("KHC_LIVE_PORT", 8899)):
+        raw = _text(os.environ.get(env))
+        try:
+            ports.add(int(raw) if raw else default)
+        except ValueError:
+            ports.add(default)
+    return ports
+
+
+def _host_is_local(host: str, listen_host: str) -> bool:
+    """目标是否指向本机（回环/未指定地址，或与监听地址相同）。"""
+
+    candidate = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_loopback or address.is_unspecified):
+        return True
+    lowered = candidate.lower()
+    if lowered in ("localhost", "localhost."):
+        return True
+    return lowered == listen_host.lower()
+
+
 def normalize_forward(raw: Any, index: int) -> dict[str, Any]:
     """单条转发的规范化 + 校验。"""
 
@@ -171,6 +204,23 @@ def normalize_forward(raw: Any, index: int) -> dict[str, Any]:
     target_port = _require_port(raw.get("targetPort"), f"{label}.targetPort")
     target_host = normalize_target_host(raw.get("targetHost"), f"{label}.targetHost")
     listen_host = normalize_listen_host(raw.get("listenHost"), f"{label}.listenHost")
+    if listen_port in reserved_listen_ports():
+        raise ValidationFailed(
+            f"{label}.listenPort 是保留端口（SSH/Agent/Caddy 占用）: {listen_port}",
+            details={"field": f"{label}.listenPort", "value": listen_port},
+        )
+    if listen_port == target_port and _host_is_local(target_host, listen_host):
+        raise ValidationFailed(
+            f"{label} 会把端口转发到本机同一端口，形成自环: "
+            f"{listen_host}:{listen_port} -> {target_host}:{target_port}",
+            details={
+                "field": label,
+                "listenHost": listen_host,
+                "listenPort": listen_port,
+                "targetHost": target_host,
+                "targetPort": target_port,
+            },
+        )
     enabled_raw = raw.get("enabled", True)
     if not isinstance(enabled_raw, bool):
         raise ValidationFailed(f"{label}.enabled 必须是布尔值", details={"field": f"{label}.enabled"})

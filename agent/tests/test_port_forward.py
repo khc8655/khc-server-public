@@ -282,6 +282,36 @@ class NormalizeTests(AdapterTestBase):
         with self.assertRaises(ValidationFailed):
             normalize_forward(forward(protocol="icmp"), 0)
 
+    def test_reserved_listen_port_rejected(self) -> None:
+        # SSH/Caddy/Agent 自身端口不允许被转发监听顶掉。
+        for port in (22, 80, 443, 8880, 8899):
+            with self.assertRaises(ValidationFailed, msg=str(port)) as caught:
+                normalize_forward(forward(listenPort=port), 0)
+            self.assertIn("保留端口", caught.exception.message)
+
+    def test_self_loop_forward_rejected(self) -> None:
+        # 监听 8880 再转发到 127.0.0.1:8880 会自己连自己，必须拒绝。
+        with self.assertRaises(ValidationFailed) as caught:
+            normalize_forward(
+                forward(listenPort=7001, targetHost="127.0.0.1", targetPort=7001),
+                0,
+            )
+        self.assertIn("自环", caught.exception.message)
+        with self.assertRaises(ValidationFailed):
+            normalize_forward(
+                forward(listenHost="127.0.0.1", listenPort=7001, targetHost="127.0.0.1", targetPort=7001),
+                0,
+            )
+
+    def test_same_port_to_remote_peer_allowed(self) -> None:
+        # 同一端口号转发到远端 Peer 是正常用法（如 7001 -> 10.99.0.2:7001）。
+        normalized = normalize_forward(
+            forward(listenPort=7001, targetHost="10.99.0.2", targetPort=7001),
+            0,
+        )
+        self.assertEqual(normalized["targetHost"], "10.99.0.2")
+        self.assertEqual(normalized["targetPort"], 7001)
+
     def test_duplicate_name_conflict(self) -> None:
         with self.assertRaises(ValidationFailed) as caught:
             normalize_forwards({"forwards": [forward(), forward(listenPort=7002)]})

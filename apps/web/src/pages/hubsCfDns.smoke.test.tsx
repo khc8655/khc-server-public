@@ -329,13 +329,36 @@ describe('添加节点：统一接入表单', () => {
       allowInsecure: true,
     });
 
-    // DNS 代建：IP 节点创建后自动调用代建端点（域名模式不调用，见上一个用例）。
+    // 默认「不自动创建」：IP 节点创建后不得调用 DNS 代建端点。
+    expect(
+      requests.some(
+        (item) => item.url.startsWith('/api/v1/cf-dns/records') && item.init?.method === 'POST',
+      ),
+    ).toBe(false);
+  });
+
+  it('IP 直连：显式选择 Zone 后才代建 DNS，payload 带 zoneId', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: 'IP 直连' }));
+    await userEvent.type(screen.getByLabelText('主机 / IP'), '198.51.100.20');
+    await userEvent.click(screen.getByRole('checkbox', { name: /我确认这是明文 HTTP/ }));
+    await userEvent.selectOptions(
+      await screen.findByLabelText('自动创建 DNS 记录（可选）'),
+      'z1',
+    );
+    await submitCreate();
+
+    await screen.findByText('节点已创建');
     await waitFor(() => {
       const dns = requests.find(
         (item) => item.url === '/api/v1/cf-dns/records' && item.init?.method === 'POST',
       );
       expect(dns).toBeTruthy();
-      expect(JSON.parse(String(dns?.init?.body))).toEqual({ nodeId: 'node-9' });
+      expect(JSON.parse(String(dns?.init?.body))).toEqual({ nodeId: 'node-9', zoneId: 'z1' });
     });
   });
 

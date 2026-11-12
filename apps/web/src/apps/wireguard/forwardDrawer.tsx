@@ -117,6 +117,18 @@ export function forwardStatusBadge(
   return { tone: 'neutral', label: zh.forwards.statusPending };
 }
 
+/** 与 Agent 适配器保持一致：SSH/Caddy/Agent 自身端口不允许被转发监听占用。 */
+const RESERVED_LISTEN_PORTS = new Set([22, 80, 443, 8880, 8899]);
+
+/** 目标是否指向本机（与后端 _host_is_local 同口径）。 */
+function isLocalForwardTarget(targetHost: string, listenHost: string): boolean {
+  const host = targetHost.trim().replace(/^\[(.*)\]$/, '$1').toLowerCase();
+  if (host === 'localhost' || host === 'localhost.') return true;
+  if (host === '0.0.0.0' || host === '::') return true;
+  if (/^127\./.test(host) || host === '::1') return true;
+  return host === listenHost.trim().replace(/^\[(.*)\]$/, '$1').toLowerCase();
+}
+
 export function validateForward(form: ForwardFormState, config: ForwardConfig): ForwardErrors {
   const next: ForwardErrors = {};
   const name = form.name.trim();
@@ -131,6 +143,8 @@ export function validateForward(form: ForwardFormState, config: ForwardConfig): 
     form.listenPort > 65535
   ) {
     next.listenPort = zh.forwards.invalidListenPort;
+  } else if (RESERVED_LISTEN_PORTS.has(form.listenPort)) {
+    next.listenPort = zh.forwards.reservedListen;
   }
   const listenHost = form.listenHost.trim();
   if (!/^[0-9a-fA-F:.]+$/.test(listenHost)) next.listenHost = zh.forwards.invalidListenHost;
@@ -143,6 +157,14 @@ export function validateForward(form: ForwardFormState, config: ForwardConfig): 
     form.targetPort > 65535
   ) {
     next.targetPort = zh.forwards.invalidTargetPort;
+  }
+  if (
+    !next.targetPort &&
+    form.listenPort !== null &&
+    form.targetPort === form.listenPort &&
+    isLocalForwardTarget(targetHost, listenHost)
+  ) {
+    next.targetPort = zh.forwards.selfLoop;
   }
   const duplicate = config.forwards.some(
     (item) =>

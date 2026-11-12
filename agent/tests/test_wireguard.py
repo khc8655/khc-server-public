@@ -1014,6 +1014,35 @@ class ApplyVerifyTests(WireGuardTestBase):
         self.assertTrue(retry["ok"], retry)
         self.assertEqual(self.kernel.store.applied_rev("wireguard"), 1)
 
+    def test_apply_disabling_only_peer_passes_verification(self) -> None:
+        # 停用唯一 Peer 后内核里没有 peer：校验必须按 enabled 计数，不能把
+        # 被 build_conf 跳过的 disabled peer 算作"期望存在"，否则 apply 误失败并回滚。
+        self.apply(rev=1)
+        disabled = self.config(
+            peers=[{"name": "phone", "allowedIps": ["10.99.0.2/32"], "keepalive": 25, "enabled": False}]
+        )
+        result = self.apply(disabled, rev=2)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.runner.kernel_peers.get("wg0", []), [])
+
+    def test_apply_disabling_one_of_two_peers_passes_verification(self) -> None:
+        both = self.config(
+            peers=[
+                {"name": "phone", "allowedIps": ["10.99.0.2/32"], "keepalive": 25},
+                {"name": "laptop", "allowedIps": ["10.99.0.3/32"], "keepalive": 25},
+            ]
+        )
+        self.apply(both, rev=1)
+        one_disabled = self.config(
+            peers=[
+                {"name": "phone", "allowedIps": ["10.99.0.2/32"], "keepalive": 25},
+                {"name": "laptop", "allowedIps": ["10.99.0.3/32"], "keepalive": 25, "enabled": False},
+            ]
+        )
+        result = self.apply(one_disabled, rev=2)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(self.runner.kernel_peers.get("wg0", [])), 1)
+
     def test_apply_wg_show_failure_reports_actionable_error(self) -> None:
         from khc.util import ApplyFailed
 

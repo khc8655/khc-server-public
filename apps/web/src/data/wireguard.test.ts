@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WG_INTERFACE,
+  isValidCidr,
   migrationPeer,
   normalizeWgConfig,
   uniquePeerName,
@@ -24,6 +25,28 @@ function peer(overrides: Partial<WgPeer> = {}): WgPeer {
 function config(peers: WgPeer[] = []): WgConfig {
   return { interface: { ...DEFAULT_WG_INTERFACE }, peers };
 }
+
+describe('allowedIps 地址校验', () => {
+  it('接受合法 IPv4/IPv6 与 CIDR', () => {
+    for (const value of [
+      '10.99.0.2/32',
+      '10.99.0.2',
+      '172.16.0.0/12',
+      'fd00::2/128',
+      'fd00::2',
+      '::1',
+      '::ffff:10.0.0.1',
+    ]) {
+      expect(isValidCidr(value), value).toBe(true);
+    }
+  });
+
+  it('拒绝只有十六进制字符的伪地址与越界前缀', () => {
+    for (const value of ['abc', 'deadbeef', '10.99.0.2/33', 'fd00::2/129', '10.99.0.256/32', '1.2.3/24', '10.99.0.2/']) {
+      expect(isValidCidr(value), value).toBe(false);
+    }
+  });
+});
 
 describe('wireguard 数据层', () => {
   it('新配置的接口名默认固定为 khc0', () => {

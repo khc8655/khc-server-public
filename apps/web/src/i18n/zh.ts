@@ -1724,6 +1724,8 @@ export const zh = {
     invalidName: '名称格式不正确（字母/数字/下划线/中划线，1–32 位）',
     duplicateName: '名称已被其他规则使用',
     invalidListenPort: '监听端口需要 1–65535',
+    reservedListen: '该端口被 SSH、Caddy 或 Agent 占用，不能用于转发监听',
+    selfLoop: '目标端口与本机监听端口相同，会形成自环转发，请更换端口或目标地址',
     invalidTargetPort: '目标端口需要 1–65535',
     invalidTargetHost: '目标主机格式不正确',
     duplicateListen: '协议与监听端口已被其他规则占用',
