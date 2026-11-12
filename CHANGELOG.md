@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-11-12
+
+### Added
+
+- 节点新增「对外服务」页（`/hubs/:id/services`，类型 B）：网页服务（caddy-site proxy）与远程访问
+  （port-forward）两张表；复用站点/转发抽屉，行点击开既有抽屉，行内最多两个按钮。
+- 状态口径：未生效（rev）/ 未读取（无 `/state`）/ 未安装（`installed === false`）/ 后端或目标不可达
+  （Peer 离线）/ 正常或可连接；未生效时状态列右侧直接给 [生效]（L2 确认）。
+- 390：列表行三段（名称+状态 / 对外地址 / 后端），后端信息不丢项，无横向滚动；空态与底部
+  「另有 N 个跳转/静态站点」提示。
+
+### Changed
+
+- 站点抽屉与端口转发抽屉抽为共享组件（`caddy/SiteDrawer` + `caddy/siteForm`、
+  `wireguard/forwardDrawer`），站点页与内网穿透页行为不变。
+- 表格组件支持自定义状态单元格与窄屏第三段（`render` + `narrow` 独立一行）。
+
+### Notes
+
+- 零新增请求：本页仅复用既有 caddy-site / port-forward / wireguard 查询与已拉取的 `/state`；
+  证书查询只在打开站点抽屉时按需加载。
+
 ## [0.10.4] - 2026-11-12
 
 ### Fixed

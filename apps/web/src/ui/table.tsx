@@ -27,11 +27,12 @@ export interface ColumnDef<T> {
   status?: (row: T) => { tone: Tone; label: string };
   /** sync 列的同步状态 */
   sync?: (row: T) => SyncStatusProps;
-  /**
-   * 窄屏补充文案：<1024 时并入名称列第二段（低优先列被隐藏时信息不丢）。
+  /** 窄屏补充文案：<1024 时并入名称列第二段（低优先列被隐藏时信息不丢）。
    * 与 `priority: 'low'` 配合：宽屏用独立列，窄屏用这里。
    */
   narrow?: (row: T) => string | null | undefined;
+  /** 自定义单元格内容（如状态列右侧的行内动作）；返回后忽略列类型默认渲染。 */
+  render?: (row: T) => ReactNode;
   priority?: 'high' | 'low';
 }
 
@@ -310,8 +311,8 @@ function MobileRow<T>({
     })
     .join(' · ');
   const narrow = nameColumn?.narrow?.(row);
-  const metaWithNarrow = [meta, narrow].filter(Boolean).join(' · ');
   const status = statusColumn?.status?.(row);
+  const statusNode = statusColumn?.render?.(row) ?? (status ? <Badge tone={status.tone} label={status.label} /> : null);
   const dot = nameColumn?.dot?.(row);
 
   return (
@@ -336,10 +337,11 @@ function MobileRow<T>({
           {dot ? <span className={`ui-dot ui-dot-${dot}`} aria-hidden="true" /> : null}
           <Truncate text={String(nameColumn?.value?.(row) ?? '—')} />
         </div>
-        <div className="ui-list-meta">{metaWithNarrow || '—'}</div>
+        <div className="ui-list-meta">{meta || '—'}</div>
+        {narrow ? <div className="ui-list-meta ui-list-meta-narrow">{narrow}</div> : null}
       </div>
       <div className="ui-list-side">
-        {status ? <Badge tone={status.tone} label={status.label} /> : null}
+        {statusNode}
         {actions.length > 0 ? (
           <span onClick={(event) => event.stopPropagation()}>
             <MenuButton
@@ -398,6 +400,7 @@ function Cell<T>({
   onRowAction?: (action: ActionRef, row: T) => void;
   rowActionDisabled?: (action: ActionRef, row: T) => string | null | undefined;
 }) {
+  if (column.render) return <>{column.render(row)}</>;
   switch (column.type) {
     case 'name': {
       const dot = column.dot?.(row);

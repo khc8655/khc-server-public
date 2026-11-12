@@ -18,6 +18,7 @@ import HubOpsPage from '../pages/HubOpsPage';
 import AppPage from '../pages/AppPage';
 import WireGuardPage from '../apps/wireguard/page';
 import SitesPage from '../apps/caddy/page';
+import HubServicesPage from '../apps/services/page';
 import SettingsPage from '../pages/SettingsPage';
 import HubSettingsPage from '../apps/node-settings/page';
 import { NotFoundPage } from '../pages/GlobalPages';
@@ -146,6 +147,13 @@ const hubSitesRoute = createRoute({
   }),
 });
 
+const hubServicesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/hubs/$hubId/services',
+  component: HubServicesPage,
+  beforeLoad: requireSession,
+});
+
 const hubForwardsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/hubs/$hubId/forwards',
@@ -212,6 +220,7 @@ const routeTree = rootRoute.addChildren([
   hubPeersRoute,
   hubOpsRoute,
   hubSitesRoute,
+  hubServicesRoute,
   hubForwardsRoute,
   hubCertsRoute,
   hubSettingsRoute,

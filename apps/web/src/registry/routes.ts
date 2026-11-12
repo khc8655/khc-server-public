@@ -23,6 +23,7 @@ export const routes = [
   { path: '/', scope: 'global', template: 'T1', title: 'overview' },
   { path: '/hubs', scope: 'global', template: 'T2', title: 'hubs', primary: 'hub.create' },
   { path: '/hubs/:hubId', scope: 'hub', template: 'T1', title: 'hubOverview' },
+  { path: '/hubs/:hubId/services', scope: 'hub', template: 'T2', title: 'services' },
   { path: '/hubs/:hubId/wireguard', scope: 'hub', template: 'T2', title: 'wireguard', primary: 'peer.create' },
   { path: '/hubs/:hubId/ops', scope: 'hub', template: 'T2', title: 'ops' },
   { path: '/hubs/:hubId/sites', scope: 'hub', template: 'T2', title: 'sites' },
@@ -32,12 +33,14 @@ export const routes = [
 ] as const;
 
 export type HubSection =
+  | 'services'
   | 'wireguard'
   | 'ops'
   | 'sites'
   | 'settings';
 
 export const hubSections: readonly HubSection[] = [
+  'services',
   'wireguard',
   'ops',
   'sites',
@@ -45,6 +48,7 @@ export const hubSections: readonly HubSection[] = [
 ];
 
 export const sectionTitleKey: Record<HubSection, keyof typeof zh.nav> = {
+  services: 'services',
   wireguard: 'wireguard',
   ops: 'ops',
   sites: 'sites',
@@ -112,9 +116,10 @@ export const globalNav = [
   { key: 'settings', path: '/settings', icon: 'settings' },
 ] as const;
 
-/** 节点层一级导航（压平，无二级）：概况 / 站点 / 内网穿透 / 主机运维 / 节点设置。 */
+/** 节点层一级导航（压平，无二级）：概况 / 对外服务 / 站点 / 内网穿透 / 主机运维 / 节点设置。 */
 export const hubNav = [
   { key: 'hubOverview', section: null, icon: 'home' },
+  { key: 'services', section: 'services', icon: 'activity' },
   { key: 'sites', section: 'sites', icon: 'globe' },
   { key: 'wireguard', section: 'wireguard', icon: 'users' },
   { key: 'ops', section: 'ops', icon: 'terminal' },
