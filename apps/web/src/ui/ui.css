@@ -73,7 +73,7 @@
 .ui-btn-primary {
   background: var(--accent-solid);
   border-color: var(--accent-solid);
-  color: var(--text-on-accent);
+  color: var(--bg);
 }
 
 .ui-btn-primary:hover:not(:disabled) {
@@ -154,9 +154,11 @@
 /* ============================== 链接 ============================== */
 
 .ui-link {
-  color: var(--accent);
+  color: var(--text);
   font-size: var(--fs-md);
   cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .ui-link:hover {
@@ -172,6 +174,11 @@
 .ui-link-muted {
   color: var(--text-2);
   font-size: var(--fs-sm);
+  text-decoration: none;
+}
+
+.ui-link-muted:hover {
+  text-decoration: underline;
 }
 
 /* ============================== 状态 ============================== */
@@ -208,10 +215,10 @@
   display: inline-flex;
   align-items: center;
   gap: var(--s15);
-  height: 22px;
-  padding: 0 var(--s2);
-  border-radius: var(--r-pill);
-  background: var(--neutral-soft);
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-2);
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
@@ -224,20 +231,20 @@
 }
 
 .ui-badge-ok {
-  background: var(--ok-soft);
+  background: transparent;
   color: var(--ok);
 }
 .ui-badge-warn {
-  background: var(--warn-soft);
+  background: transparent;
   color: var(--warn);
 }
 .ui-badge-danger {
-  background: var(--danger-soft);
+  background: transparent;
   color: var(--danger);
 }
 .ui-badge-info {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: transparent;
+  color: var(--text-2);
 }
 
 .ui-sync {
@@ -1136,6 +1143,7 @@
 
 .ui-toggle.is-on .ui-toggle-knob {
   left: 16px;
+  background: var(--bg);
 }
 
 .ui-checkbox {
@@ -1162,7 +1170,7 @@
   margin-top: var(--s05);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-xs);
-  color: var(--text-on-accent);
+  color: var(--bg);
   flex: none;
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }

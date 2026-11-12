@@ -394,7 +394,7 @@ export default function HubOverviewPage() {
   const hostCard = (
     <Card
       title={zh.hub.hostCardTitle}
-      action={<Link to={paths.hubSection(hubId, 'ops')} label="主机运维 →" />}
+      action={<Link to={paths.hubSection(hubId, 'ops')} label="主机运维" />}
     >
       <Stack gap={2}>
         <Row justify="between" gap={3} wrap>

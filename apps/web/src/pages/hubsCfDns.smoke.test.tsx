@@ -174,7 +174,7 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Tunnel' }));
 
     expect(await screen.findByText('还没有隧道配置')).toBeTruthy();
-    const link = screen.getByRole('link', { name: '去设置添加隧道 →' });
+    const link = screen.getByRole('link', { name: '去设置添加隧道' });
     expect(link.getAttribute('href')).toBe('/settings?tab=tunnels');
     expect(
       (within(screen.getByRole('dialog')).getByRole('button', { name: '添加节点' }) as
