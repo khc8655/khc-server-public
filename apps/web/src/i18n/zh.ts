@@ -175,6 +175,7 @@ export const zh = {
     'agent.installCommand': '安装 Agent',
     'agent.upgradeCommand': '升级 Agent',
     'agent.remoteUpgrade': '远程升级',
+    'agent.rollback': '回滚 Agent',
     'agent.uninstallCommand': '卸载 Agent',
     'node.mode.open': '切换模式',
     'node.mode.switch': '确认切换',
@@ -2026,6 +2027,15 @@ export const zh = {
       '升级指令已下发：Agent 正在拉取并自重启，连接会短暂中断；请稍后刷新页面查看版本。',
     remoteUpgradeNoRelease: '发布清单为空，无法远程升级；请先发布 Agent 包。',
     remoteUpgradeFailed: '远程升级下发失败',
+    rollback: '回滚到上一版',
+    rollbackTitle: '回滚 Agent 到上一版',
+    rollbackBody:
+      '将节点 {hub} 从 {from} 降级回 {to}：Agent 会重新下载上一版安装包、校验签名与 sha256 后自重启。降级与升级走同一条校验路径（包必须在签名清单内）。',
+    rollbackConfirm: '下发回滚',
+    rollbackNameLabel: '输入版本号 {version} 以确认回滚',
+    rollbackDispatched:
+      '回滚指令已下发：Agent 正在拉取上一版并自重启，连接会短暂中断；请稍后刷新页面查看版本。',
+    rollbackUnavailable: '当前没有可回滚的上一版（发布清单只保留最新一版）',
     remoteUpgradeCadence:
       '同一节点两次升级间隔需 ≥60 秒（连续下发会触发看门狗重叠回滚）；升级失败先到节点查看 /var/lib/khc-agent/upgrade.json 的 ok / status，再决定是否重试。',
   },

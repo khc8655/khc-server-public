@@ -147,6 +147,24 @@ export async function generateAgentCommand(
   return parsed.data;
 }
 
+/**
+ * 回滚目标（ADR-0019）：清单约定 releases[0]=最新、releases[1]=上一版。
+ *
+ * 只有「节点当前版本 == 最新版本」且「存在上一版」时才允许回滚——否则
+ * 拿 releases[1] 去操作一个更旧的节点，实质是升级而不是回滚，文案会骗人。
+ */
+export function rollbackTarget(
+  releases: AgentRelease[] | null | undefined,
+  currentVersion: string | null | undefined,
+): AgentRelease | null {
+  const latest = releases?.[0];
+  const previous = releases?.[1];
+  if (!latest || !previous || !currentVersion) return null;
+  if (currentVersion !== latest.version) return null;
+  if (previous.version === latest.version) return null;
+  return previous;
+}
+
 /** E3：下发远程升级（Agent 拉取式，自重启）；包地址与 sha256 来自发布清单。 */
 export async function upgradeAgentRemote(
   hubId: string,

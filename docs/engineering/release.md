@@ -1,6 +1,6 @@
 # 发版流程
 
-> 状态：现行 ｜ 适用范围：版本号、发版分层、CI 自动发版、本机应急发版、部署前强制冒烟、D1 迁移、回滚、secrets、发布签名密钥轮换 ｜ 最后核验：2026-11-11（§3 改回自动发版：合并 main 即上线，CI 内签包，见 ADR-0016） ｜ 关联：`docs/release-versioning.md`、`docs/engineering/d1-migrations.md`、`docs/engineering/adr/ADR-0008-production-reuses-staging.md`、`docs/engineering/adr/ADR-0011-manifest-with-deploy.md`、`docs/engineering/adr/ADR-0013-release-layering.md`、`docs/engineering/adr/ADR-0016-ci-auto-deploy.md`
+> 状态：现行 ｜ 适用范围：版本号、发版分层、CI 自动发版、本机应急发版、部署前强制冒烟、D1 迁移、回滚（含 Agent 带回 N-1 与面板回滚）、secrets、发布签名密钥轮换 ｜ 最后核验：2026-11-12（§3.3.1 / §3.7 新增 N-1 与 Agent 回滚，见 ADR-0019） ｜ 关联：`docs/release-versioning.md`、`docs/engineering/d1-migrations.md`、`docs/engineering/adr/ADR-0008-production-reuses-staging.md`、`docs/engineering/adr/ADR-0011-manifest-with-deploy.md`、`docs/engineering/adr/ADR-0013-release-layering.md`、`docs/engineering/adr/ADR-0016-ci-auto-deploy.md`、`docs/engineering/adr/ADR-0019-agent-rollback-package.md`
 
 ## 0. 资源拓扑（ADR-0008，必读）
 
@@ -86,6 +86,40 @@ printf '%s' "$AGENT_RELEASE_SIGN_KEY" > "$KEY_FILE"; chmod 600 "$KEY_FILE"
 SIGN_KEY_FILE="$KEY_FILE" PUBLIC_BASE="${KHC_PANEL_ORIGIN%/}/agent" ./scripts/build-agent-release.sh
 ```
 
+### 3.3.1 同时带回上一版（N-1，ADR-0019）
+
+只发最新一版会导致「面板无法回滚」：升级出问题只能等 Agent 的 30s 看门狗，或人工换 `.prev`。
+因此 `build-agent-release.sh` 在签包前会：
+
+1. 读线上 `<面板入口>/agent/release-manifest.json`，用**内置公钥验签**（不信任 HTTPS / sha 自证）；
+2. 取 `releases[0]`（当前生产版本）的包，sha256 只做验签后的二次一致性校验；
+3. 把包与 `.sha256` 放进 `apps/web/public/agent/`，并在新清单里追加一条 `--release '<v>|<url>|<sha>'`。
+
+结果是清单两条：**新版本在 `releases[0]`、上一版在 `releases[1]`**（顺序由
+`scripts/lib/agent-manifest.mjs` 断言，写错直接失败）。assets 体积 +约 240 KB。
+
+**失败是 fail-open 的**：拿不到清单、验签失败、404、sha 不符 → 降级为单条清单继续部署，
+但日志与 GitHub job summary 会打醒目 WARN：
+
+```
+WARN: 本次发版不含 N-1（读取线上清单返回 HTTP 404），面板回滚将不可用
+```
+
+看到这行就说明本次发版没有回滚能力（可用性优先，但不静默）。`CARRY_OVER=0` 可显式关闭；
+`CARRY_OVER_FROM=<origin>` 可覆盖取回来源（默认取 `PUBLIC_BASE` 去掉 `/agent`）。
+
+> **待验证（2026-11-12 记）**：截至 0.12.0，本机制只跑过「单条清单」路径——纯面板发版时
+> 新包与线上同为 0.1.40，carry-over 按设计跳过（日志 `线上已是 0.1.40，无需取回 N-1`）。
+> **「两条清单」路径尚未经生产验证**，第一次真实验证会发生在下一次 Agent 版本 bump。
+> 那次合并后必须逐项确认：
+>
+> 1. CI 日志出现 `[carry-over] 已取回 <N-1>（khc-agent-<N-1>.tar.gz，sha 已核对）`，且**没有** WARN；
+> 2. `GET /api/v1/agent/releases` 返回两条，且新版本在 `[0]`、旧版本在 `[1]`；
+> 3. `GET <面板入口>/agent/khc-agent-<N-1>.tar.gz` 可下载，sha256 与清单里该条一致；
+> 4. 面板 Agent 卡片出现「回滚到上一版」，确认框版本号正确。
+>
+> 四项未全部通过前，不要依赖面板回滚能力（自动看门狗仍然有效）。
+
 ### 3.4 发版后核对（CI 已自动做，人工复核时照此查）
 
 1. `GET /api/v1/version`：`commit` 等于本次提交前 12 位、`versionId` 等于 deploy 输出的 Version ID；
@@ -136,6 +170,33 @@ npx wrangler secret put AGENT_RELEASE_PUBKEY
 - secrets 只通过 `wrangler secret put` 或 Cloudflare 面板写入，不落仓库。
 - `ADMIN_PW_HASH` 用 `node scripts/hash-password.mjs '<password>'` 生成。
 - `MASTER_ENC_KEY` 丢失 = 所有加密 token/密钥不可恢复：必须离线备份。
+
+### 3.7 Agent 回滚（面板 / 人工）
+
+**自动回滚（Agent 侧，始终存在）**：升级后 30 秒内新版本不健康（`/health` 版本不符或 `/state` 异常），
+看门狗停服 → 当前目录改名 `.failed` → `.prev` 换回 → 重启，状态写入
+`/var/lib/khc-agent/upgrade.json`（`status=rolled_back|rollback_failed`）。它**不依赖发布包**，
+但只覆盖「起不来」，且 `.prev` 只有一格。
+
+**面板回滚（ADR-0019）**：节点设置 → Agent 卡片出现「回滚到上一版」按钮，动作 `agent.rollback` 为 **L3**，
+确认框写明「将节点 X 从 A 降级回 B」。它复用 `POST /nodes/:id/agent/upgrade` 传清单里的
+`releases[1]`，所以 Worker/Agent 的验签路径与升级完全相同。按钮只在
+`节点当前版本 == releases[0]` 且 `releases[1]` 存在时出现；清单只有一条说明本次发版没带回 N-1。
+
+**能力边界（预期行为，不要当 bug）**：
+
+- 只能回滚到「其内置公钥与当前发布公钥一致」的版本。跨 2026-11-11 换钥的旧包会被验签拒绝。
+- 只保留一格历史；跨两版回退（0.1.41 → 0.1.39）不在支持范围。
+- 回滚本身也走升级流程，同样有 30 秒看门狗兜底。
+
+**人工兜底**（面板不可用时）：
+
+```bash
+systemctl stop khc-agent
+cd /opt/khc-agent 2>/dev/null || cd <安装目录的父目录>
+mv khc-agent khc-agent.failed && mv khc-agent.prev khc-agent
+systemctl start khc-agent
+```
 
 ## 4. 部署前强制冒烟（CI，D-6 / §3.6）
 

@@ -3,6 +3,7 @@ import {
   AgentCommandError,
   fetchAgentReleases,
   generateAgentCommand,
+  rollbackTarget,
   validatePackageUrl,
   validateRunMode,
   validateSha256,
@@ -134,5 +135,26 @@ describe('已签名发布清单', () => {
     const releases = await fetchAgentReleases();
     expect(releases).toEqual([{ version: '0.1.0', url: URL, sha256: SHA }]);
     expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/agent/releases');
+  });
+});
+
+describe('回滚目标（ADR-0019）', () => {
+  const latest = { version: '0.1.41', url: 'https://x/khc-agent-0.1.41.tar.gz', sha256: SHA };
+  const previous = { version: '0.1.40', url: 'https://x/khc-agent-0.1.40.tar.gz', sha256: 'b'.repeat(64) };
+
+  it('节点正跑最新版时才给出上一版', () => {
+    expect(rollbackTarget([latest, previous], '0.1.41')).toEqual(previous);
+  });
+
+  it('清单只有一条（本次发版不含 N-1）→ 不可回滚', () => {
+    expect(rollbackTarget([latest], '0.1.41')).toBeNull();
+  });
+
+  it('节点不是最新版 → 不可回滚（那是升级不是回滚）', () => {
+    expect(rollbackTarget([latest, previous], '0.1.40')).toBeNull();
+  });
+
+  it('版本号未知 → 不可回滚', () => {
+    expect(rollbackTarget([latest, previous], null)).toBeNull();
   });
 });

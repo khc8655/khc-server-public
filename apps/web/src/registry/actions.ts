@@ -664,6 +664,17 @@ export const actions = {
     audit: 'agent.remote_upgraded',
     icon: 'refresh',
   },
+  'agent.rollback': {
+    object: 'agent',
+    kind: 'update',
+    scope: 'hub',
+    parent: 'hub',
+    label: 'agent.rollback',
+    level: 'L3',
+    form: 'confirm',
+    audit: 'agent.rollback',
+    icon: 'refresh',
+  },
   'agent.uninstallCommand': {
     object: 'agent',
     kind: 'read',
