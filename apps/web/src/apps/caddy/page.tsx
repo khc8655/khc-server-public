@@ -1432,6 +1432,8 @@ export default function SitesPage() {
       header: zh.sites.colDomain,
       value: (row) => row.site.domains.join(', '),
       dot: (row) => healthBadge(row).tone,
+      // <1024 时后端列（low）隐藏，信息并入名称列第二段，避免窄屏丢项。
+      narrow: (row) => backendText(row.site),
     },
     {
       key: 'kind',

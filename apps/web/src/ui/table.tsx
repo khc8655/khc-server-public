@@ -27,6 +27,11 @@ export interface ColumnDef<T> {
   status?: (row: T) => { tone: Tone; label: string };
   /** sync 列的同步状态 */
   sync?: (row: T) => SyncStatusProps;
+  /**
+   * 窄屏补充文案：<1024 时并入名称列第二段（低优先列被隐藏时信息不丢）。
+   * 与 `priority: 'low'` 配合：宽屏用独立列，窄屏用这里。
+   */
+  narrow?: (row: T) => string | null | undefined;
   priority?: 'high' | 'low';
 }
 
@@ -304,6 +309,8 @@ function MobileRow<T>({
       return String(value);
     })
     .join(' · ');
+  const narrow = nameColumn?.narrow?.(row);
+  const metaWithNarrow = [meta, narrow].filter(Boolean).join(' · ');
   const status = statusColumn?.status?.(row);
   const dot = nameColumn?.dot?.(row);
 
@@ -329,7 +336,7 @@ function MobileRow<T>({
           {dot ? <span className={`ui-dot ui-dot-${dot}`} aria-hidden="true" /> : null}
           <Truncate text={String(nameColumn?.value?.(row) ?? '—')} />
         </div>
-        <div className="ui-list-meta">{meta || '—'}</div>
+        <div className="ui-list-meta">{metaWithNarrow || '—'}</div>
       </div>
       <div className="ui-list-side">
         {status ? <Badge tone={status.tone} label={status.label} /> : null}
@@ -394,14 +401,18 @@ function Cell<T>({
   switch (column.type) {
     case 'name': {
       const dot = column.dot?.(row);
+      const narrow = column.narrow?.(row);
       return (
-        <span className="ui-cell-main">
-          {dot ? (
-            <span className={`ui-dot ui-dot-${dot}`} aria-hidden="true" />
-          ) : null}
-          <span className="ui-cell-name">
-            <Truncate text={String(column.value?.(row) ?? '—')} />
+        <span className="ui-cell-stack">
+          <span className="ui-cell-main">
+            {dot ? (
+              <span className={`ui-dot ui-dot-${dot}`} aria-hidden="true" />
+            ) : null}
+            <span className="ui-cell-name">
+              <Truncate text={String(column.value?.(row) ?? '—')} />
+            </span>
           </span>
+          {narrow ? <span className="ui-cell-narrow">{narrow}</span> : null}
         </span>
       );
     }
