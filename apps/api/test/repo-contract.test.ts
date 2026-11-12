@@ -284,7 +284,7 @@ describe('D1 专属：事务、唯一约束与密文落库（真实 sqlite）', 
     applyMigrations(raw);
   });
 
-  it('batch 事务：任一语句失败整批回滚', () => {
+  it('batch 事务：任一语句失败整批回滚', async () => {
     const db = toD1(raw);
     const ok = db
       .prepare('INSERT INTO nodes (id, name, endpoint, preferred_route, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -292,7 +292,9 @@ describe('D1 专属：事务、唯一约束与密文落库（真实 sqlite）', 
     const dup = db
       .prepare('INSERT INTO nodes (id, name, endpoint, preferred_route, token_enc, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind('nd_1', 'n', 'https://x', 'direct', 'enc', 1, 1);
-    expect(db.batch([ok, dup])).rejects.toThrow();
+    // 必须 await：不 await 时断言要到测试结束才被自动收敛，回滚还没落地就去查 COUNT，
+    // 既会产生竞态，也会在下一个 vitest major 直接失败。
+    await expect(db.batch([ok, dup])).rejects.toThrow();
     // 第一条不能落库
     const count = raw.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number };
     expect(count.n).toBe(0);

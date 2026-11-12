@@ -24,13 +24,28 @@ async function setup() {
 }
 
 /**
- * 小步推进 fake 时钟直到响应落地：请求处理链是微任务驱动的，
- * 一次性 advance 大段时间会赶在第一个 750ms sleep 注册之前，之后无人推进。
- * 每步同时用 setSystemTime 显式推进 Date：部分 CI 环境下
- * advanceTimersByTimeAsync 只推进定时器队列、不推进被 mock 的 Date，
- * 导致 60s 截止永远不到达（本地/CI 行为不一致的根因）。
+ * 小步推进 fake 时钟直到响应落地。
+ *
+ * 请求处理链是微任务驱动的：「调用 Agent → 拿到 202 → 注册 sleep(750) → 再调用」。
+ * `advanceTimersByTimeAsync(750)` 只会触发**已经注册**的定时器；如果推进时链还没走到
+ * 注册 sleep 这一步，这次推进就是纯空转——时钟走了 750ms，链一步没动。CI 上
+ * main 曾出现「800 步只用 49ms 跑完、响应始终不落地」，就是整轮推进都在链注册之前。
+ *
+ * 因此每步拆成两拍，顺序不能颠倒：
+ *   1) `advanceTimersByTimeAsync(0)`：只冲刷微任务队列、不移动时钟，链必然推进到
+ *      「下一个 sleep 已注册进假时钟」的位置；
+ *   2) `advanceTimersByTimeAsync(750)`：此时队列里一定有待触发的 sleep，推进的每
+ *      750ms 都对应一次真实轮询，保证「每推进一次就有进展」。
+ *
+ * 每步仍用 setSystemTime 显式校准 Date：部分 CI 环境下 advanceTimersByTimeAsync
+ * 只推进定时器队列、不推进被 mock 的 Date，导致 60s 截止永远不到达（本地/CI 不一致的根因）。
+ *
+ * @param probe 失败诊断用：返回当前已发出的 Agent 调用次数（默认未知）
  */
-async function driveUntilSettled(request: Promise<Response> | Response): Promise<Response> {
+async function driveUntilSettled(
+  request: Promise<Response> | Response,
+  probe?: () => number,
+): Promise<Response> {
   const promise = Promise.resolve(request);
   let settled: Response | undefined;
   const guarded = promise.then((res) => {
@@ -38,14 +53,23 @@ async function driveUntilSettled(request: Promise<Response> | Response): Promise
     return res;
   });
   const start = Date.now();
-  // 步数上限 800（假时钟 600s）：CI 高并发下「传输超时 + 同一幂等键重试」这条最长的用例
-  // 曾在 200 步耗尽（main 连续两次挂在这一条）。放宽预算只影响失败时的耗时，不改变语义。
   const STEPS = 800;
+  let advanced = 0;
   for (let i = 0; i < STEPS && !settled; i += 1) {
+    // 1) 冲刷微任务（时钟不动）：确保轮询链把下一个 sleep(750) 注册好
+    await vi.advanceTimersByTimeAsync(0);
+    // 2) 推进一个重试间隔：必然命中上一步刚注册的定时器
     await vi.advanceTimersByTimeAsync(750);
     vi.setSystemTime(start + (i + 1) * 750);
+    advanced = i + 1;
   }
-  if (!settled) throw new Error(`响应在 ${STEPS} 步推进后仍未落地`);
+  if (!settled) {
+    const calls = probe ? probe() : '未知';
+    throw new Error(
+      `响应在 ${advanced}/${STEPS} 步（假时钟 ${(advanced * 750) / 1000}s）推进后仍未落地；` +
+        `已发出的 Agent 调用次数=${calls}`,
+    );
+  }
   return guarded;
 }
 
@@ -133,7 +157,7 @@ describe('apps 动作：rotate_peer 透传与降级（批次 F）', () => {
       },
       ctx.env,
     );
-    const res = await driveUntilSettled(responsePromise);
+    const res = await driveUntilSettled(responsePromise, () => calls);
     expect(res.status).toBe(200);
     expect((await res.json()) as { ok: boolean }).toMatchObject({ ok: true });
 
@@ -158,7 +182,7 @@ describe('apps 动作：rotate_peer 透传与降级（批次 F）', () => {
       },
       ctx.env,
     );
-    const res = await driveUntilSettled(responsePromise);
+    const res = await driveUntilSettled(responsePromise, () => ctx.agent.requests.length);
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('hub_unreachable');
