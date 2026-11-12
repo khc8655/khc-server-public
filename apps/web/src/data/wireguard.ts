@@ -400,3 +400,35 @@ export function splitAllowedIps(value: string): string[] {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+
+function isIpv4Address(value: string): boolean {
+  const parts = value.split('.');
+  return (
+    parts.length === 4 &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  );
+}
+
+function isIpv6Address(value: string): boolean {
+  if (!value.includes(':')) return false;
+  try {
+    // URL 解析器对 IPv6 做完整的结构校验（::、缩写、嵌入 IPv4 都覆盖）。
+    return new URL(`http://[${value}]/`).hostname.startsWith('[');
+  } catch {
+    return false;
+  }
+}
+
+/** IPv4/IPv6 地址或 CIDR：只做结构与前缀范围校验，不判断网段是否有意义。 */
+export function isValidCidr(value: string): boolean {
+  const parts = value.split('/');
+  if (parts.length > 2) return false;
+  const address = parts[0] ?? '';
+  const prefix = parts[1];
+  if (!address) return false;
+  const isV6 = address.includes(':');
+  if (!isIpv4Address(address) && !isIpv6Address(address)) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (isV6 ? 128 : 32);
+}

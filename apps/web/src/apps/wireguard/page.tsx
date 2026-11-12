@@ -21,6 +21,7 @@ import {
   WIREGUARD_APP,
   clientConfigText,
   clientPrivateKey,
+  isValidCidr,
   migrationPeer,
   nextPeerAddress,
   normalizeWgConfig,
@@ -73,7 +74,7 @@ import { nodeModeQueryOptions } from '../../data/mode';
 
 const EMPTY_CONFIG = normalizeWgConfig(null);
 const PEER_NAME_RE = /^[A-Za-z0-9_.@-]{1,32}$/;
-const CIDR_RE = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/;
+
 const KEY_RE = /^[A-Za-z0-9+/]{43}=$/;
 const IFACE_NAME_RE = /^[A-Za-z0-9_=+.-]{1,15}$/;
 const IFACE_ADDRESS_RE = /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/;
@@ -516,7 +517,7 @@ export default function WireGuardPage() {
       errors.name = zh.wireguard.duplicateName;
     }
     const allowedIps = splitAllowedIps(peerForm.allowedIps);
-    if (allowedIps.length === 0 || allowedIps.some((item) => !CIDR_RE.test(item))) {
+    if (allowedIps.length === 0 || allowedIps.some((item) => !isValidCidr(item))) {
       errors.allowedIps = zh.wireguard.invalidAddress;
     }
     if (

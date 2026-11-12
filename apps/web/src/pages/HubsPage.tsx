@@ -142,9 +142,10 @@ export default function HubsPage() {
   }, [createdNodeId, installOpts]);
 
   /**
-   * DNS 代建：IP 直连节点创建成功后，按 endpoint 的 IP 类型自动建 A/AAAA 记录。
-   * 失败不影响节点本身（独立端点），但必须显式提示——包括未启用、
-   * 多 Zone 未选择（cf_dns_zone_required）等 409，不再静默吞掉。
+   * DNS 代建：仅在用户显式选择 Zone 时，为 IP 直连节点按 endpoint 的 IP 类型
+   * 建 A/AAAA 记录。未选择（默认「不自动创建」）时不得调用，否则会与文案矛盾
+   * 并在多 Zone 时弹出无意义的失败提示。失败不影响节点本身（独立端点），
+   * 但必须显式提示——包括未启用、多 Zone 未选择等 409，不再静默吞掉。
    */
   const autoCreateDns = async (
     node: Node,
@@ -269,7 +270,8 @@ export default function HubsPage() {
           }
         : undefined;
     const data = await createMutation.mutateAsync(toCreatePayload(draft));
-    if (data.node.accessMode === 'ip') void autoCreateDns(data.node, dnsSelection);
+    // 只在用户显式选了 Zone 时代建 DNS；默认「不自动创建」不发请求。
+    if (data.node.accessMode === 'ip' && dnsSelection) void autoCreateDns(data.node, dnsSelection);
   };
 
   const checkInstalled = async () => {

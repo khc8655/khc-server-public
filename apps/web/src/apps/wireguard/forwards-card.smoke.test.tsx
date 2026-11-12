@@ -333,6 +333,35 @@ describe('内网穿透页 · 端口转发卡', () => {
     expect((target as HTMLInputElement).value).toBe('10.99.0.2');
   });
 
+  it('保留端口与自环目标在表单层被拦截', async () => {
+    await renderWireGuard();
+    await userEvent.click((await screen.findAllByRole('button', { name: '添加转发' }))[0] as HTMLElement);
+
+    const drawer = (await screen.findAllByRole('dialog')).at(-1);
+    if (!drawer) throw new Error('missing forward drawer');
+    fireEvent.change(within(drawer).getByLabelText('名称'), { target: { value: 'web' } });
+    fireEvent.change(within(drawer).getByLabelText('对外端口'), { target: { value: '8880' } });
+    fireEvent.change(within(drawer).getByLabelText('目标主机'), { target: { value: '10.99.0.3' } });
+    fireEvent.change(within(drawer).getByLabelText('目标端口'), { target: { value: '80' } });
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    expect(
+      await within(drawer).findByText('该端口被 SSH、Caddy 或 Agent 占用，不能用于转发监听'),
+    ).toBeTruthy();
+
+    fireEvent.change(within(drawer).getByLabelText('对外端口'), { target: { value: '7001' } });
+    fireEvent.change(within(drawer).getByLabelText('目标主机'), { target: { value: '127.0.0.1' } });
+    fireEvent.change(within(drawer).getByLabelText('目标端口'), { target: { value: '7001' } });
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    expect(
+      await within(drawer).findByText('目标端口与本机监听端口相同，会形成自环转发，请更换端口或目标地址'),
+    ).toBeTruthy();
+    expect(requests.some((item) => item.url.endsWith('/apps/port-forward') && item.init?.method === 'PUT')).toBe(
+      false,
+    );
+  });
+
   it('应用失败展示 error.details', async () => {
     applyFails = true;
     currentApp = app(false, false);
