@@ -333,6 +333,37 @@ describe('WireGuard 页', () => {
     expect(screen.getAllByRole('button', { name: '添加 Peer' }).length).toBeGreaterThan(0);
   });
 
+  it('wireguard-tools 未安装：中性说明，不是告警横幅', async () => {
+    mockApi({
+      peers: [],
+      rev: 1,
+      appliedRev: 1,
+      state: () => {
+        const base = wireGuardState(false);
+        return {
+          ...base,
+          state: {
+            ...base.state,
+            adapters: [
+              {
+                name: 'wireguard',
+                version: '1.0.0',
+                appliedRev: 1,
+                status: { installed: false, running: false, interface: 'wg0', peers: [], rotations: [] },
+              },
+            ],
+          },
+        };
+      },
+    });
+    await renderWireGuard();
+
+    const title = await screen.findByText('节点上尚未安装 WireGuard');
+    const banner = title.closest('.ui-banner');
+    expect(banner?.className).toContain('ui-banner-neutral');
+    expect(banner?.className).not.toContain('ui-banner-warn');
+  });
+
   it('行内菜单可打开导出配置抽屉并展示 .conf', async () => {
     mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
     await renderWireGuard();

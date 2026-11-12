@@ -1253,7 +1253,8 @@ export default function WireGuardPage() {
   if (!configState?.exists || wireguardMissing) {
     banners.push({
       key: wireguardMissing ? 'not-installed' : 'not-configured',
-      tone: wireguardMissing ? 'warn' : 'info',
+      // 未安装 = 中性事实（按需安装，不是告警）；只有未配置才是信息提示。
+      tone: wireguardMissing ? 'neutral' : 'info',
       title: wireguardMissing ? zh.wireguard.notInstalledTitle : zh.wireguard.notConfiguredTitle,
       description: installTask
         ? fmt(zh.wireguard.installTaskState, {

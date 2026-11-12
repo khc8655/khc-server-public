@@ -48,7 +48,7 @@ function state(empty = false) {
           name: 'port-forward',
           version: '1.0.0',
           status: {
-            installed: true,
+            installed: pfInstalled,
             running: true,
             socatVersion: '1.8.0.0',
             forwards: empty
@@ -158,12 +158,15 @@ const wireguardApp = {
 
 let emptyMode = false;
 let applyFails = false;
+/** 端口转发组件实装状态：未安装时只给中性说明，不出现告警横幅。 */
+let pfInstalled = true;
 let currentApp = app();
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function mockApi() {
   emptyMode = false;
   applyFails = false;
+  pfInstalled = true;
   currentApp = app();
   requests = [];
   vi.stubGlobal('EventSource', makeLiveEventSource(() => state(emptyMode).state));
@@ -266,6 +269,15 @@ describe('内网穿透页 · 端口转发卡', () => {
     expect((await screen.findAllByText('失败')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('停用')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('待应用')).length).toBeGreaterThan(0);
+  });
+
+  it('端口转发未安装：中性说明，不是告警横幅', async () => {
+    pfInstalled = false;
+    await renderWireGuard();
+    const title = await screen.findByText('转发服务尚未就绪');
+    const banner = title.closest('.ui-banner');
+    expect(banner?.className).toContain('ui-banner-neutral');
+    expect(banner?.className).not.toContain('ui-banner-warn');
   });
 
   it('空状态显示添加入口', async () => {

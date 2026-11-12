@@ -1,13 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
 import { ApiError } from '../data/client';
 import { certificatesQueryOptions } from '../data/certs';
 import { hubQueryOptions } from '../data/queries';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { caddyConfigQueryOptions, kindLabelKey } from '../data/sites';
-import { forwardConfigQueryOptions, forwardTarget } from '../data/forwards';
+import { forwardConfigQueryOptions } from '../data/forwards';
 import { wireGuardConfigQueryOptions } from '../data/wireguard';
+import {
+  classifyBackend,
+  type BackendContext,
+  type BackendInfo,
+  type BackendKind,
+} from '../data/services';
 import { paths } from '../registry/routes';
 import {
   Badge,
@@ -15,7 +20,6 @@ import {
   Button,
   Card,
   Grid,
-  Icon,
   Link,
   PageHeader,
   Row,
@@ -189,13 +193,10 @@ export default function HubOverviewPage() {
             ? { tone: 'warn' as const, label: zh.hub.appStopped }
             : { tone: 'neutral' as const, label: zh.hub.appUnknown };
 
-  const wgDirty = (wgQuery.data?.rev ?? 0) > (wgQuery.data?.appliedRev ?? 0);
   const sitesDirty = (sitesQuery.data?.rev ?? 0) > (sitesQuery.data?.appliedRev ?? 0);
   const forwardDirty = (forwardQuery.data?.rev ?? 0) > (forwardQuery.data?.appliedRev ?? 0);
   const wgInterface = wgQuery.data?.config.interface;
   const forwards = forwardQuery.data?.config.forwards ?? [];
-  const [firstSite] = sites;
-  const [firstForward] = forwards;
   const disabledSites = sites.filter((site) => !site.enabled).length;
 
   // 应用可见性与「未安装」一律只看 D1 期望配置（离线可见，首屏不闪）；
@@ -227,77 +228,79 @@ export default function HubOverviewPage() {
         ? `Peer ${peers.length}`
         : null;
 
-  // 应用行只列 D1 已配置的应用；未配置不渲染占位，避免首屏依赖在线探测。
-  const appRows: Array<{
+  // 对外服务摘要：只读聚合 D1 期望配置；后端识别复用 data/services.ts（与站点表/对外服务页同一来源）。
+  const backendCtx: BackendContext =
+    typeof wgStatus?.installed === 'boolean'
+      ? {
+          wireguard: {
+            installed: wgStatus.installed,
+            peers: peers.map((peer) => ({
+              name: peer.name,
+              allowedIps: peer.allowedIps,
+              online: runtimePeers?.find((item) => item.name === peer.name)?.online ?? null,
+            })),
+          },
+        }
+      : {};
+  const backendLabel: Record<BackendKind, string> = {
+    local: zh.sites.backendLocal,
+    vm: zh.sites.backendVm,
+    internal: zh.sites.backendInternal,
+    external: zh.sites.backendExternal,
+    unix: zh.sites.backendUnix,
+  };
+  const backendSummary = (infos: BackendInfo[]): string =>
+    (['local', 'vm', 'internal', 'external', 'unix'] as const)
+      .map((kind) => {
+        const count = infos.filter((info) => info.kind === kind).length;
+        return count > 0 ? `${backendLabel[kind]} ${count}` : null;
+      })
+      .filter(Boolean)
+      .join(' · ');
+  const siteBackends = sites
+    .filter((site) => site.kind === 'proxy')
+    .map((site) => classifyBackend(site.upstreams[0] ?? site.upstream, backendCtx));
+  const forwardBackends = forwards.map((forward) =>
+    classifyBackend(`${forward.targetHost}:${forward.targetPort}`, backendCtx),
+  );
+  const disabledForwards = forwards.filter((forward) => !forward.enabled).length;
+
+  // 左卡只列 D1 已配置的对外服务；未配置不渲染占位，避免首屏依赖在线探测。
+  const serviceRows: Array<{
     key: string;
     name: string;
-    icon: 'users' | 'globe' | 'arrow';
     badge: { tone: 'ok' | 'warn' | 'neutral'; label: string };
-    facts: ReactNode;
-    to: string;
+    facts: string;
   }> = [
-    ...(peerEnabled
-      ? [
-          {
-            key: 'wireguard',
-            name: zh.hub.appWireguard,
-            icon: 'users' as const,
-            badge: appBadge(wgDirty, wgStatus),
-            facts: (
-              <>
-                {wgInterface ? (
-                  <span className="mono">
-                    {`${wgInterface.name} · ${wgInterface.address} · :${wgInterface.listenPort}`}
-                  </span>
-                ) : null}
-                {peerText ? `${wgInterface ? ' · ' : ''}${peerText}` : null}
-              </>
-            ),
-            to: paths.hubSection(hubId, 'wireguard'),
-          },
-        ]
-      : []),
     ...(caddyConfigured
       ? [
           {
-            key: 'caddy',
-            name: zh.hub.appCaddy,
-            icon: 'globe' as const,
+            key: 'web',
+            name: zh.hub.servicesWeb,
             badge: appBadge(sitesDirty, caddyStatus),
-            facts: firstSite ? (
-              <>
-                <span className="mono">{firstSite.domain}</span>
-                {` · ${zh.sites[kindLabelKey(firstSite.kind)]}`}
-                {sites.length > 1 ? ` 等 ${sites.length} 个` : ''}
-                {disabledSites > 0
-                  ? ` · ${fmt(zh.overview.summaryDisabled, { count: disabledSites })}`
-                  : ''}
-              </>
-            ) : (
-              `${sites.length} 个站点`
-            ),
-            to: paths.hubSection(hubId, 'sites'),
+            facts: [
+              `${sites.length} 个站点`,
+              backendSummary(siteBackends),
+              disabledSites > 0 ? `${disabledSites} 停用` : null,
+            ]
+              .filter(Boolean)
+              .join(' · '),
           },
         ]
       : []),
     ...(pfConfigured
       ? [
           {
-            key: 'port-forward',
-            name: zh.hub.appPortForward,
-            icon: 'arrow' as const,
+            key: 'remote',
+            name: zh.hub.servicesRemote,
             badge: appBadge(forwardDirty, pfStatus),
-            facts: firstForward ? (
-              <>
-                <span className="mono">
-                  {`${firstForward.listenPort}→${forwardTarget(firstForward)}`}
-                </span>
-                {forwards.length > 1 ? ` 等 ${forwards.length} 条` : ''}
-              </>
-            ) : (
-              `${forwards.length} 条规则`
-            ),
-            to: paths.hubSection(hubId, 'wireguard'),
+            facts: [
+              `${forwards.length} 条规则`,
+              backendSummary(forwardBackends),
+              disabledForwards > 0 ? `${disabledForwards} 停用` : null,
+            ]
+              .filter(Boolean)
+              .join(' · '),
           },
         ]
       : []),
@@ -496,25 +499,23 @@ export default function HubOverviewPage() {
       {/* 需要处理：服务异常 + 临期证书 + 长期离线 Peer，chip 直达对应页 */}
       <TodoChips items={todos} onOpen={(to) => void navigate({ href: to })} />
 
-      {appRows.length > 0 ? (
+      {serviceRows.length > 0 ? (
         <Grid cols={2}>
-          <Card title={zh.hub.appsCardTitle}>
+          <Card
+            title={zh.hub.servicesCardTitle}
+            action={<Link to={paths.hubSection(hubId, 'services')} label={zh.hub.appEnter} />}
+          >
             <Stack gap={3}>
-              {appRows.map((row) => (
+              {serviceRows.map((row) => (
                 <div className="ui-app-row" key={row.key}>
                   <Row justify="between" gap={3} wrap>
-                    <Row gap={2}>
-                      <Icon name={row.icon} size={20} />
-                      <strong>{row.name}</strong>
-                    </Row>
-                    <Row gap={2}>
-                      <Badge tone={row.badge.tone} label={row.badge.label} dot />
-                      <Link to={row.to} label={zh.hub.appEnter} />
-                    </Row>
+                    <strong>{row.name}</strong>
+                    <Badge tone={row.badge.tone} label={row.badge.label} dot />
                   </Row>
-                  {row.facts ? <div className="ui-app-facts ui-muted">{row.facts}</div> : null}
+                  <div className="ui-app-facts ui-muted">{row.facts}</div>
                 </div>
               ))}
+              {wgReady && peerText ? <p className="ui-muted">{peerText}</p> : null}
             </Stack>
           </Card>
           {hostCard}

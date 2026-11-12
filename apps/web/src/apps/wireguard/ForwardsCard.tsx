@@ -385,7 +385,7 @@ export function ForwardsCard({
           <Banner tone="danger" title={zh.forwards.statusError} description={status.error} />
         ) : null}
         {status && status.installed === false && !caddyMode ? (
-          <Banner tone="warn" title={zh.forwards.notInstalled} description={zh.forwards.notInstalledDesc} />
+          <Banner tone="neutral" title={zh.forwards.notInstalled} description={zh.forwards.notInstalledDesc} />
         ) : null}
         {unapplied ? (
           <Banner
