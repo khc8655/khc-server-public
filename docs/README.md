@@ -77,11 +77,11 @@
 | PR 决策抢救清单（2026-11-11） | `docs/verification/2026-11-11/pr-decision-salvage.md` | 116 个 PR + commit message 全量盘点：18 类架构决策已全部落在 ADR/设计文档，无需新增 ADR；抢救两份 2026-11-08 报告与 PR #128 的 N6/N8/N9 遗留项，并列出判定为无价值/不复刻的讨论及依据 |
 | 端到端验收报告（2026-11-08） | `docs/verification/2026-11-08/e2e-acceptance-report.md` | 三种接入方式/Caddy/WireGuard/端口转发端到端验收；真实地址已脱敏，结论与证据保持原样 |
 | 面板交互测试与优化报告（2026-11-08） | `docs/verification/2026-11-08/ux-interaction-audit.md` | 状态一致性、门控、文案、展示与操作成本审计；真实地址已脱敏，结论与证据保持原样 |
-| 发版与部署 | `docs/engineering/release.md` | 版本、分层、CI 自动发版（合并 main 即上线，CI 内签包）、本机应急发版、部署前冒烟、回滚（ADR-0016；ADR-0015 已被取代） |
+| 发版与部署 | `docs/engineering/release.md` | 版本、分层、CI 自动发版（合并 main 即上线，CI 内签包）、本机应急发版、部署前冒烟、回滚（ADR-0016；ADR-0015 已被取代）、发版带回 N-1 与 Agent 回滚（ADR-0019） |
 | D1 迁移 runbook | `docs/engineering/d1-migrations.md` | 0001–0012 顺序、命令与核对点 |
 | 版本策略 | `docs/release-versioning.md` | 面板 + Agent 统一发版规范：三层模型（发布单元/产物版本/构建标识）、semver 语义、两条硬规则（面板 `package.json` bump / Agent `VERSION` bump）、包留存、验收命令（ADR-0013） |
 | 生产就绪状态 | `docs/production-readiness.md` | 已上线后的余项跟踪 |
-| 架构决策记录 | `docs/engineering/adr/` | ADR 永不归档，只改状态字段；ADR-0010（2026-11-04）拍板可见时 10s 快照轮询并部分取代 ADR-0009；ADR-0011（2026-11-05）拍板发布清单随部署发布、secret 仅兜底；ADR-0012（2026-11-07）拍板三种并列接入方案（A 可信证书直连 / B Cloudflare Tunnel / C 自签）与 client 单例；ADR-0013（2026-11-07）拍板发版分层（发布单元 / 产物版本 / 构建标识）与面板版本单一来源；ADR-0015（2026-11-11）已由 ADR-0016 取代；ADR-0016（2026-11-11）拍板恢复「合并 main 即上线」，CI 内签包、secrets 渲染临时配置，并明确 Cloudflare Workers Builds 必须保持断开；ADR-0014 / 0017 / 0018（2026-11-12）：ADR-0014 已接受，打开页面即探测节点并写明 1+3 次预算；ADR-0017 已接受，站点表「后端」列 + `/services`「对外服务」页（纯前端推导，不新增数据模型）；ADR-0018 已废弃，任务快照方案不做，维持 10 分钟 / 60 次轮询 |
+| 架构决策记录 | `docs/engineering/adr/` | ADR 永不归档，只改状态字段；ADR-0010（2026-11-04）拍板可见时 10s 快照轮询并部分取代 ADR-0009；ADR-0011（2026-11-05）拍板发布清单随部署发布、secret 仅兜底；ADR-0012（2026-11-07）拍板三种并列接入方案（A 可信证书直连 / B Cloudflare Tunnel / C 自签）与 client 单例；ADR-0013（2026-11-07）拍板发版分层（发布单元 / 产物版本 / 构建标识）与面板版本单一来源；ADR-0015（2026-11-11）已由 ADR-0016 取代；ADR-0016（2026-11-11）拍板恢复「合并 main 即上线」，CI 内签包、secrets 渲染临时配置，并明确 Cloudflare Workers Builds 必须保持断开；ADR-0014 / 0017 / 0018（2026-11-12）：ADR-0014 已接受，打开页面即探测节点并写明 1+3 次预算；ADR-0017 已接受，站点表「后端」列 + `/services`「对外服务」页（纯前端推导，不新增数据模型）；ADR-0018 已废弃，任务快照方案不做，维持 10 分钟 / 60 次轮询；ADR-0019（2026-11-12）拍板发版默认带回 N-1：回滚包与升级包由同一份签名覆盖，发布侧先验线上清单再取包，失败 fail-open 但必须打 WARN |
 
 ### 运维 Runbook 与安全边界
 

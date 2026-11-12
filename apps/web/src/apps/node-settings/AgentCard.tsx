@@ -5,7 +5,12 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { hubStateQueryOptions } from '../../data/queries';
-import { fetchAgentReleases, upgradeAgentRemote, type AgentRelease } from '../../data/agent';
+import {
+  fetchAgentReleases,
+  rollbackTarget,
+  upgradeAgentRemote,
+  type AgentRelease,
+} from '../../data/agent';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
 import {
@@ -47,6 +52,7 @@ export function AgentCard({
   const [drawerKind, setDrawerKind] = useState<'install' | 'uninstall' | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeConfirm, setUpgradeConfirm] = useState(false);
+  const [rollbackConfirm, setRollbackConfirm] = useState(false);
   const [releases, setReleases] = useState<AgentRelease[] | null>(null);
   const [dispatched, setDispatched] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
@@ -57,6 +63,8 @@ export function AgentCard({
     stateQuery.data?.error && /鉴权失败|HTTP 40[13]|unauthorized|invalid token/i.test(stateQuery.data.error),
   );
   const latest = releases?.[0] ?? null;
+  // ADR-0019：清单第 2 条是上一版；仅当节点正跑最新版时才提供回滚入口。
+  const previous = rollbackTarget(releases, version);
 
   // 发布清单（#32）：远程升级从中取包地址与 sha256。
   useEffect(() => {
@@ -91,6 +99,25 @@ export function AgentCard({
     setUpgradeError(null);
     setDispatched(true);
     toast.show({ message: zh.agent.remoteUpgradeDispatched });
+  };
+
+  const confirmRollback = async () => {
+    if (!previous) return;
+    try {
+      await upgradeAgentRemote(hubId, { packageUrl: previous.url, sha256: previous.sha256 });
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : zh.agent.remoteUpgradeFailed;
+      setUpgradeError(message);
+      throw error;
+    }
+    setUpgradeError(null);
+    setDispatched(true);
+    toast.show({ message: zh.agent.rollbackDispatched });
   };
 
   const commandButtons: { kind: 'install' | 'uninstall'; ref: ActionRef }[] = [
@@ -182,6 +209,19 @@ export function AgentCard({
                 setUpgradeOpen(true);
               }}
             />
+            {previous ? (
+              <Button
+                label={actionLabel(action('agent.rollback'))}
+                icon="refresh"
+                size="sm"
+                disabled={stateOffline}
+                disabledReason={stateOffline ? zh.agent.disabledOffline : undefined}
+                onClick={() => {
+                  setUpgradeError(null);
+                  setRollbackConfirm(true);
+                }}
+              />
+            ) : null}
           </Row>
           <Banner tone="neutral" title={zh.agent.remoteUpgradeCadence} />
         </Stack>
@@ -251,6 +291,31 @@ export function AgentCard({
               // 失败信息由页面级 Banner（upgradeError）展示，确认框直接关闭。
             } finally {
               setUpgradeConfirm(false);
+            }
+          }}
+        />
+      ) : null}
+      {rollbackConfirm && previous ? (
+        <ConfirmAction
+          open
+          action={action('agent.rollback')}
+          title={zh.agent.rollbackTitle}
+          body={fmt(zh.agent.rollbackBody, {
+            hub: hubName,
+            from: version ?? zh.agent.notReported,
+            to: previous.version,
+          })}
+          confirmLabel={zh.agent.rollbackConfirm}
+          targetName={previous.version}
+          nameLabel={fmt(zh.agent.rollbackNameLabel, { version: previous.version })}
+          onCancel={() => setRollbackConfirm(false)}
+          onConfirm={async () => {
+            try {
+              await confirmRollback();
+            } catch {
+              // 失败信息由页面级 Banner（upgradeError）展示，确认框直接关闭。
+            } finally {
+              setRollbackConfirm(false);
             }
           }}
         />

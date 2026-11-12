@@ -60,10 +60,41 @@ stage_if_tracked "$DEST_DIR/khc-agent-${VERSION}.tar.gz.sha256"
 if [ -n "${SIGN_KEY_FILE:-}" ]; then
   SHA="$(awk '{print $1}' "$SCRIPT_DIR/agent/dist/khc-agent-${VERSION}.tar.gz.sha256")"
   MANIFEST="$DEST_DIR/release-manifest.json"
+
+  # ADR-0019：把线上当前版本（N-1）取回来一起签发，面板才能回滚一格。
+  # fail-open：拿不到就只签单条，但必须有醒目 WARN（日志 + job summary），
+  # 不能让"本次没有回滚能力"悄无声息。CARRY_OVER=0 可显式关闭。
+  CARRY_ARGS=()
+  if [ "${CARRY_OVER:-1}" != "0" ] && [ -n "${BASE:-}" ]; then
+    CARRY_ORIGIN="${CARRY_OVER_FROM:-${BASE%/agent}}"
+    CARRY_JSON="$DEST_DIR/.carry-over-result.json"
+    SUMMARY_ARGS=()
+    [ -n "${GITHUB_STEP_SUMMARY:-}" ] && SUMMARY_ARGS=(--summary "$GITHUB_STEP_SUMMARY")
+    node "$SCRIPT_DIR/scripts/carry-over-agent-release.mjs" \
+      --origin "$CARRY_ORIGIN" --dest "$DEST_DIR" --new-version "$VERSION" \
+      "${SUMMARY_ARGS[@]+"${SUMMARY_ARGS[@]}"}" > "$CARRY_JSON" || true
+    PREV="$(python3 - "$CARRY_JSON" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+prev = data.get('previous') if data.get('ok') else None
+if isinstance(prev, dict) and prev.get('version') and prev.get('url') and prev.get('sha256'):
+    print(f"{prev['version']}|{prev['url']}|{prev['sha256']}")
+PY
+)"
+    rm -f "$CARRY_JSON"
+    if [ -n "$PREV" ]; then
+      CARRY_ARGS=(--release "$PREV")
+    fi
+  fi
+
   node "$SCRIPT_DIR/scripts/sign-agent-release.mjs" \
     --key "$SIGN_KEY_FILE" --version "$VERSION" \
     --url "${BASE%/}/khc-agent-${VERSION}.tar.gz?v=${SHA:0:12}" \
-    --sha256 "$SHA" --out "$MANIFEST"
+    --sha256 "$SHA" --out "$MANIFEST" \
+    "${CARRY_ARGS[@]+"${CARRY_ARGS[@]}"}"
   stage_if_tracked "$MANIFEST"
   echo "==> 签名清单 ${MANIFEST} 已生成（随 assets 部署生效，无需 wrangler secret）"
   echo "==> 清单内公钥须与 AGENT_RELEASE_PUBKEY secret 一致（换钥时同步）"

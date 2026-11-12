@@ -32,8 +32,7 @@
 - 文件：`ADR-0015-manual-release.md`
 - 备注：deploy job 改为仅 `workflow_dispatch`；`push main` 只跑 agent + verify；`pull_request` 去掉文档路径豁免；`deploy-local.sh` 优先读 `wrangler.local.toml` 并在 build 前预检签名产物。**部分取代 ADR-0008 中「main 合并即生产部署」一条**（资源复用与配置唯一来源仍有效）。
 
-- ADR-0016: 恢复 CI 自动部署（合并 main 即上线），签名私钥与 CF token 放 GitHub Secrets
-- 状态：已接受（主人 2026-11-11 拍板 A：GitHub Actions 自动部署）
+- ADR-0016: 恢复 CI 自动部署（合并 main 即上线），签名私钥与 CF token 放 GitHub Secrets- 状态：已接受（主人 2026-11-11 拍板 A：GitHub Actions 自动部署）
 - 文件：`ADR-0016-ci-auto-deploy.md`
 - 备注：deploy job 恢复 `push main` 触发（`workflow_dispatch` 仅补发）；CI 内用 `AGENT_RELEASE_SIGN_KEY` 落 `mktemp` 0600 文件签包；用 `KHC_*` secrets 渲染临时 `wrangler.ci.toml` 部署；保留部署前冒烟与 `--tag`；**Cloudflare 侧 Workers Builds 必须保持断开**（2026-11-11 实测两套部署互相覆盖）。取代 ADR-0015。ADR-0014 已于 2026-11-12 用于自动探测策略（见下）。
 
@@ -54,3 +53,8 @@
 - 状态：**已接受**（2026-11-12 重开：B3 任务快照；取代同日「不做」的旧决定）
 - 文件：`ADR-0018-task-progress-via-snapshot.md`
 - 备注：`/state` 与 10 秒快照新增 optional `tasks` 摘要（最多 5 条、日志末 4 行、≤6 KiB、脱敏）；不新增接口/请求/轮询，10 分钟 / 60 次封顶不变；不建 D1 任务表。全局页无节点上下文时顶栏任务入口隐藏。
+
+- ADR-0019: Agent 回滚包与升级包同一签名覆盖（发版带回 N-1）
+- 状态：**已接受**（主人 2026-11-12 拍板方案 A）
+- 文件：`ADR-0019-agent-rollback-package.md`
+- 备注：deploy 前用内置公钥验线上清单后取回当前版包，清单写两条（新版本在 `releases[0]`、N-1 在 `releases[1]`），由 `scripts/lib/agent-manifest.mjs` 断言顺序；失败 fail-open 但必须在日志与 job summary 打 WARN「本次发版不含 N-1，面板回滚将不可用」；面板新增 `agent.rollback`（L3 + confirm）复用现有升级接口，零契约变更；跨 2026-11-11 换钥的旧包不可回滚属预期行为。
