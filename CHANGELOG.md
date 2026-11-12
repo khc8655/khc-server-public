@@ -18,6 +18,9 @@
 ### Changed
 
 - Agent 版本 0.1.40（patch）；快照轮询预算不变（10 分钟 / 60 次），未新增请求。
+- 发布门禁：公开版仓库无签名清单/发布包时，`verify-agent-release.mjs` 规则 2（VERSION 变更
+  必须已出包入库）跳过；规则 1（运行代码变更必须 bump VERSION）仍强制生效。详见
+  `docs/engineering/release.md` §7.3。
 
 ### Notes
 

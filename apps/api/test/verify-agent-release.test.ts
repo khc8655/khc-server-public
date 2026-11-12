@@ -96,6 +96,18 @@ describe('verify-agent-release: 变更规则（批次 G）', () => {
     expect(problems).toEqual([]);
   });
 
+  it('公开版仓库无发布产物时：运行代码变更仍必须 bump VERSION', () => {
+    const problems = evaluateDiff(
+      ['agent/khc/tasks.py'],
+      ['-    LOG = 1', '+    LOG = 2'],
+      '0.1.40',
+      false,
+      false,
+    );
+    expect(problems.join('\n')).toContain('VERSION 未 bump');
+    expect(problems.join('\n')).toContain('agent/khc/tasks.py');
+  });
+
   it('RUNTIME_CODE_RE 分类正确：install.sh 算，tests 不算', () => {
     expect(RUNTIME_CODE_RE.test('agent/install.sh')).toBe(true);
     expect(RUNTIME_CODE_RE.test('agent/khc-agent.service')).toBe(true);

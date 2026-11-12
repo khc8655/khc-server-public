@@ -227,6 +227,7 @@ npx wrangler versions upload  # 不带 --env，读 wrangler.toml；只上传版�
 ### 7.3 自动校验（防回归）
 
 - **CI（verify job）**：`node scripts/verify-agent-release.mjs --diff "$DIFF_BASE" --repo`，`DIFF_BASE` 取 push 的 `github.event.before`（PR 用 `base.sha`，手动触发用 `HEAD~1`）——规则 1：agent 运行代码（`khc/`、`adapters/`、入口脚本）变更必须 bump `VERSION`；规则 2：`VERSION` 变更必须已出包入库。此前用 `origin/main` 作基线，push main 时它已等于 HEAD，diff 恒为空、两条规则从不触发；
+  - **公开版仓库例外（2026-11-12）**：`khc8655/khc-server-public` 不承载 tar.gz / 签名清单（见 §3.3 与 `.gitignore`），规则 2 自动跳过；**规则 1 仍然强制生效**。判定见 `scripts/verify-agent-release.mjs` 的 `releaseArtifactsPresent`；产物由私有发版流程 / CI deploy job 在 `pnpm build` 前用 `AGENT_RELEASE_SIGN_KEY` 现场生成；
 - **CI（deploy job，仅手动 dispatch）**：`workflow_dispatch` 且 `github.ref == refs/heads/main`；缺 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 时第一步 fail-closed 退出；`Deploy` 前先跑部署前强制冒烟（§4），部署后 curl **固定自定义域名** `https://panel.example.com/agent/khc-agent-<VERSION>.tar.gz?v=<sha 前 12 位>`（与签名清单同款 cache-buster）算 sha256，与仓库包不一致即失败（§3.7 起不再从 deploy 输出解析 `*.workers.dev` URL，关闭 workers_dev 后也解析不到）；
 - **本地**：`./scripts/verify.sh` 包含 `--repo` 一致性检查（`VERSION` == 包内版本 == 文件名、`.sha256` == 实际哈希），用 Agent 内置公钥验证 `apps/web/public/agent/release-manifest.json` 的签名并核对其 sha256 覆盖当前包，且**逐文件比对包内 Agent 源码与仓库 `agent/`**——改了 `agent/khc/*.py` 却没重打包会直接失败。
 
