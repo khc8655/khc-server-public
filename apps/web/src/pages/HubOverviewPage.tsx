@@ -8,7 +8,6 @@ import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { caddyConfigQueryOptions, kindLabelKey } from '../data/sites';
 import { forwardConfigQueryOptions, forwardTarget } from '../data/forwards';
 import { wireGuardConfigQueryOptions } from '../data/wireguard';
-import { appPresence } from '../data/appPresence';
 import { paths } from '../registry/routes';
 import {
   Badge,
@@ -196,20 +195,14 @@ export default function HubOverviewPage() {
   const [firstForward] = forwards;
   const disabledSites = sites.filter((site) => !site.enabled).length;
 
-  // 纳管状态 = D1 期望配置 × 节点在线状态（/state 的 adapters，零新增请求）。
-  // 「D1 有、实装无」必须显示，不能因为条数为 0 就整行消失。
-  // 纯 Caddy 模式下 WG 不算"未纳管"；只有完全没有 WG 配置行时才看实装情况。
-  const wgPresence =
-    summaryMode === 'wg'
-      ? appPresence(true, peers.length, wgStatus)
-      : summaryMode === null
-        ? appPresence(false, null, wgStatus)
-        : 'unknown';
+  // 应用可见性与「未安装」一律只看 D1 期望配置（离线可见，首屏不闪）；
+  // 在线状态只用于「运行中 / 未运行 / 未读取」徽标，不参与行增删。
   const caddyConfigured = sitesQuery.data?.exists === true;
-  const caddyPresence = appPresence(caddyConfigured, sites.length, caddyStatus);
   const pfConfigured = forwardQuery.data?.exists === true;
-  const pfPresence = appPresence(pfConfigured, forwards.length, pfStatus);
-  const wgReady = peerEnabled && wgPresence !== 'missing';
+  const wgReady = peerEnabled;
+  // 未安装（installed === false）不把「未运行」当告警，回落「未读取」。
+  const runningOf = (status?: { installed?: boolean | null; running?: boolean | null }) =>
+    status?.installed === false ? undefined : (status?.running ?? undefined);
 
   // 站点类型分布（反代/静态/跳转计数）；停用才追加注记。
   const siteKindSummary =
@@ -234,24 +227,7 @@ export default function HubOverviewPage() {
         ? `Peer ${peers.length}`
         : null;
 
-  // 徽标口径：未安装 / 已安装但面板无配置 / 已安装但暂无条目优先于「待生效 / 运行中」。
-  // 注意：这里不出现"未纳管"——是否存在未托管的外部站点块只能由站点页扫描回答。
-  const presenceBadge = (
-    presence: ReturnType<typeof appPresence>,
-    dirty: boolean,
-    running?: boolean,
-    emptyLabel?: string,
-  ) =>
-    presence === 'missing'
-      ? { tone: 'warn' as const, label: zh.hub.appNotInstalled }
-      : presence === 'unconfigured'
-        ? { tone: 'neutral' as const, label: zh.hub.appInstalledNoConfig }
-        : presence === 'installed-empty' && emptyLabel
-          ? { tone: 'neutral' as const, label: emptyLabel }
-          : appBadge(dirty, running);
-
-  // 已配置应用 + 节点已安装但面板无配置的应用都要可见（page-specs §2.1 增补）：
-  // 「未配置」仍不渲染占位，但「D1 有、实装无」与「实装有、D1 无」不得隐藏。
+  // 应用行只列 D1 已配置的应用；未配置不渲染占位，避免首屏依赖在线探测。
   const appRows: Array<{
     key: string;
     name: string;
@@ -260,18 +236,14 @@ export default function HubOverviewPage() {
     facts: ReactNode;
     to: string;
   }> = [
-    ...(peerEnabled || wgPresence === 'unconfigured'
+    ...(peerEnabled
       ? [
           {
             key: 'wireguard',
             name: zh.hub.appWireguard,
             icon: 'users' as const,
-            badge: presenceBadge(wgPresence, wgDirty, wgStatus?.running),
-            facts: !peerEnabled ? (
-              zh.hub.appInstalledNoConfigFacts
-            ) : wgPresence === 'missing' ? (
-              zh.hub.appMissingFacts
-            ) : (
+            badge: appBadge(wgDirty, runningOf(wgStatus)),
+            facts: (
               <>
                 {wgInterface ? (
                   <span className="mono">
@@ -285,18 +257,13 @@ export default function HubOverviewPage() {
           },
         ]
       : []),
-    ...(caddyConfigured || caddyPresence === 'unconfigured'
+    ...(caddyConfigured
       ? [
           {
             key: 'caddy',
             name: zh.hub.appCaddy,
             icon: 'globe' as const,
-            badge: presenceBadge(
-              caddyPresence,
-              sitesDirty,
-              caddyStatus?.running,
-              zh.hub.appInstalledEmptySites,
-            ),
+            badge: appBadge(sitesDirty, runningOf(caddyStatus)),
             facts: firstSite ? (
               <>
                 <span className="mono">{firstSite.domain}</span>
@@ -306,8 +273,6 @@ export default function HubOverviewPage() {
                   ? ` · ${fmt(zh.overview.summaryDisabled, { count: disabledSites })}`
                   : ''}
               </>
-            ) : caddyPresence === 'unconfigured' ? (
-              zh.hub.appInstalledNoConfigFacts
             ) : (
               `${sites.length} 个站点`
             ),
@@ -315,18 +280,13 @@ export default function HubOverviewPage() {
           },
         ]
       : []),
-    ...(pfConfigured || pfPresence === 'unconfigured'
+    ...(pfConfigured
       ? [
           {
             key: 'port-forward',
             name: zh.hub.appPortForward,
             icon: 'arrow' as const,
-            badge: presenceBadge(
-              pfPresence,
-              forwardDirty,
-              pfStatus?.running ?? undefined,
-              zh.hub.appInstalledEmptyForwards,
-            ),
+            badge: appBadge(forwardDirty, runningOf(pfStatus)),
             facts: firstForward ? (
               <>
                 <span className="mono">
@@ -334,8 +294,6 @@ export default function HubOverviewPage() {
                 </span>
                 {forwards.length > 1 ? ` 等 ${forwards.length} 条` : ''}
               </>
-            ) : pfPresence === 'unconfigured' ? (
-              zh.hub.appInstalledNoConfigFacts
             ) : (
               `${forwards.length} 条规则`
             ),
@@ -453,16 +411,7 @@ export default function HubOverviewPage() {
       >
         {summaryMode ? (
           <Row gap={2} wrap>
-            {/* WireGuard 未安装时不显示「组网节点」这类肯定口径，改为告警徽标。 */}
-            {!(summaryMode === 'wg' && wgPresence === 'missing') ? (
-              <Badge tone="neutral" label={summaryMode === 'wg' ? zh.mode.badgeWg : zh.mode.badgeCaddy} />
-            ) : null}
-            {wgPresence === 'missing' ? (
-              <Badge tone="warn" label={`${zh.hub.appWireguard} ${zh.hub.appNotInstalled}`} dot />
-            ) : null}
-            {caddyPresence === 'missing' ? (
-              <Badge tone="warn" label={`${zh.hub.appCaddy} ${zh.hub.appNotInstalled}`} dot />
-            ) : null}
+            <Badge tone="neutral" label={summaryMode === 'wg' ? zh.mode.badgeWg : zh.mode.badgeCaddy} />
           </Row>
         ) : null}
       </PageHeader>

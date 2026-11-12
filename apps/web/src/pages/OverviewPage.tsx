@@ -278,7 +278,7 @@ export function OverviewPage() {
                     </span>
                   </div>
 
-                  <NodeSummaryTokens summary={hub.summary} apps={hub.apps} />
+                  <NodeSummaryTokens summary={hub.summary} />
 
                   <div className="ui-hub-offline-bar">
                     <span>

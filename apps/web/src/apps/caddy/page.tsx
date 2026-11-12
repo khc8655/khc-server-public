@@ -4,7 +4,6 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import type { Certificate, TaskResponse } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
-import { hasExternalBlocks } from '../../data/appPresence';
 import { hubAppsQueryOptions, hubQueryOptions } from '../../data/queries';
 import { certificatesQueryOptions } from '../../data/certs';
 import { wireGuardConfigQueryOptions } from '../../data/wireguard';
@@ -24,6 +23,7 @@ import {
   extractPasswordHash,
   formatList,
   healthForSite,
+  hasExternalBlocks,
   importConflict,
   kindLabelKey,
   normalizeCaddyConfig,

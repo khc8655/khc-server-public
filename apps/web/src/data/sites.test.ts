@@ -10,6 +10,7 @@ import {
   findSitesImpactedByPeer,
   formatList,
   healthForSite,
+  hasExternalBlocks,
   importConflict,
   normalizeCaddyConfig,
   normalizeCaddySite,
@@ -481,5 +482,13 @@ describe('列表工具', () => {
       '10.0.0.3',
     ]);
     expect(formatList(['a', 'b'])).toBe('a, b');
+  });
+});
+
+describe('hasExternalBlocks：外部配置唯一显示条件', () => {
+  it('0 块或未扫描 → false；有块 → true', () => {
+    expect(hasExternalBlocks(undefined)).toBe(false);
+    expect(hasExternalBlocks([])).toBe(false);
+    expect(hasExternalBlocks([{ id: 'a' }])).toBe(true);
   });
 });
