@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
+import re
 import threading
 import time
 import traceback
@@ -37,6 +39,50 @@ TERMINAL_STATES = (DONE, ERROR, CANCELED)
 # A-9：落盘任务的保留期与日志截断（写盘只在状态迁移时发生，日志不逐行落盘）。
 TASK_RETENTION_SECONDS = 7 * 24 * 3600
 PERSIST_LOG_LIMIT = 100
+
+# B3：随 /state 与 10 秒快照下发的任务摘要上限（防止把响应撑大）。
+SNAPSHOT_MAX_TASKS = 5
+SNAPSHOT_LOG_LINES = 4
+SNAPSHOT_LOG_CHARS = 160
+SNAPSHOT_ERROR_CHARS = 200
+SNAPSHOT_MAX_BYTES = 6 * 1024
+
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
+    re.S,
+)
+_URL_CREDENTIALS_RE = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.-]*://)(?:[^\s/@]*:[^\s/@]*|[^\s/@]+)@"
+)
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&][A-Za-z0-9_-]*(?:token|ticket|password|passwd|secret|key)=)[^&\s]+",
+)
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
+_SECRET_KV_RE = re.compile(
+    r"(?i)\b([A-Za-z0-9_-]*(?:token|password|passwd|secret|key|authorization))"
+    r"\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+)
+
+
+def _redact_secrets(text: str) -> str:
+    """日志/错误消息脱敏：私钥块、URL 凭据、查询串、Bearer/Basic、key=value。"""
+
+    value = str(text)
+    value = _PRIVATE_KEY_RE.sub("[REDACTED:private_key]", value)
+    value = _URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", value)
+    value = _QUERY_SECRET_RE.sub(r"\1[REDACTED]", value)
+    value = _BEARER_RE.sub(lambda match: f"{match.group(1)} [REDACTED]", value)
+    value = _SECRET_KV_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", value
+    )
+    return value
+
+
+def _clip(text: str, limit: int) -> str:
+    value = str(text)
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 1)] + "…"
 
 
 class Task:
@@ -157,6 +203,33 @@ class Task:
                 "result": copy.deepcopy(self.result),
                 "error": copy.deepcopy(self.error),
             }
+
+    def snapshot_entry(self) -> dict[str, Any]:
+        """轻量任务摘要：只给面板看状态/进度/末几行日志，绝不带 result 或 details。"""
+
+        with self._lock:
+            entry: dict[str, Any] = {
+                "id": self.id,
+                "app": self.app,
+                "action": self.action,
+                "state": self.state,
+                "progress": int(self.progress),
+                "createdAt": int(self.created_at),
+                "updatedAt": int(self.updated_at),
+                "logs": [
+                    _clip(_redact_secrets(line), SNAPSHOT_LOG_CHARS)
+                    for line in list(self._logs)[-SNAPSHOT_LOG_LINES:]
+                ],
+            }
+            error = self.error if isinstance(self.error, dict) else None
+            if error is not None:
+                code = str(error.get("code", "") or "").strip()
+                message = str(error.get("message", "") or "").strip()
+                if code:
+                    entry["errorCode"] = _clip(code, 64)
+                if message:
+                    entry["errorMessage"] = _clip(_redact_secrets(message), SNAPSHOT_ERROR_CHARS)
+            return entry
 
     @property
     def terminal(self) -> bool:
@@ -391,6 +464,24 @@ class TaskManager:
             tasks = [self._tasks[task_id] for task_id in self._order if task_id in self._tasks]
         return [task.to_dict() for task in tasks]
 
+    def snapshot(self) -> dict[str, Any]:
+        """B3：/state 与 10 秒快照用的任务摘要（有上限、已脱敏）。"""
+
+        with self._lock:
+            tasks = [self._tasks[task_id] for task_id in self._order if task_id in self._tasks]
+        # 进行中优先，其次按最近更新倒序；终态任务再多也不会挤掉正在跑的任务。
+        ordered = sorted(tasks, key=lambda task: (1 if task.terminal else 0, -task.updated_at))
+        total = len(ordered)
+        items: list[dict[str, Any]] = []
+        for task in ordered[:SNAPSHOT_MAX_TASKS]:
+            candidate = items + [task.snapshot_entry()]
+            payload = {"items": candidate, "total": total, "truncated": len(candidate) < total}
+            size = len(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            if size > SNAPSHOT_MAX_BYTES:
+                break
+            items = candidate
+        return {"items": items, "total": total, "truncated": len(items) < total}
+
     # -- 执行 ---------------------------------------------------------------
     def _run(
         self,
@@ -466,6 +557,11 @@ __all__ = [
     "ERROR",
     "PENDING",
     "RUNNING",
+    "SNAPSHOT_ERROR_CHARS",
+    "SNAPSHOT_LOG_CHARS",
+    "SNAPSHOT_LOG_LINES",
+    "SNAPSHOT_MAX_BYTES",
+    "SNAPSHOT_MAX_TASKS",
     "TASK_RETENTION_SECONDS",
     "TERMINAL_STATES",
     "Task",

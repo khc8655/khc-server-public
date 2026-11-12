@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import threading
 import time
 import unittest
 
-from khc.tasks import TASK_RETENTION_SECONDS, TaskManager
+from khc.tasks import (
+    SNAPSHOT_LOG_CHARS,
+    SNAPSHOT_LOG_LINES,
+    SNAPSHOT_MAX_BYTES,
+    SNAPSHOT_MAX_TASKS,
+    TASK_RETENTION_SECONDS,
+    Task,
+    TaskManager,
+)
 from khc.util import BadRequest, TaskCanceled, file_mode, save_json
 
 
@@ -108,6 +117,91 @@ class TaskManagerTests(unittest.TestCase):
             sorted(status.keys()),
             sorted(["id", "state", "progress", "logs", "result", "error"]),
         )
+
+    def test_snapshot_entry_serializes_fields_and_redacts_secrets(self) -> None:
+        task = Task("t1", "caddy-site", "install", clock=lambda: 1000.0)
+        task.log("token=abc123 secret: hunter2")
+        task.log("fetch https://user:pass@example.com/path?token=xyz")
+        task.log("redis://:pa55@cache:6379/?access_token=zzz")
+        task.log("-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-material\n-----END OPENSSH PRIVATE KEY-----")
+        task.log("Authorization: Bearer abcdefghijklmnop")
+        task.log("last line")
+        entry = task.snapshot_entry()
+        self.assertEqual(entry["id"], "t1")
+        self.assertEqual(entry["app"], "caddy-site")
+        self.assertEqual(entry["action"], "install")
+        self.assertEqual(entry["state"], "pending")
+        self.assertEqual(entry["progress"], 0)
+        self.assertEqual(entry["createdAt"], 1000)
+        self.assertEqual(entry["updatedAt"], 1000)
+        self.assertEqual(len(entry["logs"]), SNAPSHOT_LOG_LINES)
+        joined = "\n".join(entry["logs"])
+        self.assertNotIn("abc123", joined)
+        self.assertNotIn("hunter2", joined)
+        self.assertNotIn("user:pass", joined)
+        self.assertNotIn("pa55", joined)
+        self.assertNotIn("zzz", joined)
+        self.assertNotIn("secret-material", joined)
+        self.assertNotIn("abcdefghijklmnop", joined)
+        self.assertIn("[REDACTED", joined)
+
+    def test_snapshot_truncates_log_lines(self) -> None:
+        task = Task("t2", "demo", "apply", max_logs=50, clock=lambda: 1000.0)
+        for index in range(10):
+            task.log(f"line-{index} " + "x" * 300)
+        entry = task.snapshot_entry()
+        self.assertEqual(len(entry["logs"]), SNAPSHOT_LOG_LINES)
+        for line in entry["logs"]:
+            self.assertLessEqual(len(line), SNAPSHOT_LOG_CHARS)
+            self.assertTrue(line.endswith("…"))
+        self.assertIn("line-9", entry["logs"][-1])
+
+    def test_snapshot_empty_tasks(self) -> None:
+        self.assertEqual(
+            TaskManager().snapshot(),
+            {"items": [], "total": 0, "truncated": False},
+        )
+
+    def test_snapshot_limits_and_puts_active_first(self) -> None:
+        manager = TaskManager(clock=time.time)
+        for _ in range(6):
+            task_id = manager.submit("demo", "install", lambda task: {})
+            self.assertTrue(manager.wait(task_id, timeout=5))
+        gate = threading.Event()
+        active = manager.submit("demo", "apply", lambda task: gate.wait(3))
+        snapshot = manager.snapshot()
+        self.assertEqual(snapshot["total"], 7)
+        self.assertEqual(len(snapshot["items"]), SNAPSHOT_MAX_TASKS)
+        self.assertTrue(snapshot["truncated"])
+        self.assertEqual(snapshot["items"][0]["id"], active)
+        gate.set()
+        self.assertTrue(manager.wait(active, timeout=5))
+
+    def test_snapshot_stays_within_byte_budget(self) -> None:
+        manager = TaskManager(max_logs=100, clock=time.time)
+        gate = threading.Event()
+
+        def work(task):
+            for _ in range(10):
+                task.log("日志内容" * 100)
+            gate.wait(5)
+
+        ids = [manager.submit("demo", "install", work) for _ in range(SNAPSHOT_MAX_TASKS)]
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            entries = [manager.get(task_id).snapshot_entry() for task_id in ids]
+            if all(len(entry["logs"]) == SNAPSHOT_LOG_LINES for entry in entries):
+                break
+            time.sleep(0.01)
+        snapshot = manager.snapshot()
+        size = len(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        self.assertLessEqual(size, SNAPSHOT_MAX_BYTES)
+        self.assertTrue(snapshot["truncated"])
+        self.assertLess(len(snapshot["items"]), SNAPSHOT_MAX_TASKS)
+        self.assertEqual(snapshot["total"], SNAPSHOT_MAX_TASKS)
+        gate.set()
+        for task_id in ids:
+            self.assertTrue(manager.wait(task_id, timeout=5))
 
     def test_prunes_terminal_tasks(self) -> None:
         manager = TaskManager(max_tasks=2, clock=time.time)

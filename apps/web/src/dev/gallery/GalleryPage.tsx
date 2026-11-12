@@ -656,7 +656,12 @@ export default function GalleryPage() {
                 userName="admin"
                 onLogout={() => undefined}
                 onOpenMenu={() => undefined}
-                taskLabel={`1 个任务运行中`}
+                taskEntry={
+                  <span className="ui-task-pill">
+                    <StatusDot tone="info" pulse />
+                    1 个任务运行中
+                  </span>
+                }
               />
               <div className="ui-content">
                 <Breadcrumb

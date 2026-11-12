@@ -67,7 +67,7 @@ X-Khc-Sig:    hex(HMAC-SHA256(token, f"{METHOD}|{path}|{ts}|{nonce}|{sha256hex(b
 | 端点 | 说明 |
 |---|---|
 | `GET /health` | 无鉴权 `{ok, version}` |
-| `GET /state` | 顶层 `host` / `adapters` / `ports`（另有 `ok`） |
+| `GET /state` | 顶层 `host` / `adapters` / `ports` / `tasks`（另有 `ok`；`tasks` 为可选任务摘要） |
 | `GET /adapters` | `{ok, adapters:[{name,version,api,schema,actions,requires_root}]}` |
 | `POST /apps/<app>/<action>` | plan/apply/rollback 同步；install/uninstall/长动作返回 `{ok,taskId}` |
 | `GET /tasks/<id>` | `{ok, task:{id,state,progress,logs,result,error}}` |

@@ -800,6 +800,26 @@ export const zh = {
     capHint: '单次打开最多自动刷新 10 分钟或 60 次；到顶后请手动刷新',
   },
 
+  tasks: {
+    entry: '任务',
+    running: '{count} 个任务进行中',
+    title: '任务',
+    subtitle: '随 10 秒快照更新 · 只读',
+    loading: '正在读取任务…',
+    loadingHint: '快照到达后这里会自动显示。',
+    empty: '还没有任务',
+    emptyHint: '安装、应用或卸载时会在这里显示进度。',
+    legacy: '当前 Agent 不提供任务快照',
+    legacyHint: '升级节点 Agent 后，这里会显示进行中与最近完成的任务。',
+    offline: '暂时读不到任务',
+    offlineHint: '节点快照不可用；恢复后这里会自动更新，不需要手动刷新。',
+    truncated: '仅显示最近 {shown} / {total} 个任务',
+    updatedAt: '更新于 {time}',
+    progress: '进度 {progress}%',
+    noLogs: '暂无日志',
+    errorLabel: '失败原因',
+  },
+
   hub: {
     quickTitle: '快速入口',
     summary: '节点概况',

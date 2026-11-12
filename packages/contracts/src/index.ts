@@ -450,6 +450,34 @@ export type AgentTask = z.infer<typeof agentTaskSchema>;
 export const taskResponseSchema = z.object({ task: agentTaskSchema });
 export type TaskResponse = z.infer<typeof taskResponseSchema>;
 
+/**
+ * B3：任务摘要（随 /state 与 10 秒快照下发，可选字段）。
+ * 只含状态/进度/末几行脱敏日志，不含 result 与 error.details。
+ */
+export const agentTaskSummarySchema = z.object({
+  id: z.string().min(1),
+  app: z.string().min(1),
+  action: z.string().min(1),
+  state: taskStateSchema,
+  progress: z.number().int().min(0).max(100),
+  /** Unix 秒 */
+  createdAt: z.number().int().nonnegative(),
+  /** Unix 秒 */
+  updatedAt: z.number().int().nonnegative(),
+  /** 末几行日志；Agent 侧已脱敏与截断 */
+  logs: z.array(z.string()),
+  errorCode: z.string().min(1).optional(),
+  errorMessage: z.string().min(1).optional(),
+});
+export type AgentTaskSummary = z.infer<typeof agentTaskSummarySchema>;
+
+export const agentTasksSchema = z.object({
+  items: z.array(agentTaskSummarySchema),
+  total: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
+export type AgentTasks = z.infer<typeof agentTasksSchema>;
+
 export const adapterInfoSchema = z
   .object({
     name: z.string().min(1),
@@ -595,6 +623,8 @@ export const agentStateSchema = z
     ports: z.array(portEntrySchema),
     ops: agentOpsSchema.optional(),
     agent: agentSelfSchema.optional(),
+    /** B3：任务摘要；旧 Agent 不返回（前端降级为「升级后可见」） */
+    tasks: agentTasksSchema.optional(),
   })
   .passthrough();
 export type AgentState = z.infer<typeof agentStateSchema>;
@@ -625,6 +655,8 @@ export const agentSnapshotSchema = z
     host: agentHostSchema.optional(),
     ops: agentOpsSchema.optional(),
     agent: agentSelfSchema.optional(),
+    /** B3：任务摘要（进行中 + 最近终态，有上限）；旧 Agent 不返回 */
+    tasks: agentTasksSchema.optional(),
     /** Agent 采集时刻（Unix 秒） */
     ts: z.number().int().nonnegative().optional(),
   })
