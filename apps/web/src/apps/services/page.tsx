@@ -463,6 +463,7 @@ export default function HubServicesPage() {
       key: 'service',
       type: 'name',
       header: zh.services.colService,
+      width: '18%',
       value: (row) => row.site.name,
       dot: (row) =>
         siteStatus(row.site, backendContext, {
@@ -476,6 +477,7 @@ export default function HubServicesPage() {
       key: 'address',
       type: 'mono',
       header: zh.services.colAddress,
+      width: '18%',
       value: (row) => addressOfSite(row.site),
     },
     {
@@ -483,12 +485,14 @@ export default function HubServicesPage() {
       type: 'mono',
       header: zh.services.colBackend,
       value: (row) => siteBackendText(row.site, backendContext),
+      width: '28%',
       priority: 'low',
     },
     {
       key: 'status',
       type: 'status',
       header: zh.services.colStatus,
+      width: '14%',
       status: (row) =>
         siteStatus(row.site, backendContext, {
           unapplied: sitesUnapplied,
@@ -532,9 +536,10 @@ export default function HubServicesPage() {
       type: 'text',
       header: zh.services.colCertAccess,
       value: (row) => certAccessText(row.site),
+      width: '10%',
       priority: 'low',
     },
-    { key: 'actions', type: 'actions', header: '' },
+    { key: 'actions', type: 'actions', header: '', width: '56px' },
   ];
 
   const forwardColumns: ColumnDef<ForwardRowView>[] = [
@@ -542,6 +547,7 @@ export default function HubServicesPage() {
       key: 'name',
       type: 'name',
       header: zh.services.colService,
+      width: '22%',
       value: (row) => forwardName(row.forward),
       dot: (row) =>
         forwardStatusView(row.forward, backendContext, forwardStatus, {
@@ -554,6 +560,7 @@ export default function HubServicesPage() {
       key: 'address',
       type: 'mono',
       header: zh.services.colAddress,
+      width: '20%',
       value: (row) => `${host}:${row.forward.listenPort}`,
     },
     {
@@ -561,12 +568,14 @@ export default function HubServicesPage() {
       type: 'mono',
       header: zh.services.colTarget,
       value: (row) => targetText(row.forward, backendContext),
+      width: '24%',
       priority: 'low',
     },
     {
       key: 'status',
       type: 'status',
       header: zh.services.colStatus,
+      width: '12%',
       status: (row) =>
         forwardStatusView(row.forward, backendContext, forwardStatus, {
           unapplied: forwardsUnapplied,
@@ -607,9 +616,10 @@ export default function HubServicesPage() {
       type: 'text',
       header: zh.services.colProtocol,
       value: (row) => (row.forward.protocol === 'udp' ? zh.forwards.protocolUdp : zh.forwards.protocolTcp),
+      width: '10%',
       priority: 'low',
     },
-    { key: 'actions', type: 'actions', header: '' },
+    { key: 'actions', type: 'actions', header: '', width: '56px' },
   ];
 
   const siteActions = (): ActionRef[] => [

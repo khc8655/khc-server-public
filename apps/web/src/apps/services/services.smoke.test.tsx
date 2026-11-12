@@ -301,4 +301,23 @@ describe('对外服务页（B4）', () => {
       expect(requests.filter((item) => item.url === '/api/v1/certs')).toHaveLength(1),
     );
   });
+
+  it('⋯ 删除走已注册 L2 动作与既有确认组件，确认前不写接口', async () => {
+    await renderRoute('/hubs/tyo-1/services');
+    const more = await screen.findAllByRole('button', { name: '更多操作' });
+    await userEvent.click(more[0]!);
+    const items = await screen.findAllByRole('menuitem');
+    const remove = items.find((item) => item.textContent?.includes('删除站点'));
+    expect(remove).toBeTruthy();
+    await userEvent.click(remove!);
+    expect(await screen.findByText('删除站点 blog.example.dev？')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '删除站点' })).toBeTruthy();
+    expect(
+      requests.filter(
+        (item) =>
+          ['PUT', 'POST', 'PATCH', 'DELETE'].includes(item.init?.method ?? 'GET') &&
+          item.url.includes('/apps/caddy-site'),
+      ),
+    ).toHaveLength(0);
+  });
 });

@@ -33,6 +33,8 @@ export interface ColumnDef<T> {
   narrow?: (row: T) => string | null | undefined;
   /** 自定义单元格内容（如状态列右侧的行内动作）；返回后忽略列类型默认渲染。 */
   render?: (row: T) => ReactNode;
+  /** 固定表格布局下的列宽（如 '30%' / '260px'）；不填则均分。 */
+  width?: string;
   priority?: 'high' | 'low';
 }
 
@@ -172,6 +174,11 @@ export function Table<T>({
       {toolbar}
       <div className="ui-table-wrap">
         <table className="ui-table">
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.key} style={column.width ? { width: column.width } : undefined} />
+            ))}
+          </colgroup>
           <thead>
             <tr>{headerCells}</tr>
           </thead>

@@ -19,7 +19,8 @@
 
 - 站点抽屉与端口转发抽屉抽为共享组件（`caddy/SiteDrawer` + `caddy/siteForm`、
   `wireguard/forwardDrawer`），站点页与内网穿透页行为不变。
-- 表格组件支持自定义状态单元格与窄屏第三段（`render` + `narrow` 独立一行）。
+- 表格组件支持自定义状态单元格与窄屏第三段（`render` + `narrow` 独立一行），并支持列宽提示
+  （`ColumnDef.width`，仅本页使用，其他表不变）。
 
 ### Notes
 
