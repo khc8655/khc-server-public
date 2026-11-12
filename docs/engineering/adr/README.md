@@ -35,5 +35,22 @@
 - ADR-0016: 恢复 CI 自动部署（合并 main 即上线），签名私钥与 CF token 放 GitHub Secrets
 - 状态：已接受（主人 2026-11-11 拍板 A：GitHub Actions 自动部署）
 - 文件：`ADR-0016-ci-auto-deploy.md`
-- 备注：deploy job 恢复 `push main` 触发（`workflow_dispatch` 仅补发）；CI 内用 `AGENT_RELEASE_SIGN_KEY` 落 `mktemp` 0600 文件签包；用 `KHC_*` secrets 渲染临时 `wrangler.ci.toml` 部署；保留部署前冒烟与 `--tag`；**Cloudflare 侧 Workers Builds 必须保持断开**（2026-11-11 实测两套部署互相覆盖）。取代 ADR-0015。ADR-0014 编号未使用（`docs/ui-redesign/audit-2026-11-08.md` 曾建议用于自动加载策略，尚未成文）。
+- 备注：deploy job 恢复 `push main` 触发（`workflow_dispatch` 仅补发）；CI 内用 `AGENT_RELEASE_SIGN_KEY` 落 `mktemp` 0600 文件签包；用 `KHC_*` secrets 渲染临时 `wrangler.ci.toml` 部署；保留部署前冒烟与 `--tag`；**Cloudflare 侧 Workers Builds 必须保持断开**（2026-11-11 实测两套部署互相覆盖）。取代 ADR-0015。ADR-0014 已于 2026-11-12 用于自动探测策略（见下）。
 
+
+## 2026-11-12
+
+- ADR-0014: 打开页面即探测节点（规范向实现看齐）
+- 状态：**已接受**（主人 2026-11-12 拍板 A）
+- 文件：`ADR-0014-probe-on-mount.md`
+- 备注：把 `useHubProbe` 的挂载即探测、15 秒复用、离线最多复核 3 次写进 `page-specs.md` §1.2 与 `ui-guidelines.md` §8.12，明确「每次打开最多 1+3 次」预算；自动探测只读，不自动 apply/删除。
+
+- ADR-0017: 对外服务可见性（站点表「后端」列 → 「对外服务」页）
+- 状态：**已接受**（主人 2026-11-12 拍板：先 C 后 A，只读聚合）
+- 文件：`ADR-0017-services-view.md`
+- 备注：第 3 批站点表新增「后端」列（本机 / 内网 VM + Peer 在线 / 内网未登记 / 外部），第 4 批新增 `/hubs/:id/services`「对外服务」页；识别与状态推导收敛到 `apps/web/src/data/services.ts`，零后端改动、零新增请求、不新增数据模型。
+
+- ADR-0018: 任务进度随 10 秒快照下发
+- 状态：**已废弃**（主人 2026-11-12 拍板不做；维持手动查看与 10 分钟 / 60 次轮询上限）
+- 文件：`ADR-0018-task-progress-via-snapshot.md`
+- 备注：不改 `agent/khc/`、`packages/contracts/`；不恢复 SSE，不建 D1 任务表。理由与预算口径记录在 ADR 内，避免重复提案。
