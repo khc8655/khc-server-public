@@ -3404,17 +3404,17 @@
   }
 }
 
-/* ============================== 节点运行矩阵与概览组件 ============================== */
+/* ============================== 概览节点卡片（A 分诊概览） ============================== */
 .ui-hub-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s-4);
 }
 
-.ui-hub-tile {
+.ui-node-card {
   display: flex;
   flex-direction: column;
-  gap: var(--s-3);
+  gap: var(--s-4);
   min-width: 0;
   padding: var(--s-4) var(--s-5);
   color: var(--fg);
@@ -3427,121 +3427,201 @@
   transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease);
 }
 
-.ui-hub-tile-danger {
-  background: color-mix(in srgb, var(--danger-soft) 32%, var(--bg-elevated));
-  border-color: color-mix(in srgb, var(--danger-line) 70%, var(--line));
+.ui-node-card--offline {
+  border-color: color-mix(in srgb, var(--danger-line) 45%, var(--line));
 }
 
-.ui-hub-tile:hover {
+.ui-node-card:hover {
   border-color: var(--line-strong);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
-.ui-hub-tile:focus-visible {
+.ui-node-card:focus-visible {
   outline: none;
   box-shadow: var(--focus);
 }
 
-.ui-hub-tile-head {
+.ui-node-card-body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--s-3);
   min-width: 0;
 }
 
-.ui-hub-tile-title-row {
+.ui-node-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.ui-node-card-identity {
   display: flex;
   align-items: center;
   gap: var(--s-2);
   min-width: 0;
-  flex: 1;
 }
 
-.ui-hub-tile-name {
-  margin: 0;
+.ui-node-card-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  color: var(--fg);
   font-size: var(--fs-lg);
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: var(--fg);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ui-hub-tile-chevron {
+.ui-node-card-chevron {
   display: inline-flex;
+  flex: none;
   color: var(--fg-subtle);
-  transition: transform 150ms var(--ease), color 150ms var(--ease);
+  transition: color 150ms var(--ease), transform 150ms var(--ease);
 }
 
-.ui-hub-tile:hover .ui-hub-tile-chevron {
+.ui-node-card:hover .ui-node-card-chevron {
   color: var(--accent);
   transform: translateX(2px);
 }
 
-.ui-hub-tile-endpoint-row {
+.ui-node-card-access {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--s-2);
   min-width: 0;
-  padding: var(--s15) var(--s25);
-  background: var(--bg-muted);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
 }
 
-.ui-hub-tile-endpoint {
+.ui-node-card-endpoint {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  color: var(--fg-secondary);
+  color: var(--fg-muted);
   font-family: var(--mono);
   font-size: var(--fs-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ui-hub-tile-route-chip {
+.ui-node-card-access-chip {
   flex: none;
+  padding: 0 var(--s15);
   color: var(--fg-muted);
-  font-family: var(--mono);
   font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--bg-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
 }
 
-/* 节点应用摘要令牌（page-specs §1.2）：显示即开启，未配置不渲染 */
-.ui-hub-tile-summary {
+.ui-node-card-apps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+}
+
+.ui-node-card-label {
+  color: var(--fg-muted);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.04em;
+}
+
+.ui-node-card-app-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-2) var(--s-3);
+}
+
+.ui-node-app {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--s1) var(--s2);
-  padding-top: var(--s25);
-  border-top: 1px dashed var(--line);
-  font-size: var(--fs-sm);
+  gap: var(--s15);
+  min-width: 0;
 }
 
-.ui-sum-tok {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s15);
-  color: var(--fg);
+.ui-node-app-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-secondary);
+  font-size: var(--fs-sm);
   font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ui-sum-tok .ui-icon {
-  color: var(--fg-subtle);
+.ui-node-card-app-empty {
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
 }
 
-.ui-sum-n {
+.ui-node-app-state {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.ui-node-app-state--ok {
+  color: var(--fg-secondary);
+}
+
+.ui-node-app-state--warn {
+  color: var(--warn);
+}
+
+.ui-node-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: auto;
+  padding-top: var(--s-2);
+  color: var(--fg-muted);
+  font-size: var(--fs-2xs);
+}
+
+.ui-node-card-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.ui-node-card-fact {
+  white-space: nowrap;
+}
+
+.ui-node-card-fact b {
+  color: var(--fg-secondary);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.ui-sum-exc {
+.ui-node-card-exc {
   color: var(--warn);
-  font-weight: 400;
-  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.ui-node-card-lastseen {
+  flex: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .ui-node-card {
+    gap: var(--s-3);
+    padding: var(--s3) var(--s4);
+  }
+
+  .ui-node-card-app-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* 概况页「应用与发布」行（page-specs §2.1）：单徽标 + 关键参数 */
@@ -3624,56 +3704,6 @@
 .ui-hub-load-val {
   font-family: var(--mono);
   font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-}
-
-.ui-hub-offline-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--s15) 0 var(--s05);
-  color: var(--fg-muted);
-  font-size: var(--fs-xs);
-}
-
-.ui-hub-tile-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s15);
-  padding-top: var(--s-3);
-  border-top: 1px solid var(--line);
-}
-
-.ui-hub-stat-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s05);
-  padding: var(--s15) var(--s2);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  text-align: left;
-  transition: background 120ms var(--ease), border-color 120ms var(--ease);
-}
-
-.ui-hub-stat-btn:hover {
-  background: var(--bg-muted);
-  border-color: var(--line);
-}
-
-.ui-hub-tile-stat-label {
-  font-size: var(--fs-2xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-}
-
-.ui-hub-tile-stat-value {
-  font-family: var(--mono);
-  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--fg);
   font-variant-numeric: tabular-nums;
@@ -4243,20 +4273,6 @@
 
   .ui-hub-load-pill {
     display: none;
-  }
-
-  .ui-hub-tile {
-    padding: var(--s3) var(--s4);
-  }
-
-  .ui-hub-tile-stats {
-    gap: var(--s1);
-  }
-
-  .ui-hub-stat-btn {
-    padding: var(--s15) var(--s1);
-    align-items: center;
-    text-align: center;
   }
 
   .ui-hubbar-tab > .ui-icon {

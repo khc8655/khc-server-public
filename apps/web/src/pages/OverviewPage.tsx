@@ -2,11 +2,11 @@ import { useMemo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { certificatesQueryOptions } from '../data/certs';
 import { useQuery } from '@tanstack/react-query';
-import { hubOutageDays, hubStatusView, useHubProbe, type HubView } from '../data/useHubProbe';
+import { hubOutageDays, hubStatusView, useHubProbe } from '../data/useHubProbe';
 import { formatRelativeTime } from '../i18n/format';
 import { fmt, zh } from '../i18n/zh';
 import { paths } from '../registry/routes';
-import { NodeSummaryTokens } from '../patterns/NodeSummaryTokens';
+import { HubCard } from '../patterns/HubCard';
 import { PANEL_VERSION_LABEL } from '../version';
 import {
   Badge,
@@ -22,11 +22,6 @@ import {
   Stack,
   Stat,
 } from '../ui';
-
-function statusBadge(hub: HubView, phase: 'probing' | 'done' | 'failed') {
-  const view = hubStatusView(hub, phase);
-  return <Badge tone={view.tone} label={view.label} dot />;
-}
 
 export function OverviewPage() {
   const routerNavigate = useNavigate();
@@ -236,58 +231,14 @@ export function OverviewPage() {
           }
         >
           <div className="ui-hub-grid">
-            {hubs.map((hub) => {
-              const toneClass =
-                hub.status === 'online'
-                  ? 'ui-hub-tile-ok'
-                  : hub.status === 'offline'
-                    ? 'ui-hub-tile-danger'
-                    : '';
-
-              return (
-                <div
-                  key={hub.id}
-                  role="link"
-                  tabIndex={0}
-                  className={`ui-hub-tile ${toneClass}`.trim()}
-                  onClick={() => goTo(paths.hub(hub.id))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      goTo(paths.hub(hub.id));
-                    }
-                  }}
-                >
-                  <div className="ui-hub-tile-head">
-                    <div className="ui-hub-tile-title-row">
-                      <span className="ui-hub-tile-name">{hub.name}</span>
-                    </div>
-                    <div className="ui-Cluster">
-                      {statusBadge(hub, phase)}
-                      <span className="sr-only">{zh.overview.hubCardEnter}</span>
-                      <span className="ui-hub-tile-chevron" aria-hidden="true">
-                        <Icon name="arrow" />
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="ui-hub-tile-endpoint-row">
-                    <span className="ui-hub-tile-endpoint">{hub.endpoint}</span>
-                    <span className="ui-hub-tile-route-chip">
-                      {hub.preferredRoute === 'tunnel' ? zh.hubs.routeTunnel : zh.hubs.routeDirect}
-                    </span>
-                  </div>
-
-                  <NodeSummaryTokens summary={hub.summary} />
-
-                  <div className="ui-hub-offline-bar">
-                    <span>
-                      {zh.fields.lastSeen}：{hub.lastSeenAt ? formatRelativeTime(hub.lastSeenAt) : zh.common.dash}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+            {hubs.map((hub) => (
+              <HubCard
+                key={hub.id}
+                hub={hub}
+                phase={phase}
+                onOpen={() => goTo(paths.hub(hub.id))}
+              />
+            ))}
           </div>
         </Card>
       )}
