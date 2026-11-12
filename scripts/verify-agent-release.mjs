@@ -13,7 +13,8 @@
  *   node scripts/verify-agent-release.mjs --diff <base-ref>
  *       变更规则（CI 用）：
  *       规则 1：agent 运行代码（khc/ adapters/ 入口脚本）变更 ⇒ VERSION 必须同时变更；
- *       规则 2：VERSION 变更 ⇒ apps/web/public/agent/khc-agent-<新版本>.tar.gz 必须已出包入库。
+ *       规则 2：VERSION 变更 ⇒ apps/web/public/agent/khc-agent-<新版本>.tar.gz 必须已出包入库
+ *       （公开版仓库无发布产物时跳过：产物被 .gitignore 排除，由私有发版流程注入）。
  *   node scripts/verify-agent-release.mjs --archive <tar.gz> [--manifest <json> --pubkey <base64>]
  *       单包校验：哈希/版本/（可选）签名清单匹配。
  *
@@ -256,8 +257,20 @@ export function checkCommittedManifest(manifestFile, pubkeyB64, archive) {
   return checkManifest(manifestFile, pubkeyB64, archive);
 }
 
-/** 变更规则评估（纯函数，便于测试）；返回问题列表 */
-export function evaluateDiff(changedFiles, versionLineChanges, repoVersion, packageExists) {
+/**
+ * 变更规则评估（纯函数，便于测试）；返回问题列表。
+ *
+ * `releaseArtifactsPresent`：仓库是否承载发布产物（签名清单或当前版本包）。
+ * 公开版仓库把 tar.gz/清单排除在版本控制之外，由私有发版流程注入；此时
+ * 只能校验「运行代码变更必须 bump VERSION」，不能要求公开库提交二进制产物。
+ */
+export function evaluateDiff(
+  changedFiles,
+  versionLineChanges,
+  repoVersion,
+  packageExists,
+  releaseArtifactsPresent = true,
+) {
   const runtimeChanged = changedFiles.filter((file) => RUNTIME_CODE_RE.test(file));
   const versionChanged = versionLineChanges.some((line) => /^[+-][ \t]*VERSION[ \t]*=/.test(line));
   if (runtimeChanged.length > 0 && !versionChanged) {
@@ -267,7 +280,7 @@ export function evaluateDiff(changedFiles, versionLineChanges, repoVersion, pack
       '修复不会随包发布（线上会继续跑旧包）。请在 agent/khc/util.py bump VERSION，并用 scripts/build-agent-release.sh 重新出包。',
     ];
   }
-  if (versionChanged && !packageExists) {
+  if (versionChanged && releaseArtifactsPresent && !packageExists) {
     return [
       `VERSION 已更新为 ${repoVersion}，但 apps/web/public/agent/khc-agent-${repoVersion}.tar.gz 不存在：`,
       '请运行 scripts/build-agent-release.sh 出包（产物入库后随 Worker assets 部署）。',
@@ -342,7 +355,11 @@ if (isMain() && arg('diff')) {
       );
     const repoVersion = readRepoVersion();
     const packageExists = fs.existsSync(path.join(PKG_DIR, `khc-agent-${repoVersion}.tar.gz`));
-    problems.push(...evaluateDiff(files, versionLineChanges, repoVersion, packageExists));
+    // 公开版仓库没有签名清单/发布包：只校验 VERSION bump，不要求提交被 .gitignore 排除的产物。
+    const releaseArtifactsPresent = packageExists || fs.existsSync(MANIFEST_FILE);
+    problems.push(
+      ...evaluateDiff(files, versionLineChanges, repoVersion, packageExists, releaseArtifactsPresent),
+    );
   }
 }
 

@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
+### Added
+
+- 顶栏新增「任务」入口（只在节点上下文显示）：打开只读任务抽屉，展示进行中与最近完成的
+  任务状态、进度与末几行日志；四态（有任务 / 无任务 / 旧 Agent 无字段 / 离线）。
+- Agent `/state` 与 10 秒快照新增可选 `tasks` 摘要：进行中优先、最多 5 条、日志末 4 行
+  （每行 ≤160 字符）、整段 ≤6 KiB；日志与错误消息过滤私钥块、token/password/secret、
+  Bearer/Basic、URL 凭据与查询串凭据。
+- 全局页（概览 / 节点列表）没有节点上下文，顶栏任务入口隐藏，不留禁用死按钮。
+
+### Changed
+
+- Agent 版本 0.1.40（patch）；快照轮询预算不变（10 分钟 / 60 次），未新增请求。
+- 发布门禁：公开版仓库无签名清单/发布包时，`verify-agent-release.mjs` 规则 2（VERSION 变更
+  必须已出包入库）跳过；规则 1（运行代码变更必须 bump VERSION）仍强制生效。详见
+  `docs/engineering/release.md` §7.3。
+
+### Notes
+
+- `packages/contracts` 新增 optional `tasks` 字段属向后兼容；旧 Agent 不返回时前端降级。
+- 未新增接口、未建 D1 表、未加迁移；危险动作仍走既有注册动作与 L2/L3 确认。
+
 ## [0.10.6] - 2026-11-12
 
 ### Changed

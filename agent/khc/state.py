@@ -17,7 +17,7 @@ import time
 from typing import Any, Optional
 
 from .ops import collect_ops, collect_snapshot
-from .util import Paths
+from .util import LOG, Paths
 
 
 def _read_os_release() -> Optional[str]:
@@ -126,6 +126,20 @@ def agent_info(kernel: Any) -> dict[str, Any]:
     return info
 
 
+def tasks_summary(kernel: Any) -> dict[str, Any]:
+    """B3：任务摘要（可选字段）；老内核/任务管理器异常时降级为空列表。"""
+
+    manager = getattr(kernel, "tasks", None)
+    snapshot = getattr(manager, "snapshot", None)
+    if not callable(snapshot):
+        return {"items": [], "total": 0, "truncated": False}
+    try:
+        return snapshot()
+    except Exception:  # noqa: BLE001 - 任务摘要失败不能拖垮 /state
+        LOG.warning("任务摘要生成失败", exc_info=True)
+        return {"items": [], "total": 0, "truncated": False}
+
+
 def build_state(kernel: Any) -> dict[str, Any]:
     """由 Kernel 组装 /state 响应。"""
 
@@ -136,6 +150,7 @@ def build_state(kernel: Any) -> dict[str, Any]:
         "ports": kernel.ports.entries(),
         "ops": collect_ops(kernel.paths),
         "agent": agent_info(kernel),
+        "tasks": tasks_summary(kernel),
     }
 
 
@@ -152,7 +167,8 @@ def build_snapshot(kernel: Any) -> dict[str, Any]:
         "host": host_info(kernel.paths),
         "ops": collect_snapshot(kernel.paths),
         "agent": agent_info(kernel),
+        "tasks": tasks_summary(kernel),
     }
 
 
-__all__ = ["agent_info", "build_snapshot", "build_state", "host_info"]
+__all__ = ["agent_info", "build_snapshot", "build_state", "host_info", "tasks_summary"]

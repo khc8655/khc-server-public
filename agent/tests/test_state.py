@@ -8,7 +8,7 @@ import time
 import unittest
 
 from khc import Adapter, File
-from khc.state import agent_info, build_state, host_info
+from khc.state import agent_info, build_snapshot, build_state, host_info, tasks_summary
 
 from .support import FakeRunner, make_kernel, make_paths
 
@@ -119,6 +119,18 @@ class StateTests(unittest.TestCase):
         # 未配置 WireGuard 时不返回 mode（可选字段）
         self.assertNotIn("mode", agent)
         self.assertEqual(agent_info(self.kernel)["version"], self.kernel.version)
+
+    def test_state_and_snapshot_include_empty_tasks(self) -> None:
+        empty = {"items": [], "total": 0, "truncated": False}
+        self.assertEqual(build_state(self.kernel)["tasks"], empty)
+        self.assertEqual(build_snapshot(self.kernel)["tasks"], empty)
+
+    def test_tasks_summary_tolerates_old_kernel(self) -> None:
+        # 老内核没有 tasks 管理器时不能抛异常；字段降级为空列表。
+        self.assertEqual(
+            tasks_summary(object()),
+            {"items": [], "total": 0, "truncated": False},
+        )
 
     def test_agent_mode_derived_from_wireguard_enabled(self) -> None:
         self.kernel.store.set_applied("wireguard", 1, {"enabled": False, "interface": {"name": "wg0"}})

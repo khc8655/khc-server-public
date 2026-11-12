@@ -273,7 +273,8 @@ export interface TopbarProps {
   userName?: string;
   onLogout: () => void;
   onOpenMenu: () => void;
-  taskLabel?: string;
+  /** 顶栏任务入口（仅节点上下文传入；全局页不渲染）。 */
+  taskEntry?: ReactNode;
 }
 
 export function Topbar({
@@ -284,7 +285,7 @@ export function Topbar({
   userName,
   onLogout,
   onOpenMenu,
-  taskLabel,
+  taskEntry,
 }: TopbarProps) {
   return (
     <header className="ui-topbar">
@@ -292,12 +293,7 @@ export function Topbar({
         <Icon name="menu" size={16} />
       </button>
       <Breadcrumb items={crumbs} />
-      {taskLabel ? (
-        <span className="ui-task-pill">
-          <StatusDot tone="info" pulse />
-          {taskLabel}
-        </span>
-      ) : null}
+      {taskEntry ?? null}
       <div className="ui-topbar-right">
         <button
           type="button"

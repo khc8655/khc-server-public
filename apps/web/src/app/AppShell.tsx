@@ -29,6 +29,7 @@ import {
 import { zh, fmt } from '../i18n/zh';
 import { useTheme } from './theme';
 import { HubChannelsProvider, HubReadOnlyNotice, HubSnapshotNotice } from './HubChannelsProvider';
+import { TaskCenter } from './TaskCenter';
 
 /** 全局外壳：左侧固定控制台 + 节点直达列表；右侧单行清爽工作区。 */
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -252,6 +253,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
     [],
   );
 
+  // 顶栏任务入口只在节点上下文渲染：全局页没有节点就没有数据源，隐藏而不是留一个禁用死按钮。
+  const topbar = (taskEntry?: ReactNode) => (
+    <Topbar
+      crumbs={crumbs}
+      onOpenPalette={() => setPaletteOpen(true)}
+      theme={theme.mode}
+      onThemeChange={theme.setMode}
+      userName={me.data?.user.name}
+      onLogout={() => void handleLogout()}
+      onOpenMenu={() => setMobileOpen(true)}
+      taskEntry={taskEntry}
+    />
+  );
+
   return (
     <ToastContextProvider value={toastApi}>
       <div className="ui-shell">
@@ -273,17 +288,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
           onCloseMobile={() => setMobileOpen(false)}
         />
         <div className="ui-main">
-          <Topbar
-            crumbs={crumbs}
-            onOpenPalette={() => setPaletteOpen(true)}
-            theme={theme.mode}
-            onThemeChange={theme.setMode}
-            userName={me.data?.user.name}
-            onLogout={() => void handleLogout()}
-            onOpenMenu={() => setMobileOpen(true)}
-          />
           {match ? (
             <HubChannelsProvider hubId={hubId} liveEndpoint={hubQuery.data?.liveEndpoint}>
+              {topbar(<TaskCenter />)}
               <HubBar
                 activeHub={activeHub}
                 hubs={sidebarHubs}
@@ -298,7 +305,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
               </div>
             </HubChannelsProvider>
           ) : (
-            <main className="ui-content">{children}</main>
+            <>
+              {topbar()}
+              <main className="ui-content">{children}</main>
+            </>
           )}
         </div>
         <CommandPalette

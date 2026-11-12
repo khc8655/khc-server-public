@@ -126,8 +126,8 @@
 | 端点 | 说明 |
 |---|---|
 | `GET /health` | 无鉴权，`{ok, version}` |
-| `GET /state` | 主机基本信息 + 每个已装应用的 `adapter.status()` 和已生效 rev（打开工作区一次性） |
-| `GET /snapshot` | 轻量指标：CPU/内存/磁盘/负载/uptime（10s 轮询，不含适配器/端口/服务进程） |
+| `GET /state` | 主机基本信息 + 每个已装应用的 `adapter.status()` 和已生效 rev（打开工作区一次性）；可选 `tasks` 任务摘要（ADR-0018） |
+| `GET /snapshot` | 轻量指标：CPU/内存/磁盘/负载/uptime + 可选 `tasks` 任务摘要（10s 轮询，不含适配器/端口/服务进程） |
 | `GET /adapters` | 可用适配器 `{name, version, api, schema, actions, requires_root, capabilities, description}` |
 | `POST /apps/:app/:action` | 同步动作直接返回；`install/uninstall/长动作` 返回 `{taskId}` |
 | `GET /tasks/:tid` | `{state, progress, logs[], result, error}` |
@@ -147,6 +147,7 @@
 **返回结构（冻结）**
 
 - `GET /state` → `{ host: { hostname, os, kernel, uptime, load, disk, mem }, adapters: [{ name, version, appliedRev, status }], ports: [{ proto, port, app }] }`
+- `tasks`（可选，ADR-0018）→ `{ items: [{ id, app, action, state, progress, createdAt, updatedAt, logs[], errorCode?, errorMessage? }], total, truncated }`：进行中优先、最多 5 条、日志末 4 行（每行 ≤160 字符）、整段 ≤6 KiB、已脱敏；旧 Agent 不返回该字段
 - `GET /adapters` → `[{ name, version, api, schema, actions, requires_root }]`
 - 任务状态机：`pending → running → done | error | canceled`；任务状态落盘（`<data>/tasks/<id>.json`，0600），Agent 重启后 `/tasks/:id` 仍可查历史任务，未完成任务一律改写为 `error(agent_restarted)`；记录按数量上限与保留期（7 天）清理
 - 端口登记：Agent 本地 `ports.json`（`{proto,port} → app`），冲突返回 `409 busy` 并说明占用者
