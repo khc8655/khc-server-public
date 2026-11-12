@@ -1024,3 +1024,11 @@ export function tlsModeLabelKey(
 export function kindLabelKey(kind: SiteKind): 'kindProxy' | 'kindStatic' | 'kindRedirect' {
   return kind === 'static' ? 'kindStatic' : kind === 'redirect' ? 'kindRedirect' : 'kindProxy';
 }
+
+/**
+ * 是否真的扫描到外部站点块（`caddy_import_scan` 的 `blocks`）。
+ * 这是「外部安装 · 未纳管」唯一的显示条件——0 站点不等于有未托管配置。
+ */
+export function hasExternalBlocks(blocks: readonly unknown[] | undefined): boolean {
+  return (blocks?.length ?? 0) > 0;
+}

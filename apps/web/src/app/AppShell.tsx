@@ -106,7 +106,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     },
   ];
 
-  // 节点层一级导航（压平 5 项，无二级胶囊）
+  // 节点层一级导航（压平，无二级胶囊）。未配置/未安装的按需模块不出现入口：
+  // WireGuard（内网穿透）只在 D1 summary 有 Peer 计数或模式为 wg 时显示；
+  // 判定只用 D1 summary（离线可见），summary 未到达时先显示，避免入口闪烁。
+  const hubSummary = hubQuery.data?.summary;
+  const showWireGuard = !hubSummary || hubSummary.peers !== null || hubSummary.mode === 'wg';
   const hubPrimaryTabs: SidebarNavItem[] = useMemo(() => {
     if (!hubId) return [];
     const section = match?.section ?? null;
@@ -125,13 +129,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
         icon: 'globe',
         active: section === 'sites' || Boolean(match?.app),
       },
-      {
-        key: 'wireguard',
-        label: zh.nav.wireguard,
-        href: paths.hubSection(hubId, 'wireguard'),
-        icon: 'users',
-        active: section === 'wireguard',
-      },
+      ...(showWireGuard
+        ? [
+            {
+              key: 'wireguard',
+              label: zh.nav.wireguard,
+              href: paths.hubSection(hubId, 'wireguard'),
+              icon: 'users' as const,
+              active: section === 'wireguard',
+            },
+          ]
+        : []),
       {
         key: 'ops',
         label: zh.nav.ops,
@@ -147,7 +155,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         active: section === 'settings',
       },
     ];
-  }, [hubId, match]);
+  }, [hubId, match, showWireGuard]);
 
   const crumbs: Crumb[] = useMemo(() => {
     if (match) {

@@ -10,7 +10,7 @@ function summary(patch: Partial<NodeAppSummary>): NodeAppSummary {
   return { mode: null, peers: null, sites: null, forwards: null, ...patch };
 }
 
-describe('NodeSummaryTokens（显示即开启，未配置不渲染）', () => {
+describe('NodeSummaryTokens（只读 D1 summary，未配置不渲染）', () => {
   it('summary 缺失或全部未配置：整行不渲染', () => {
     const { container: a } = render(<NodeSummaryTokens summary={undefined} />);
     expect(a.innerHTML).toBe('');
@@ -57,51 +57,13 @@ describe('NodeSummaryTokens（显示即开启，未配置不渲染）', () => {
     expect(container.textContent).not.toContain('Caddy 网关');
   });
 
-  it('D1 有 WG、节点未安装：显示「未安装 / 未生效」，不再显示「组网节点」', () => {
+  it('不再推断「未安装 / 未纳管 / 面板无配置」，只按 D1 计数展示', () => {
     const { container } = render(
-      <NodeSummaryTokens
-        summary={summary({ mode: 'wg', peers: 0 })}
-        apps={[{ name: 'wireguard', installed: false, running: false }]}
-      />,
-    );
-    expect(container.textContent).toContain('未安装 / 未生效');
-    expect(container.textContent).not.toContain('组网节点');
-    expect(container.textContent).not.toContain('WireGuard');
-  });
-
-  it('Caddy 已安装但 0 站点：显示「站点 0」和「已安装 · 暂无站点」，不出现「未纳管」', () => {
-    const { container } = render(
-      <NodeSummaryTokens
-        summary={summary({ mode: 'caddy', sites: { total: 0, disabled: 0 } })}
-        apps={[{ name: 'caddy-site', installed: true, running: true }]}
-      />,
+      <NodeSummaryTokens summary={summary({ mode: 'wg', peers: 0, sites: { total: 0, disabled: 0 } })} />,
     );
     expect(container.textContent).toContain('站点 0');
-    expect(container.textContent).toContain('已安装 · 暂无站点');
+    expect(container.textContent).not.toContain('未安装');
     expect(container.textContent).not.toContain('未纳管');
-    expect(container.textContent).not.toContain('外部安装');
-  });
-
-  it('Caddy 已安装且有站点：只显示计数，不追加任何纳管注记', () => {
-    const { container } = render(
-      <NodeSummaryTokens
-        summary={summary({ mode: 'caddy', sites: { total: 2, disabled: 0 } })}
-        apps={[{ name: 'caddy-site', installed: true, running: true }]}
-      />,
-    );
-    expect(container.textContent).toContain('站点 2');
-    expect(container.textContent).not.toContain('未纳管');
-    expect(container.textContent).not.toContain('暂无站点');
-  });
-
-  it('实装但 D1 无行：显示「已安装 · 面板无配置」，不推断为未纳管', () => {
-    const { container } = render(
-      <NodeSummaryTokens
-        summary={summary({})}
-        apps={[{ name: 'caddy-site', installed: true, running: true }]}
-      />,
-    );
-    expect(container.textContent).toContain('站点 · 已安装 · 面板无配置');
-    expect(container.textContent).not.toContain('未纳管');
+    expect(container.textContent).not.toContain('面板无配置');
   });
 });
