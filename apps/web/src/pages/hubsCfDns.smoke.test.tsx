@@ -60,6 +60,8 @@ let tunnels: Array<{
   updatedAt: number;
 }> = [];
 let probeReachable = false;
+/** 安装完成检查只看 Caddy；默认已就绪。 */
+let caddyInstalled = true;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function mockApi() {
@@ -112,6 +114,25 @@ function mockApi() {
         }
         return json({ zoneId: 'z1', zoneName: 'example.com', records });
       }
+      if (url === '/api/v1/nodes/node-9/state') {
+        return json({
+          reachable: true,
+          route: 'direct',
+          via: 'fetch',
+          error: null,
+          state: {
+            host: { hostname: 'node-9' },
+            adapters: [
+              {
+                name: 'caddy-site',
+                version: '1.0.0',
+                status: { installed: caddyInstalled, running: caddyInstalled },
+              },
+            ],
+            ports: [],
+          },
+        });
+      }
       if (url === '/api/v1/agent/releases') {
         return json({
           releases: [{ version: '0.1.4', url: 'https://example.com/agent.pyz', sha256: SHA }],
@@ -136,6 +157,7 @@ beforeEach(() => {
   records = [];
   tunnels = [];
   probeReachable = false;
+  caddyInstalled = true;
   mockApi();
 });
 
@@ -315,6 +337,51 @@ describe('添加节点：统一接入表单', () => {
       expect(dns).toBeTruthy();
       expect(JSON.parse(String(dns?.init?.body))).toEqual({ nodeId: 'node-9' });
     });
+  });
+
+  it('我已完成安装：探活在线时只检查 Agent 与 Caddy', async () => {
+    probeReachable = true;
+    caddyInstalled = false;
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: 'IP 直连' }));
+    await userEvent.type(screen.getByLabelText('主机 / IP'), '198.51.100.20');
+    await userEvent.click(screen.getByRole('checkbox', { name: /我确认这是明文 HTTP/ }));
+    await submitCreate();
+
+    await screen.findByText('节点已创建');
+    await userEvent.click(await screen.findByRole('button', { name: '我已完成安装' }));
+
+    expect(await screen.findByText('节点在线，接入已验证')).toBeTruthy();
+    expect(screen.getByText('Agent 在线')).toBeTruthy();
+    expect(screen.getByText('Caddy 未安装')).toBeTruthy();
+    // 安装完成检查只有 Agent 与 Caddy 两项，其他模块按需安装、不参与检查。
+    const checkRow = screen.getByText('Agent 在线').parentElement;
+    expect(checkRow?.children).toHaveLength(2);
+    expect(checkRow?.textContent).toContain('Caddy 未安装');
+    expect(checkRow?.textContent).not.toContain('WireGuard');
+    expect(checkRow?.textContent).not.toContain('端口转发');
+  });
+
+  it('我已完成安装：Caddy 已安装且运行 → 「Caddy 已就绪」', async () => {
+    probeReachable = true;
+    caddyInstalled = true;
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: 'IP 直连' }));
+    await userEvent.type(screen.getByLabelText('主机 / IP'), '198.51.100.20');
+    await userEvent.click(screen.getByRole('checkbox', { name: /我确认这是明文 HTTP/ }));
+    await submitCreate();
+
+    await screen.findByText('节点已创建');
+    await userEvent.click(await screen.findByRole('button', { name: '我已完成安装' }));
+
+    expect(await screen.findByText('Caddy 已就绪')).toBeTruthy();
+    expect(screen.getByText('Agent 在线')).toBeTruthy();
   });
 
   it('我已完成安装：探活离线时展示 3 条失败原因提示，抽屉保持打开', async () => {

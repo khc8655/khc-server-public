@@ -52,11 +52,14 @@ const forwardsConfig = {
 
 let wgRev = 2;
 let wgAppliedRev = 2;
+let sitesRev = 1;
+let sitesAppliedRev = 1;
 let stateOk = true;
 // 模拟 POST/PATCH /nodes 响应或旧缓存：node 上没有 summary 字段
 let withSummary = true;
 // 模拟节点实装状态：未安装的 WG（node-prod-1 口径）/ Caddy 有行但 0 站点
 let wgInstalled = true;
+let caddyInstalled = true;
 let emptySites = false;
 
 /** 详情响应：withSummary=false 时返回不带 summary 的节点（回归：WireGuard 行不得整块消失） */
@@ -102,7 +105,7 @@ function stateBody() {
             ],
           },
         },
-        { name: 'caddy-site', version: '1.0.0', status: { installed: true, running: true } },
+        { name: 'caddy-site', version: '1.0.0', status: { installed: caddyInstalled, running: caddyInstalled } },
         { name: 'port-forward', version: '1.0.0', status: { installed: true, running: true, count: 1 } },
       ],
       ports: [],
@@ -114,9 +117,12 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   wgRev = 2;
   wgAppliedRev = 2;
+  sitesRev = 1;
+  sitesAppliedRev = 1;
   stateOk = true;
   withSummary = true;
   wgInstalled = true;
+  caddyInstalled = true;
   emptySites = false;
   vi.stubGlobal(
     'fetch',
@@ -138,8 +144,8 @@ beforeEach(() => {
             app: 'caddy-site',
             schemaVersion: 1,
             config: emptySites ? { sites: [] } : sitesConfig,
-            rev: 1,
-            appliedRev: 1,
+            rev: sitesRev,
+            appliedRev: sitesAppliedRev,
             updatedAt: NOW,
           },
         });
@@ -171,29 +177,29 @@ async function renderOverview() {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  // 等三个应用配置都到位再断言
-  await screen.findByText('应用与发布');
+  // 等摘要卡的两行都到位再断言（「对外服务」也是侧栏项，不能用它判断渲染完成）
+  await screen.findByText('网页服务');
   return utils;
 }
 
-describe('节点概况页 · 应用与发布', () => {
-  it('只列已配置应用：单徽标 + 关键参数，无「已安装/未配置」文案', async () => {
+describe('节点概况页 · 对外服务摘要', () => {
+  it('只列已配置的对外服务：单徽标 + 数量与后端概览，无「已安装/未配置」文案', async () => {
     const { container } = await renderOverview();
 
-    expect(screen.getAllByText('内网穿透').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('站点').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('端口转发').length).toBeGreaterThan(0);
-    await waitFor(() => expect(screen.getAllByText('运行中')).toHaveLength(3));
+    expect(screen.getByText('网页服务')).toBeTruthy();
+    expect(screen.getByText('远程访问')).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText('运行中')).toHaveLength(2));
     expect(screen.queryByText('已安装')).toBeNull();
     expect(screen.queryByText(/未配置/)).toBeNull();
     expect(screen.queryByText(/还没有站点/)).toBeNull();
 
     const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[0]).toContain('khc0 · 10.99.0.1/24 · :51820');
-    expect(facts[0]).toContain('Peer 1/2 在线');
-    expect(facts[1]).toContain('blog.example.dev');
-    expect(facts[1]).toContain('反代');
-    expect(facts[2]).toContain('2222→10.99.0.2:22');
+    expect(facts[0]).toContain('1 个站点');
+    expect(facts[0]).toContain('内网 VM 1');
+    expect(facts[1]).toContain('1 条规则');
+    expect(facts[1]).toContain('内网 VM 1');
+    // Peer 概览保留在摘要卡底部，不进表格
+    expect(screen.getByText('Peer 1/2 在线')).toBeTruthy();
 
     // 页头：模式徽标（D1 摘要）+ 副标题计数
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
@@ -204,39 +210,41 @@ describe('节点概况页 · 应用与发布', () => {
   });
 
   it('配置未应用时单徽标为「待生效」，不叠双徽标', async () => {
-    wgRev = 3;
-    wgAppliedRev = 2;
+    sitesRev = 2;
+    sitesAppliedRev = 1;
     await renderOverview();
     await waitFor(() => {
       expect(screen.getByText('待生效')).toBeTruthy();
-      expect(screen.getAllByText('运行中')).toHaveLength(2);
+      expect(screen.getAllByText('运行中')).toHaveLength(1);
     });
   });
 
   it('Agent 不可达：徽标降级为「未读取」，模式徽标仍来自 D1', async () => {
     stateOk = false;
     await renderOverview();
-    await waitFor(() => expect(screen.getAllByText('未读取')).toHaveLength(3));
+    await waitFor(() => expect(screen.getAllByText('未读取')).toHaveLength(2));
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
   });
 
-  it('summary 缺失（POST/PATCH 响应或旧缓存）：WireGuard 行与 Peer 指标不消失', async () => {
+  it('summary 缺失（POST/PATCH 响应或旧缓存）：摘要行与 Peer 指标不消失', async () => {
     withSummary = false;
     const { container } = await renderOverview();
 
-    // 回退到同源 wireguard 配置：应用行仍在，Peer 指标仍按接口/端口展示
-    expect(screen.getAllByText('内网穿透').length).toBeGreaterThan(0);
+    // 回退到同源 wireguard 配置：Peer 指标仍按接口/端口展示
+    expect(screen.getByText('网页服务')).toBeTruthy();
+    expect(screen.getByText('远程访问')).toBeTruthy();
+    expect(screen.getByText('Peer 1/2 在线')).toBeTruthy();
     const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[0]).toContain('Peer 1/2 在线');
+    expect(facts[0]).toContain('1 个站点');
     expect(screen.getByText('khc0 · :51820')).toBeTruthy();
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
   });
 
   it('Agent 明确 installed=false：显示中性「未安装」，不是「未读取」', async () => {
-    wgInstalled = false;
+    caddyInstalled = false;
     await renderOverview();
 
-    await waitFor(() => expect(screen.getAllByText('未安装').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('未安装')).toHaveLength(1));
     expect(screen.queryByText('未读取')).toBeNull();
     // 模式徽标只看 D1 期望配置，离线/未装也可见
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
@@ -246,7 +254,7 @@ describe('节点概况页 · 应用与发布', () => {
     stateOk = false;
     await renderOverview();
 
-    await waitFor(() => expect(screen.getAllByText('未读取').length).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(screen.getAllByText('未读取')).toHaveLength(2));
     expect(screen.queryByText('未安装')).toBeNull();
   });
 
@@ -259,7 +267,7 @@ describe('节点概况页 · 应用与发布', () => {
     expect(screen.queryByText('外部安装 · 未纳管')).toBeNull();
     expect(container.textContent).not.toContain('未纳管');
     const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[1]).toContain('0 个站点');
-    expect(facts[1]).not.toContain('接管');
+    expect(facts[0]).toContain('0 个站点');
+    expect(facts[0]).not.toContain('接管');
   });
 });

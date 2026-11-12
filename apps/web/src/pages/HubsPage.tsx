@@ -26,6 +26,7 @@ import {
   type NodeAccessDraft,
 } from '../apps/node-settings/AccessForm';
 import {
+  Badge,
   Banner,
   Button,
   Checkbox,
@@ -88,6 +89,10 @@ export default function HubsPage() {
   const [probeItem, setProbeItem] = useState<NodeProbeItem | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeAuthIssue, setProbeAuthIssue] = useState<string | null>(null);
+  /** 安装完成检查只关心 Agent 与 Caddy；null = 拿不到状态（未读取）。 */
+  const [probeCaddy, setProbeCaddy] = useState<{ installed: boolean; running: boolean } | null>(
+    null,
+  );
 
   const draftIssue = accessDraftIssue(draft, { requireName: true });
 
@@ -272,6 +277,7 @@ export default function HubsPage() {
     setProbeState('checking');
     setProbeError(null);
     setProbeAuthIssue(null);
+    setProbeCaddy(null);
     try {
       const result = await probeHubs();
       const item = result.nodes.find((node) => node.id === createdNodeId) ?? null;
@@ -287,6 +293,16 @@ export default function HubsPage() {
           await queryClient.invalidateQueries({ queryKey: ['hubs'] });
           return;
         }
+        // 只检查 Caddy（必装）；其他模块按需，安装完成与否不看它们。
+        const caddyAdapter = state.state?.adapters.find((adapter) => adapter.name === 'caddy-site');
+        const caddyStatus = caddyAdapter?.status as
+          | { installed?: boolean; running?: boolean }
+          | undefined;
+        setProbeCaddy(
+          typeof caddyStatus?.installed === 'boolean'
+            ? { installed: caddyStatus.installed, running: caddyStatus.running === true }
+            : null,
+        );
       }
       setProbeState('done');
       await queryClient.invalidateQueries({ queryKey: ['hubs'] });
@@ -554,6 +570,22 @@ export default function HubsPage() {
                   title={probeItem?.reachable ? zh.hubs.probeOnline : zh.hubs.probeOffline}
                   description={probeItem?.error ?? undefined}
                 />
+              ) : null}
+              {probeState === 'done' && probeItem?.reachable ? (
+                <Row gap={2} wrap>
+                  <Badge tone="ok" label={zh.hubs.checkAgent} dot />
+                  {probeCaddy === null ? (
+                    <Badge tone="neutral" label={zh.hubs.checkCaddyUnknown} dot />
+                  ) : probeCaddy.installed ? (
+                    <Badge
+                      tone={probeCaddy.running ? 'ok' : 'neutral'}
+                      label={probeCaddy.running ? zh.hubs.checkCaddyReady : zh.hubs.checkCaddyStopped}
+                      dot
+                    />
+                  ) : (
+                    <Badge tone="neutral" label={zh.hubs.checkCaddyMissing} dot />
+                  )}
+                </Row>
               ) : null}
               {probeState === 'done' && !probeItem?.reachable ? (
                 <Stack gap={1}>
