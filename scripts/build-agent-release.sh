@@ -67,7 +67,8 @@ if [ -n "${SIGN_KEY_FILE:-}" ]; then
   CARRY_ARGS=()
   if [ "${CARRY_OVER:-1}" != "0" ] && [ -n "${BASE:-}" ]; then
     CARRY_ORIGIN="${CARRY_OVER_FROM:-${BASE%/agent}}"
-    CARRY_JSON="$DEST_DIR/.carry-over-result.json"
+    # 结果文件放 mktemp，避免任何情况下残留在 assets 目录里被打进 Worker。
+    CARRY_JSON="$(mktemp)"
     SUMMARY_ARGS=()
     [ -n "${GITHUB_STEP_SUMMARY:-}" ] && SUMMARY_ARGS=(--summary "$GITHUB_STEP_SUMMARY")
     node "$SCRIPT_DIR/scripts/carry-over-agent-release.mjs" \
