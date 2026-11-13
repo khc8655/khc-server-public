@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 节点包安装改用 `systemd-run` 跳出 Agent 沙箱，`ProtectSystem=full` 下不再因 `/usr` 只读而失败（Agent 0.1.46）。
+
 ## [0.12.6] - 2026-11-13
 
 ### Added
