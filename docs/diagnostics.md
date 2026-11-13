@@ -85,6 +85,10 @@ Cloudflare 错误码只进 `evidence.cf`，文案按码选一句（1003/522/524/
 把“最近到期的一张证书”翻译成同样的 `problems` 形状（app = `certificates`），再交给核心统一渲染。
 这是唯一不在 Agent 里的问题来源；核心求值仍不认识应用名。
 
+**ACME 降噪口径（2026-11-13）**：同一文件里的 `adjustAcmeProblems` 会在节点**没有 ACME 证书**时，
+把 `certificates/acme_failed`（reason=env_missing）降为 `info` 并附安装命令；只有节点确实存在
+ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项未通过」只统计 error + warn。
+
 ---
 
 ## 3. 各应用保留的问题

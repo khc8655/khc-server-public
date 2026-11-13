@@ -50,7 +50,12 @@ describe('HubCard（身份 → 可用性 → 承载 三层）', () => {
     expect(text).toContain('内网穿透');
     expect(text).toContain('运行中');
     expect(text).toContain('未运行');
-    expect(text).toContain('未安装');
+    // 明确未安装的应用不占卡片：只渲染内网穿透 + 站点两项
+    expect(text).not.toContain('未安装');
+    expect([...container.querySelectorAll('.ui-node-app-state')].map((node) => node.textContent)).toEqual([
+      '运行中',
+      '未运行',
+    ]);
     // 工具型适配器不上卡片
     expect(text).not.toContain('certificates');
 
@@ -61,7 +66,7 @@ describe('HubCard（身份 → 可用性 → 承载 三层）', () => {
     expect(text).toContain('最后在线');
   });
 
-  it('「未安装」「未读取」保持中性灰，不进告警色', () => {
+  it('未安装应用不渲染；已安装但状态未知时显示中性「未读取」', () => {
     const { container } = render(
       <HubCard
         hub={hub({
@@ -77,10 +82,27 @@ describe('HubCard（身份 → 可用性 → 承载 三层）', () => {
     );
 
     const states = [...container.querySelectorAll('.ui-node-app-state')];
-    expect(states.map((node) => node.textContent)).toEqual(['未安装', '未读取']);
-    for (const node of states) {
-      expect(node.className).toContain('ui-node-app-state--neutral');
-    }
+    expect(states.map((node) => node.textContent)).toEqual(['未读取']);
+    expect(states[0]?.className).toContain('ui-node-app-state--neutral');
+    expect(container.textContent).not.toContain('未安装');
+  });
+
+  it('探测到应用但全部未安装时显示「暂无已安装应用」', () => {
+    const { container } = render(
+      <HubCard
+        hub={hub({
+          apps: [
+            { name: 'wireguard', installed: false, running: false },
+            { name: 'caddy-site', installed: false, running: false },
+          ],
+          summary: undefined,
+        })}
+        phase="done"
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(container.querySelector('.ui-node-card-app-empty')?.textContent).toBe('暂无已安装应用');
   });
 
   it('离线且没有探测 apps 时退回期望应用并显示「未读取」，不推断未安装', () => {

@@ -167,8 +167,8 @@ export default function HubOpsPage() {
       label={
         diagnosticsQuery.error
           ? zh.hostOps.diagEntryError
-          : diagnosticsQuery.data && issues.length > 0
-            ? fmt(zh.hostOps.diagEntry, { count: String(issues.length) })
+          : diagnosticsQuery.data && counts.error + counts.warn > 0
+            ? fmt(zh.hostOps.diagEntry, { count: String(counts.error + counts.warn) })
             : zh.hostOps.diagEntryIdle
       }
       size="sm"

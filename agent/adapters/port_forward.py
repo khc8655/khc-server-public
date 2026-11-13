@@ -35,7 +35,7 @@ from khc.util import (
 )
 
 APP_NAME = "port-forward"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 UNIT_PREFIX = "khc-forward-"
 UNIT_SUFFIX = ".service"
 DEFAULT_PROTOCOL = "tcp"
@@ -561,6 +561,9 @@ class PortForward(Adapter):
             ctx.unit_stop(name, check=False)
             ctx.unit_disable(name, check=False)
             ctx.remove(ctx.paths.unit_file(name))
+            # 清掉 systemd 的 failed 记录：否则删除后运维页仍把该单元
+            # 计入「N 个失败」（not-found + failed），而列表里已查不到它。
+            ctx.systemctl("reset-failed", name, check=False)
         ctx.daemon_reload(check=False)
 
     # ------------------------------------------------------------------
@@ -736,6 +739,7 @@ class PortForward(Adapter):
         for name in sorted(units):
             ctx.unit_stop(name, check=False)
             ctx.unit_disable(name, check=False)
+            ctx.systemctl("reset-failed", name, check=False)
             if ctx.remove(ctx.paths.unit_file(name)):
                 removed.append(name)
         if removed or units:

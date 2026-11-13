@@ -878,6 +878,7 @@ export const zh = {
     appPending: '待生效',
     appUnknown: '未读取',
     appNotInstalled: '未安装',
+    appNoneInstalled: '暂无已安装应用',
     // 仅在站点页 `caddy_import_scan` 确实扫到外部站点块（blocks > 0）时使用。
     appExternal: '外部安装 · 未纳管',
     appEnter: '进入',

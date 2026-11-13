@@ -12,9 +12,9 @@ import { Badge, Icon, StatusDot, type Tone } from '../ui';
  * 2. 可用性：端地址（mono / 弱色）+ 接入方式 chip；
  * 3. 承载：应用（名称 + 实装状态）与 Peer/站点/转发计数，字号与颜色都降到最弱。
  *
- * 应用状态来自同一次 `POST /nodes/probe` 的 `apps`（`/state` 投影）；
- * 探测未覆盖该节点（离线、旧 Agent）时退回 D1 期望配置并显示「未读取」，
- * 不推断「未安装」。「未安装 / 未读取」保持中性灰，也不进入「需要处理」。
+ * 应用只展示已安装/已配置的承载：Agent 明确回报 installed=false 的应用
+ * 不占位（与概况页口径一致）；探测未覆盖该节点（离线、旧 Agent）时退回
+ * D1 期望配置并显示「未读取」，不推断「未安装」。
  */
 interface HubCardProps {
   hub: HubView;
@@ -61,7 +61,12 @@ function expectedApps(summary: NodeAppSummary | undefined): string[] {
 function resolveApps(hub: HubView): CardApp[] {
   const reported = new Map((hub.apps ?? []).map((app) => [app.name, app]));
   const expected = expectedApps(hub.summary);
-  return CARD_APPS.filter((name) => reported.has(name) || expected.includes(name)).map((name) => ({
+  return CARD_APPS.filter((name) => {
+    const app = reported.get(name);
+    // 明确未安装的应用不占卡片；没有探测结果时按 D1 期望列出（未读取）。
+    if (app) return app.installed !== false;
+    return expected.includes(name);
+  }).map((name) => ({
     name,
     label: APP_LABEL[name] ?? name,
     ...appState(reported.get(name)),
@@ -145,7 +150,9 @@ export function HubCard({ hub, phase, onOpen }: HubCardProps) {
               ))}
             </div>
           ) : (
-            <span className="ui-node-card-app-empty">{zh.hub.appUnknown}</span>
+            <span className="ui-node-card-app-empty">
+              {hub.apps && hub.apps.length > 0 ? zh.hub.appNoneInstalled : zh.hub.appUnknown}
+            </span>
           )}
         </div>
       </div>

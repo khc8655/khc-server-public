@@ -60,3 +60,4 @@
 - 真机：Hub 配置 `tcp/7001 -> 127.0.0.1:22`，apply 后 unit active、端口监听、连接可通；`enabled=false` apply 后 unit 被停止/删除、端口释放；status count/total 正确。
 - 安全提示固定展示；socat 已安装在测试机（`/usr/bin/socat`）。
 - 已知：停用/删除的 unit 在 `after_apply` 清理，因此 plan diff 可能为空（apply 仍正确）；socat 缺失时 validate 拦截并提示安装；仅改 note 时不会触发 socat validate（内核只在 changed unit 时 validate）。
+- 清理顺序（2026-11-13）：stop → disable → 删 unit 文件 → `systemctl reset-failed <unit>`；不 reset-failed 会留下 not-found/failed 记录，运维页「N 个失败」与列表对不上。
