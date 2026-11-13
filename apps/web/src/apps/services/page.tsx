@@ -650,7 +650,6 @@ export default function HubServicesPage() {
       header: zh.services.listeningColPort,
       width: '28%',
       value: (row) => (row.process ? `${row.port} · ${row.process}` : String(row.port)),
-      narrow: (row) => [row.address, row.proto, row.process].filter(Boolean).join(' · '),
     },
     {
       key: 'address',
@@ -658,7 +657,6 @@ export default function HubServicesPage() {
       header: zh.services.listeningColAddress,
       width: '40%',
       value: (row) => row.address,
-      priority: 'low',
     },
     {
       key: 'proto',
@@ -666,7 +664,6 @@ export default function HubServicesPage() {
       header: zh.services.listeningColProto,
       width: '18%',
       value: (row) => row.proto,
-      priority: 'low',
     },
   ];
 
