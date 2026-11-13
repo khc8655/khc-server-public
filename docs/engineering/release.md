@@ -125,7 +125,7 @@ WARN: 本次发版不含 N-1（…），面板回滚将不可用
 
 - 生成：`OUT_DIR=<仓库外目录> node scripts/generate-agent-release-key.mjs`，私钥 0600、不入库。
 - 换钥：Agent 内置公钥（`agent/khc/release_verify.py`）与 Worker 的 `AGENT_RELEASE_PUBKEY` 必须一起换。新 Agent 只认新钥，回退时 secret 与节点包也要一起回退。
-- 2026-11-11 换钥过程与旧钥封存信息见归档 `release-history.md` §7.4。
+- 2026-11-11 换钥前的旧私钥已于 2026-11-13 销毁，换钥前的 Agent 版本不能再签发或回退。
 
 ## 5. 回滚
 
