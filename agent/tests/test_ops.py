@@ -78,6 +78,59 @@ class OpsTests(unittest.TestCase):
         self.assertEqual(listening["count"], 1)
         self.assertEqual(listening["items"][0]["port"], 8080)
 
+    def test_listening_only_tcp_listen_with_real_ipv6_address(self) -> None:
+        header = "  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+        write(
+            self.root,
+            "net/tcp",
+            header
+            + "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1 0 100 0 0 10 0\n"
+            + "   1: 00000000:2329 00000000:0000 01 00000000:00000000 00:00000000 00000000 0 0 2 1 0 100 0 0 10 0\n",
+        )
+        write(
+            self.root,
+            "net/tcp6",
+            header
+            + "   0: 00000000000000000000000001000000:2328 00000000000000000000000000000000:0000 "
+            + "0A 00000000:00000000 00:00000000 00000000 0 0 55 1 0 100 0 0 10 0\n",
+        )
+        write(self.root, "net/udp", header + "   0: 00000000:8CA0 00000000:0000 07 0 0 0 0 0 3 1 0\n")
+        write(self.root, "net/udp6", header + "   0: 00000000000000000000000000000000:8CA0 00000000000000000000000000000000:0000 07 0 0 0 0 0 4 1 0\n")
+        result = ops._listening(self.root)
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(
+            [(entry["proto"], entry["address"], entry["port"]) for entry in result["items"]],
+            [("tcp", "0.0.0.0", 8080), ("tcp6", "::1", 9000)],
+        )
+
+    def test_listening_process_from_socket_inode(self) -> None:
+        write(
+            self.root,
+            "net/tcp",
+            "  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+            "   0: 00000000:2328 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 41 1 0 100 0 0 10 0\n",
+        )
+        fd_dir = os.path.join(self.root, "4242", "fd")
+        os.makedirs(fd_dir, exist_ok=True)
+        os.symlink("socket:[41]", os.path.join(fd_dir, "3"))
+        write(self.root, "4242/comm", "python3\n")
+        result = ops._listening(self.root)
+        self.assertEqual(result["items"][0]["process"], "python3")
+
+    def test_listening_keeps_more_than_twelve_items(self) -> None:
+        lines = ["  sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode"]
+        for index in range(60):
+            lines.append(
+                f"   {index}: 00000000:{20000 + index:04X} 00000000:0000 0A "
+                f"00000000:00000000 00:00000000 00000000 0 0 {100 + index} 1 0 100 0 0 10 0"
+            )
+        write(self.root, "net/tcp", "\n".join(lines) + "\n")
+        result = ops._listening(self.root)
+        self.assertEqual(result["count"], 60)
+        self.assertEqual(len(result["items"]), ops.LISTENING_MAX_ITEMS)
+        self.assertEqual(result["items"][0]["port"], 20000)
+        self.assertEqual(result["items"][-1]["port"], 20000 + ops.LISTENING_MAX_ITEMS - 1)
+
     def test_disks(self) -> None:
         result = ops.disks(self.paths)
         self.assertTrue(result)
@@ -118,6 +171,25 @@ class OpsTests(unittest.TestCase):
         self.assertEqual(self.collect(4000.0)["oom"], {"total": 2, "lastIncreaseAt": 2000})
         write(self.root, "vmstat", "oom_kill 3\n")
         self.assertEqual(self.collect(5000.0)["oom"], {"total": 3, "lastIncreaseAt": 5000})
+
+    def test_oom_after_reboot_is_reported_from_zero_baseline(self) -> None:
+        write(self.root, "sys/kernel/random/boot_id", "boot-a\n")
+        write(self.root, "vmstat", "oom_kill 5\n")
+        first = self.collect(1000.0)
+        self.assertEqual(first["oom"]["bootId"], "boot-a")
+        self.assertEqual(first["oom"]["lastIncreaseAt"], 0)
+
+        # 重启后 bootId 变化、oom_kill 清零到 1：仍要报出新增（GitHub #36）
+        write(self.root, "sys/kernel/random/boot_id", "boot-b\n")
+        write(self.root, "vmstat", "oom_kill 1\n")
+        second = self.collect(2000.0)
+        self.assertEqual(second["oom"], {"total": 1, "lastIncreaseAt": 2000, "bootId": "boot-b"})
+
+        # 再次重启但没有 OOM：不报
+        write(self.root, "sys/kernel/random/boot_id", "boot-c\n")
+        write(self.root, "vmstat", "oom_kill 0\n")
+        third = self.collect(3000.0)
+        self.assertEqual(third["oom"], {"total": 0, "lastIncreaseAt": 0, "bootId": "boot-c"})
 
     def test_root_readonly_from_mounts(self) -> None:
         write(self.root, "mounts", "/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 0\n")

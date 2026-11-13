@@ -45,6 +45,7 @@ class PkgRunner:
         update_rc=0,
         install_stdout="",
         install_stderr="",
+        timeout_install=False,
     ) -> None:
         self.manager = manager
         self.present = set(present)
@@ -53,6 +54,7 @@ class PkgRunner:
         self.update_rc = update_rc
         self.install_stdout = install_stdout
         self.install_stderr = install_stderr
+        self.timeout_install = timeout_install
         self.calls: list[list[str]] = []
         self.envs: list = []
         self.installs: list[str] = []
@@ -73,6 +75,8 @@ class PkgRunner:
         if sub in ("install", "add"):
             package = inner[-1]
             self.installs.append(package)
+            if self.timeout_install:
+                return RunResult(cmd=argv, rc=124, stdout="", stderr="command timed out")
             if not self.fail_install:
                 self.present.update(PACKAGE_BINARIES.get(package, (package,)))
             return RunResult(
@@ -126,7 +130,7 @@ class PkgTests(unittest.TestCase):
         self.assertEqual(runner.installs, ["caddy"])
         installs = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["dnf", "install"]]
         self.assertEqual(len(installs), 1)
-        self.assertEqual(installs[0], EXPECTED_PREFIX + ["dnf", "install", "-y", "caddy"])
+        self.assertEqual(unwrap(installs[0]), ["dnf", "install", "-y", "caddy"])
 
     def test_install_calls_systemd_run_with_headless_flags_and_setenv(self):
         runner = PkgRunner()
@@ -136,11 +140,13 @@ class PkgTests(unittest.TestCase):
         install = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "install"]]
         self.assertEqual(len(install), 1)
         # 无 tty 可用：--wait --pipe --collect，不用 --pty。
+        self.assertEqual(install[0][: len(EXPECTED_PREFIX)], EXPECTED_PREFIX)
         self.assertEqual(
-            install[0],
-            EXPECTED_PREFIX
-            + ["--setenv=DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", "caddy"],
+            unwrap(install[0]),
+            ["apt-get", "install", "-y", "--no-install-recommends", "caddy"],
         )
+        self.assertIn("--property=RuntimeMaxSec=300", install[0])
+        self.assertTrue(any(part.startswith("--unit=khc-pkg-") for part in install[0]))
         self.assertNotIn("--pty", install[0])
         # APT_ENV 只经 --setenv 传入临时 unit，不再借 ctx.run(env=...) 透传。
         setenvs = [part for part in install[0] if part.startswith("--setenv")]
@@ -189,6 +195,29 @@ class PkgTests(unittest.TestCase):
         installs = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "install"]]
         self.assertEqual([call[-1] for call in installs], ["caddy", "socat"])
 
+    def test_systemd_run_uses_unique_unit_and_runtime_max(self):
+        runner = PkgRunner()
+        with mock.patch("khc.pkg.shutil.which", return_value=None):
+            ctx = ctx_with(runner)
+            ensure_packages(ctx, ["caddy", "socat"])
+        installs = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "install"]]
+        units = [part.split("=", 1)[1] for call in installs for part in call if part.startswith("--unit=")]
+        self.assertEqual(len(units), 2)
+        self.assertEqual(len(set(units)), 2)
+        for call in installs:
+            self.assertIn("--property=RuntimeMaxSec=300", call)
+
+    def test_client_timeout_stops_leftover_unit(self):
+        runner = PkgRunner(timeout_install=True)
+        with mock.patch("khc.pkg.shutil.which", return_value=None):
+            ctx = ctx_with(runner)
+            with self.assertRaises(CommandFailed) as raised:
+                ensure_packages(ctx, ["socat"])
+        self.assertEqual(raised.exception.code, "pkg_install_failed")
+        stops = [call for call in runner.calls if call[:2] == ["systemctl", "stop"]]
+        self.assertEqual(len(stops), 1)
+        self.assertTrue(stops[0][2].startswith("khc-pkg-"))
+
     def test_apt_update_also_runs_outside_sandbox(self):
         runner = PkgRunner()
         with mock.patch("khc.pkg.shutil.which", return_value=None):
@@ -196,10 +225,8 @@ class PkgTests(unittest.TestCase):
             ensure_packages(ctx, ["caddy"])
         updates = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "update"]]
         self.assertEqual(len(updates), 1)
-        self.assertEqual(
-            updates[0],
-            EXPECTED_PREFIX + ["--setenv=DEBIAN_FRONTEND=noninteractive", "apt-get", "update", "-q"],
-        )
+        self.assertEqual(unwrap(updates[0]), ["apt-get", "update", "-q"])
+        self.assertIn("--property=RuntimeMaxSec=180", updates[0])
 
     def test_systemd_run_only_for_packages_needing_install(self):
         runner = PkgRunner(present={"caddy"})
@@ -235,10 +262,8 @@ class PkgTests(unittest.TestCase):
         # 回滚卸载也必须跳出沙箱，否则同样写不了 /usr。
         removes = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "remove"]]
         self.assertEqual(len(removes), 1)
-        self.assertEqual(
-            removes[0],
-            EXPECTED_PREFIX + ["--setenv=DEBIAN_FRONTEND=noninteractive", "apt-get", "remove", "--purge", "-y", "socat"],
-        )
+        self.assertEqual(unwrap(removes[0]), ["apt-get", "remove", "--purge", "-y", "socat"])
+        self.assertIn("--property=RuntimeMaxSec=300", removes[0])
 
     def test_rollback_failure_does_not_mask_original_error(self):
         runner = PkgRunner(fail_install=True, fail_remove=True)

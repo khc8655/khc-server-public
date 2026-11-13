@@ -46,7 +46,7 @@ interface Options {
   statePending?: boolean;
   stateError?: boolean;
   withForwards?: boolean;
-  listening?: { proto: string; address: string; port: number }[];
+  listening?: { proto: string; address: string; port: number; process?: string }[];
 }
 
 let options: Options;
@@ -397,6 +397,28 @@ describe('对外服务页 · 本机监听端口（T-C 批次 3）', () => {
     expect(
       requests.filter((item) => ['PUT', 'POST', 'PATCH', 'DELETE'].includes(item.init?.method ?? 'GET')),
     ).toHaveLength(0);
+  });
+
+  it('上报进程名时行内展示，::1 端口点击预填带方括号（#33）', async () => {
+    withListening();
+    options = {
+      ...options,
+      listening: [
+        { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
+        { proto: 'tcp6', address: '::1', port: 9500, process: 'node' },
+      ],
+    };
+    mockApi();
+    await renderRoute('/hubs/tyo-1/services');
+    await screen.findByText('本机监听端口');
+    const card = listeningCard();
+    await waitFor(() => expect(card.textContent).toContain('9000 · python3'));
+    expect(card.textContent).toContain('9500 · node');
+    const ipv6Row = await screen.findAllByText('9500 · node');
+    await userEvent.click(ipv6Row[0]!);
+    expect(await screen.findByText('添加站点')).toBeTruthy();
+    expect((document.getElementById('site-upstreams') as HTMLInputElement).value).toBe('[::1]:9500');
+    expect((screen.getByRole('spinbutton', { name: /目标端口/ }) as HTMLInputElement).value).toBe('9500');
   });
 
   it('加载态：/state 未返回时列表为骨架，不提前显示空态', async () => {

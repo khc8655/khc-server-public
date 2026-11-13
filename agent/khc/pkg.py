@@ -17,10 +17,14 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .util import CommandFailed, ValidationFailed, tail
+
+if TYPE_CHECKING:  # pragma: no cover - 只用于类型
+    from .adapters import Ctx, RunResult
 
 #: 白名单固定，不接受调用方扩展。
 ALLOWED_PACKAGES = ("caddy", "wireguard-tools", "socat")
@@ -45,19 +49,64 @@ APT_ENV = {"DEBIAN_FRONTEND": "noninteractive"}
 SYSTEMD_RUN_PREFIX = ("systemd-run", "--quiet", "--collect", "--wait", "--pipe")
 
 
-def _escape_argv(inner: list[str], env: Optional[dict[str, str]] = None) -> list[str]:
+def _escape_argv(
+    inner: list[str],
+    env: Optional[dict[str, str]] = None,
+    *,
+    timeout: Optional[float] = None,
+    unit: Optional[str] = None,
+) -> list[str]:
     """把包管理器命令包成 systemd-run 一次性 unit，在 Agent 沙箱外以 root 执行。
 
     ``ProtectSystem=full`` 下 ``/usr`` 只读，包管理器直接跑必然失败。一次性 unit
     不继承调用进程环境，APT_ENV 必须经 ``--setenv=`` 显式传入。全程 argv 数组，
     不拼 shell 字符串；包名只来自固定白名单（由 ``ensure_packages`` 校验）。
+
+    ``--unit`` 固定 unit 名便于超时兜底 ``systemctl stop``；``--property=RuntimeMaxSec``
+    让 systemd 自己终止超时 unit，避免只杀 ``systemd-run`` 客户端而 apt 继续持有
+    dpkg 锁（GitHub #37）。
     """
 
     argv = list(SYSTEMD_RUN_PREFIX)
+    if unit:
+        argv.append(f"--unit={unit}")
+    if timeout is not None:
+        argv.append(f"--property=RuntimeMaxSec={int(timeout)}")
     for key, value in (env or {}).items():
         argv.append(f"--setenv={key}={value}")
     argv.extend(inner)
     return argv
+
+
+def _stop_unit(ctx: "Ctx", unit: str) -> None:
+    """超时兜底：停掉仍在运行的临时 unit（失败只记日志）。"""
+
+    try:
+        ctx.run(["systemctl", "stop", unit], check=False, timeout=15)
+        ctx.warn(f"安装超时，已停止临时 unit {unit}")
+    except Exception as exc:  # noqa: BLE001
+        ctx.warn(f"停止临时 unit {unit} 失败：{exc}")
+
+
+def _run_systemd(
+    ctx: "Ctx",
+    inner: list[str],
+    *,
+    timeout: float,
+    env: Optional[dict[str, str]] = None,
+) -> "RunResult":
+    """在沙箱外跑一条写命令；客户端超时比 unit 的 RuntimeMaxSec 长 10 秒。
+
+    客户端先于 unit 超时会拿不到退出码；反过来 unit 先被 systemd 终止，客户端
+    能把 rc/输出带回。rc=124 说明客户端仍超时，此时显式停 unit 兜底。
+    """
+
+    unit = f"khc-pkg-{secrets.token_hex(4)}"
+    argv = _escape_argv(inner, env, timeout=timeout, unit=unit)
+    result = ctx.run(argv, check=False, timeout=timeout + 10)
+    if getattr(result, "rc", 0) == 124:
+        _stop_unit(ctx, unit)
+    return result
 
 
 def _run_ok(ctx, argv: list[str], *, timeout: float = PROBE_TIMEOUT) -> bool:
@@ -125,11 +174,7 @@ def _rollback(ctx, manager: str, package: str) -> None:
 
     try:
         env = APT_ENV if manager == "apt-get" else None
-        result = ctx.run(
-            _escape_argv(_remove_argv(manager, package), env),
-            check=False,
-            timeout=INSTALL_TIMEOUT,
-        )
+        result = _run_systemd(ctx, _remove_argv(manager, package), timeout=INSTALL_TIMEOUT, env=env)
         _log_output(ctx, f"回滚卸载 {package}", result)
         if result.rc == 0:
             ctx.log(f"已回滚：卸载 {package}")
@@ -185,11 +230,7 @@ def ensure_packages(ctx, packages: tuple[str, ...] | list[str]) -> dict[str, str
     if manager == "apt-get":
         # 源信息过期时 install 会失败；update 失败只告警，install 仍可能用缓存成功。
         # update 与 install 同走沙箱外的一次性 unit，保持 apt 状态视图一致。
-        result = ctx.run(
-            _escape_argv(["apt-get", "update", "-q"], env),
-            check=False,
-            timeout=UPDATE_TIMEOUT,
-        )
+        result = _run_systemd(ctx, ["apt-get", "update", "-q"], timeout=UPDATE_TIMEOUT, env=env)
         if result.rc != 0:
             ctx.warn("apt-get update 失败（继续尝试安装）：" + tail(result.stderr, 800))
 
@@ -199,11 +240,7 @@ def ensure_packages(ctx, packages: tuple[str, ...] | list[str]) -> dict[str, str
             ctx.log(f"{package} 已安装，跳过")
             continue
         ctx.log(f"安装系统包 {package}（{manager}）")
-        result = ctx.run(
-            _escape_argv(_install_argv(manager, package), env),
-            check=False,
-            timeout=INSTALL_TIMEOUT,
-        )
+        result = _run_systemd(ctx, _install_argv(manager, package), timeout=INSTALL_TIMEOUT, env=env)
         _log_output(ctx, f"安装 {package}", result)
         if result.rc != 0 or not binary_present(ctx, package):
             _rollback(ctx, manager, package)

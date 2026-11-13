@@ -159,17 +159,28 @@ export interface ListeningPort {
   proto: string;
   address: string;
   port: number;
+  /** 新 Agent 上报的 socket 归属进程名；旧 Agent 不上报时保持 undefined。 */
+  process?: string;
 }
 
-/** 判定「本机端口是否已发布」时只需要站点的上游文本。 */
+/** 判定「本机端口是否已发布」时只需要站点的上游文本与对外监听端口。 */
 export interface SiteUpstreamView {
   upstream?: string;
   upstreams?: readonly string[];
   pathRoutes?: readonly { upstreams?: readonly string[] }[];
+  listenPort?: number;
 }
 
-/** 面板自身占用的监听端口，与转发监听白名单同口径，不提供「发布为站点」。 */
-export const RESERVED_PUBLISH_PORTS = new Set([22, 80, 443, 8880, 8899]);
+/** 端口转发自身占用的监听端口，同样不能作为站点上游。 */
+export interface ForwardListenView {
+  listenPort?: number | null;
+}
+
+/** 系统端口（<1024）一律不提供「发布为站点」。 */
+export const MIN_PUBLISH_PORT = 1024;
+
+/** 面板自身、Caddy 管理口等高位保留端口，不提供「发布为站点」。 */
+export const RESERVED_PUBLISH_PORTS = new Set([22, 80, 443, 2019, 8880, 8899]);
 
 /** 本机/回环监听地址：通配 0.0.0.0 / :: 也算（进程监听在本机所有网卡）。 */
 export function isLocalListenAddress(address: string): boolean {
@@ -188,7 +199,7 @@ function parseListeningItems(ops: unknown): ListeningPort[] {
   const result: ListeningPort[] = [];
   for (const raw of items) {
     if (!raw || typeof raw !== 'object') continue;
-    const item = raw as { proto?: unknown; address?: unknown; port?: unknown };
+    const item = raw as { proto?: unknown; address?: unknown; port?: unknown; process?: unknown };
     if (
       typeof item.port !== 'number' ||
       !Number.isInteger(item.port) ||
@@ -197,11 +208,15 @@ function parseListeningItems(ops: unknown): ListeningPort[] {
     ) {
       continue;
     }
-    result.push({
+    const parsed: ListeningPort = {
       proto: typeof item.proto === 'string' ? item.proto : '',
       address: typeof item.address === 'string' ? item.address : '',
       port: item.port,
-    });
+    };
+    if (typeof item.process === 'string' && item.process.trim()) {
+      parsed.process = item.process.trim().slice(0, 64);
+    }
+    result.push(parsed);
   }
   return result;
 }
@@ -225,18 +240,46 @@ export function publishedLocalPorts(sites: readonly SiteUpstreamView[]): number[
   return [...ports];
 }
 
-/** 尚未发布为本机站点的监听端口：本机/回环地址、非保留端口、去重、排除已发布。 */
+function isPortNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+/**
+ * 点击端口预填的上游地址：IPv6 具体地址（如 `::1`）必须带方括号，否则
+ * 只监听 `::1` 的程序发布后会 502；通配地址与 IPv4 回环统一走 `127.0.0.1`。
+ */
+export function listeningUpstream(row: ListeningPort): string {
+  const address = row.address.trim();
+  if (address.includes(':') && address !== '::' && address !== '[::]') {
+    const host = address.startsWith('[') ? address : `[${address}]`;
+    return `${host}:${row.port}`;
+  }
+  return `127.0.0.1:${row.port}`;
+}
+
+/**
+ * 尚未发布为本机站点的监听端口：只收 TCP LISTEN，排除系统端口、Caddy 管理口、
+ * 站点与转发的对外监听端口、非本机地址、已发布端口，并按端口去重。
+ */
 export function unpublishedListeningPorts(
   ops: unknown,
   sites: readonly SiteUpstreamView[],
+  forwards: readonly ForwardListenView[] = [],
 ): ListeningPort[] {
-  const published = new Set(publishedLocalPorts(sites));
+  const occupied = new Set<number>(publishedLocalPorts(sites));
+  for (const site of sites) {
+    if (isPortNumber(site.listenPort)) occupied.add(site.listenPort);
+  }
+  for (const forward of forwards) {
+    if (isPortNumber(forward.listenPort)) occupied.add(forward.listenPort);
+  }
   const seen = new Set<number>();
   const result: ListeningPort[] = [];
   for (const item of parseListeningItems(ops)) {
-    if (RESERVED_PUBLISH_PORTS.has(item.port)) continue;
+    if (item.proto !== 'tcp' && item.proto !== 'tcp6') continue;
+    if (item.port < MIN_PUBLISH_PORT || RESERVED_PUBLISH_PORTS.has(item.port)) continue;
     if (!isLocalListenAddress(item.address)) continue;
-    if (published.has(item.port) || seen.has(item.port)) continue;
+    if (occupied.has(item.port) || seen.has(item.port)) continue;
     seen.add(item.port);
     result.push(item);
   }

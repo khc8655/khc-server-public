@@ -64,7 +64,7 @@ import tempfile
 import time
 from typing import Any, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.3"
+SCRIPT_VERSION = "1.5.4"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -83,6 +83,8 @@ LOGS_ERRORS_MAX_ENTRIES = 50
 LOGS_ERRORS_MAX_MESSAGE = 300
 LOGS_ERRORS_MAX_OOM = 20
 LOGS_OOM_SCAN_LINES = 200
+#: 一次 OOM 在内核日志里会产生多行；只把主事件计一条，其余作为上下文附上（GitHub #36）。
+LOGS_OOM_CONTEXT_MAX = 5
 
 FW_TABLE = "khc_fw"
 FW_CHAIN = "input"
@@ -713,8 +715,11 @@ def _collect_processes_proc(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMI
     return rows[:limit]
 
 
-def _parse_ps_rows(stdout: str, sort: str, limit: int, now: float) -> list[dict[str, Any]]:
-    """解析 ``ps -eo pid=,ppid=,%cpu=,rss=,uid=,etimes=`` 输出。"""
+def _parse_ps_rows(stdout: str, sort: str, limit: Optional[int], now: float) -> list[dict[str, Any]]:
+    """解析 ``ps -eo pid=,ppid=,%cpu=,rss=,uid=,etimes=`` 输出。
+
+    ``limit=None`` 返回全表（先对全部 PID 采样 CPU，再截 Top N，GitHub #35）。
+    """
 
     rows: list[dict[str, Any]] = []
     for line in stdout.splitlines():
@@ -745,30 +750,29 @@ def _parse_ps_rows(stdout: str, sort: str, limit: int, now: float) -> list[dict[
         )
     key = "mem" if sort == "mem" else "cpu"
     rows.sort(key=lambda item: (float(item.get(key) or 0), item["pid"]), reverse=True)
-    return rows[:limit]
+    return rows if limit is None else rows[:limit]
 
 
 def _collect_processes_ps(sort: str, limit: int) -> list[dict[str, Any]]:
-    """生产路径：一条 ps 完成全表排序；入选的 N 行两次采样求 CPU% 并读 comm/cmdline。"""
+    """生产路径：ps 只取元数据，全部 PID 两次采样求 CPU%，排序后再取 Top N。
+
+    不能用 ``ps --sort=-cpu`` 的生命周期均值先截断：刚启动就跑满一个核的进程
+    均值很低，会被挤出列表（GitHub #35）。
+    """
 
     sort_key = "mem" if sort == "mem" else "cpu"
     rc, stdout, _ = _run(
-        [
-            "ps",
-            "-eo",
-            "pid=,ppid=,%cpu=,rss=,uid=,etimes=",
-            f"--sort=-{sort_key}",
-            "--no-headers",
-        ],
+        ["ps", "-eo", "pid=,ppid=,%cpu=,rss=,uid=,etimes=", "--no-headers"],
         timeout=3,
     )
     if rc != 0:
         return []
-    rows = _parse_ps_rows(stdout, sort, limit, time.time())
+    rows = _parse_ps_rows(stdout, sort, None, time.time())
     cpu = _sample_process_cpu([row["pid"] for row in rows])
     for row in rows:
         row["cpu"] = cpu.get(row["pid"], 0.0)
     rows.sort(key=lambda item: (float(item.get(sort_key) or 0), item["pid"]), reverse=True)
+    rows = rows[:limit]
     for row in rows:
         row["name"] = _read_text(_proc_path(row["pid"], "comm"), 256).strip()
         row["cmdline"] = _read_cmdline(row["pid"])
@@ -1892,6 +1896,9 @@ _LOGS_OOM_RE = re.compile(
     r"out of memory|oom-kill|oom_kill|oom_reaper|killed process|memory cgroup out of memory",
     re.I,
 )
+#: 计数只认主事件；一次 OOM 的其他内核行（oom-kill:/oom_reaper/invoked oom-killer）
+#: 作为上下文附在同一条记录里，避免一次 OOM 被算成 3–4 条。
+_LOGS_OOM_PRIMARY_RE = re.compile(r"killed process|memory cgroup out of memory", re.I)
 JOURNAL_PRIORITY_NAMES = {
     "0": "emerg",
     "1": "alert",
@@ -2020,10 +2027,21 @@ def _logs_errors_oom() -> list[dict[str, Any]]:
     if rc != 0:
         return []
     oom: list[dict[str, Any]] = []
+    pending: list[str] = []
     for record in _journal_records(stdout):
-        if not _LOGS_OOM_RE.search(_journal_message(record)):
+        message = _journal_message(record)
+        if not _LOGS_OOM_RE.search(message):
             continue
-        oom.append(_journal_entry(record, level="oom"))
+        entry = _journal_entry(record, level="oom")
+        if not _LOGS_OOM_PRIMARY_RE.search(message):
+            # 上下文行：先攒着，附到紧随其后的主事件上。
+            pending.append(entry["message"])
+            if len(pending) > LOGS_OOM_CONTEXT_MAX:
+                pending.pop(0)
+            continue
+        entry["context"] = pending[-LOGS_OOM_CONTEXT_MAX:]
+        pending = []
+        oom.append(entry)
         if len(oom) >= LOGS_ERRORS_MAX_OOM:
             break
     return oom

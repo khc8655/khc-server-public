@@ -161,7 +161,8 @@ export function hostProblems(ops: AgentOps | null | undefined, now: number): Ada
     });
   }
 
-  // oom_killed：最近一次 oom_kill 计数增长在 24 小时窗口内。
+  // oom_killed：最近一次 oom_kill 计数增长是在面板采集时发现的（含重启后计数从 0 起算）。
+  // 拉取模式拿不到真实发生时间，文案不承诺具体时刻（GitHub #36）。
   const oom = ops.oom;
   const lastIncreaseAt = numberOrNull(oom?.lastIncreaseAt);
   if (lastIncreaseAt !== null && lastIncreaseAt > 0) {
@@ -170,10 +171,11 @@ export function hostProblems(ops: AgentOps | null | undefined, now: number): Ada
       problems.push({
         code: 'oom_killed',
         severity: 'warn',
-        title: '24 小时内发生过 OOM 杀进程',
+        title: '自上次查看以来发生过 OOM 杀进程',
         hint:
-          `内核累计 OOM 杀进程 ${numberOrNull(oom?.total) ?? 0} 次，最近一次增长在 24 小时内。` +
-          '请登录节点用 dmesg -T、journalctl -k 定位被杀进程，降低其内存占用或增加内存/swap；' +
+          `内核累计 OOM 杀进程 ${numberOrNull(oom?.total) ?? 0} 次，最近一次增长是在面板采集时发现的，` +
+          '实际发生时间可能更早。请登录节点用 dmesg -T、journalctl -k 定位被杀进程，' +
+          '降低其内存占用或增加内存/swap；' +
           `可在${HOST_OPS_PAGE}查看内存与进程分段。`,
         evidence: { total: numberOrNull(oom?.total) ?? 0, lastIncreaseAt },
       });

@@ -505,6 +505,49 @@ class ScriptProcessesTests(ScriptTestBase):
         self.assertEqual(rows[0]["name"], "demo")
         self.assertEqual(rows[0]["cmdline"], "demo --flag")
 
+    def test_collect_processes_ps_ranks_by_sampled_cpu_before_truncating(self) -> None:
+        """#35：ps 的 %cpu 是生命周期均值，先按它截断会把刚起来的满核进程挤出 Top N。"""
+
+        saved = HOST_SCRIPT.PROC_ROOT
+        HOST_SCRIPT.PROC_ROOT = "/proc"
+        stale, fresh, idle = 7100, 7101, 7102
+        stdout = (
+            f"{stale} 1 50.0 1024 0 86400\n"
+            f"{fresh} 1 0.1 2048 0 5\n"
+            f"{idle} 1 0.0 512 0 600\n"
+        )
+        try:
+            with mock.patch.object(
+                HOST_SCRIPT, "_run", return_value=(0, stdout, "")
+            ) as runner, mock.patch.object(
+                HOST_SCRIPT,
+                "_sample_process_cpu",
+                return_value={stale: 0.4, fresh: 96.0, idle: 0.0},
+            ) as sampler, mock.patch.object(
+                HOST_SCRIPT, "_read_text", return_value="worker\n"
+            ), mock.patch.object(
+                HOST_SCRIPT, "_read_cmdline", return_value="worker --job"
+            ):
+                rows = HOST_SCRIPT.collect_processes("cpu", 1)
+        finally:
+            HOST_SCRIPT.PROC_ROOT = saved
+        ps_argv = runner.call_args[0][0]
+        self.assertEqual(ps_argv[:2], ["ps", "-eo"])
+        self.assertNotIn("--sort", ps_argv)
+        # 采样覆盖全表，不是截断后的 Top N
+        self.assertEqual(sampler.call_args[0][0], [stale, fresh, idle])
+        self.assertEqual([row["pid"] for row in rows], [fresh])
+        self.assertEqual(rows[0]["cpu"], 96.0)
+
+    def test_parse_ps_rows_limit_none_keeps_full_table(self) -> None:
+        """#35：limit=None 是全表（供采样用），limit=N 才截断。"""
+
+        stdout = "".join(f"{pid} 1 {pid - 1000}.0 1024 0 60\n" for pid in range(1000, 1020))
+        full = HOST_SCRIPT._parse_ps_rows(stdout, "cpu", None, 1_000_000.0)
+        self.assertEqual(len(full), 20)
+        self.assertEqual([row["pid"] for row in full[:2]], [1019, 1018])
+        self.assertEqual(len(HOST_SCRIPT._parse_ps_rows(stdout, "cpu", 3, 1_000_000.0)), 3)
+
 
 # ===========================================================================
 # 脚本：authorized_keys（keys.*）
@@ -2581,6 +2624,45 @@ class LogsErrorsVerbTests(ScriptTestBase):
         self.assertEqual(oom[0]["level"], "oom")
         self.assertIn("Out of memory", oom[0]["message"])
         self.assertNotIn("topsecret", oom[0]["message"])
+
+    def test_logs_errors_oom_counts_primary_events_only(self) -> None:
+        """#36：一次 OOM 的内核行只算一条，其余行作为 context 附在主事件上。"""
+
+        self._journal(
+            [],
+            [
+                {
+                    "PRIORITY": "4",
+                    "MESSAGE": "kernel: oom_reaper: reaped process 4321 (yes), now anon-rss:0kB",
+                },
+                {
+                    "PRIORITY": "4",
+                    "MESSAGE": "kernel: yes invoked oom-killer: gfp_mask=0x100cca(GFP_HIGHUSER_MOVABLE)",
+                },
+                {
+                    "PRIORITY": "3",
+                    "__REALTIME_TIMESTAMP": "1700000000000000",
+                    "MESSAGE": "kernel: Out of memory: Killed process 4321 (yes) total-vm:1024kB",
+                },
+                {"PRIORITY": "4", "MESSAGE": "kernel: caddy started normally"},
+                {
+                    "PRIORITY": "3",
+                    "__REALTIME_TIMESTAMP": "1700000100000000",
+                    "MESSAGE": "kernel: Memory cgroup out of memory: Killed process 5000 (node)",
+                },
+            ],
+        )
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        oom = result["data"]["oom"]
+        self.assertEqual(result["data"]["oomCount"], 2)
+        self.assertEqual(len(oom), 2)
+        self.assertIn("Killed process 4321", oom[0]["message"])
+        self.assertEqual(len(oom[0]["context"]), 2)
+        self.assertIn("oom_reaper", oom[0]["context"][0])
+        self.assertIn("invoked oom-killer", oom[0]["context"][1])
+        self.assertIn("Killed process 5000", oom[1]["message"])
+        self.assertEqual(oom[1]["context"], [])
 
     def test_logs_errors_plain_text_fallback(self) -> None:
         self.runner.on("journalctl", lambda argv, input_text: (0, "raw line\n", ""))

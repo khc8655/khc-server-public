@@ -89,11 +89,11 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 |---|---|---|---|
 | `version` | 读 | — | 脚本版本、Python 版本、是否有 root、nft 是否可用 |
 | `status` | 读 | — | 与 `/state.ops` 同构（`agentOpsSchema`），前端直接复用 #007 卡片 |
-| `processes` | 读 | `{ sort: "cpu"\|"mem", limit≤200 }` | pid、ppid、user、startTime、cpu、mem、cmdline（截断 512 字符）；面板默认只取 Top 20 |
+| `processes` | 读 | `{ sort: "cpu"\|"mem", limit≤200 }` | pid、ppid、user、startTime、cpu、mem、cmdline（截断 512 字符）；CPU% 为同请求内两次采样（间隔 0.5 秒）求差，先对全部进程采样、排序后再截 Top N；面板默认只取 Top 20 |
 | `svc.list` | 读 | — | 只返回 failed 单元 + 面板受管单元（`caddy` / `khc-*` / `wg-quick@*`），不再枚举整机 running 服务 |
 | `svc.logs` | 读 | `{ unit, lines≤200 }` | `journalctl` 尾读，默认 100、上限 200 行 |
 | `svc.restart` | 写 | `{ unit }` | 受保护单元拒绝；重启后回读 `is-active` |
-| `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；返回时间、级别、脱敏后文本与条数；Peer 可读 |
+| `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；一次 OOM 只算一条（附 ≤ 5 行上下文），返回时间、级别、脱敏后文本与条数；Peer 可读 |
 | `fw.show` | 读 | — | 只返回本系统管理的规则与 `table inet khc_fw` 状态；不再读取其他 nft 表或 iptables |
 | `fw.apply` | 写 | `{ rules, baseRev }` | 见 §5 |
 | `fw.confirm` | 写 | `{ token }` | 取消 60 秒回滚定时器 |

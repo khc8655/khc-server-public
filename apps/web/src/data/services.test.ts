@@ -4,6 +4,7 @@ import {
   classifyBackend,
   ipv4InCidr,
   isLocalListenAddress,
+  listeningUpstream,
   publishedLocalPorts,
   unpublishedListeningPorts,
 } from './services';
@@ -197,5 +198,67 @@ describe('本机监听端口（T-C 批次 3）', () => {
     for (const address of ['', '10.9.0.2', '192.168.1.7', '203.0.113.10', 'example.com', 'fd00::2']) {
       expect(isLocalListenAddress(address), address).toBe(false);
     }
+  });
+
+  it('不列出系统端口、Caddy 管理口与 UDP/缺失协议（#33）', () => {
+    const rows = unpublishedListeningPorts(
+      ops([
+        item(53, '127.0.0.53'),
+        item(111, '0.0.0.0'),
+        item(443, '0.0.0.0'),
+        item(1023, '127.0.0.1'),
+        item(2019, '127.0.0.1'),
+        item(51820, '0.0.0.0', 'udp'),
+        item(51821, '::', 'udp6'),
+        { address: '0.0.0.0', port: 9300 },
+        item(9000, '0.0.0.0', 'tcp'),
+        item(9100, '0.0.0.0', 'tcp6'),
+      ]),
+      [],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9000, 9100]);
+  });
+
+  it('站点与转发的对外监听端口不作为可发布上游（#33）', () => {
+    const rows = unpublishedListeningPorts(
+      ops([item(8443), item(9000), item(9100), item(9200)]),
+      [{ listenPort: 8443, upstreams: ['10.9.0.2:3000'] }],
+      [{ listenPort: 9000 }, { listenPort: 9100 }, { listenPort: null }],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9200]);
+  });
+
+  it('保留 Agent 上报的进程名，旧 Agent 无该字段时照常显示', () => {
+    const rows = unpublishedListeningPorts(
+      ops([
+        { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
+        { ...item(9100), process: 42 },
+        { ...item(9200), process: '   ' },
+        item(9300),
+      ]),
+      [],
+    );
+    expect(rows[0]?.process).toBe('python3');
+    expect(rows[1]?.process).toBeUndefined();
+    expect(rows[2]?.process).toBeUndefined();
+    expect(rows[3]?.process).toBeUndefined();
+  });
+
+  it('IPv6 回环预填带方括号，通配与 IPv4 回环预填 127.0.0.1（#33）', () => {
+    expect(listeningUpstream(item(9000, '::1', 'tcp6'))).toBe('[::1]:9000');
+    expect(listeningUpstream(item(9000, '[::1]', 'tcp6'))).toBe('[::1]:9000');
+    expect(listeningUpstream(item(9000, '2001:db8::1', 'tcp6'))).toBe('[2001:db8::1]:9000');
+    expect(listeningUpstream(item(9000, '::', 'tcp6'))).toBe('127.0.0.1:9000');
+    expect(listeningUpstream(item(9000, '[::]', 'tcp6'))).toBe('127.0.0.1:9000');
+    expect(listeningUpstream(item(9000, '0.0.0.0'))).toBe('127.0.0.1:9000');
+    expect(listeningUpstream(item(9000, '127.0.0.1'))).toBe('127.0.0.1:9000');
+    expect(listeningUpstream(item(9000, 'localhost'))).toBe('127.0.0.1:9000');
+  });
+
+  it('超过 12 个监听端口时仍全部列出（Agent 先过滤再截断 50，#33）', () => {
+    const items = Array.from({ length: 30 }, (_, index) => item(20000 + index));
+    const rows = unpublishedListeningPorts(ops(items), []);
+    expect(rows).toHaveLength(30);
+    expect(rows[29]?.port).toBe(20029);
   });
 });
