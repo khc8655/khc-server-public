@@ -155,34 +155,105 @@ def _resolvers() -> list[str]:
     return result[:4]
 
 
+LISTENING_MAX_ITEMS = 50
+
+
+def _ipv6_address(hex_value: str) -> str:
+    """把 ``/proc/net/tcp6`` 的 32 位十六进制地址还原成 IPv6 文本。
+
+    内核按 4 个 32 位 word 输出，每个 word 内部是小端字节序；直接
+    ``inet_ntop`` 会得到错误地址（例如把 ``::1`` 读成 ``::100:0``）。
+    """
+
+    groups = [hex_value[index : index + 8] for index in range(0, 32, 8)]
+    if len(groups) != 4 or any(len(group) != 8 for group in groups):
+        raise ValueError("invalid tcp6 address")
+    packed = b"".join(bytes.fromhex(group)[::-1] for group in groups)
+    return socket.inet_ntop(socket.AF_INET6, packed)
+
+
+def _socket_processes(proc_root: str, inodes: set[str]) -> dict[str, str]:
+    """按 socket inode 反查进程名（``/proc/<pid>/comm``），读不到时留空。
+
+    只读、逐项容错：非 root 时其他进程的 fd 不可读，直接跳过；找齐即停。
+    """
+
+    result: dict[str, str] = {}
+    if not inodes:
+        return result
+    try:
+        pids = [name for name in os.listdir(proc_root) if name.isdigit()]
+    except OSError:
+        return result
+    for pid in pids:
+        fd_dir = os.path.join(proc_root, pid, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        owner = ""
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if not target.startswith("socket:[") or not target.endswith("]"):
+                continue
+            inode = target[len("socket:[") : -1]
+            if inode not in inodes or inode in result:
+                continue
+            if not owner:
+                comm = _text(os.path.join(proc_root, pid, "comm")).strip()
+                owner = comm.splitlines()[0][:64] if comm else ""
+            result[inode] = owner
+        if len(result) == len(inodes):
+            break
+    return result
+
+
 def _listening(proc_root: str) -> dict[str, Any]:
+    """只上报 TCP LISTEN 端口；附带真实 IPv6 地址、socket 归属进程名。
+
+    ``items`` 最多 ``LISTENING_MAX_ITEMS`` 条，``count`` 是过滤后的总数；
+    ``process`` 是可选字段，读不到时不下发，旧面板不受影响。
+    """
+
     entries: list[dict[str, Any]] = []
-    for name, proto in (("tcp", "tcp"), ("tcp6", "tcp6"), ("udp", "udp"), ("udp6", "udp6")):
+    for name, proto in (("tcp", "tcp"), ("tcp6", "tcp6")):
         for line in _text(os.path.join(proc_root, "net", name)).splitlines()[1:]:
             parts = line.split()
-            if len(parts) < 4:
-                continue
-            state = parts[3]
-            if proto.startswith("tcp") and state != "0A":
-                continue
-            if proto.startswith("udp") and state not in ("07", "0A"):
+            if len(parts) < 10 or parts[3] != "0A":
                 continue
             try:
                 address_hex, port_hex = parts[1].split(":")
                 port = int(port_hex, 16)
-                if proto.endswith("6"):
-                    address = "::"
+                if proto == "tcp6":
+                    address = _ipv6_address(address_hex)
                 else:
                     address = socket.inet_ntoa(bytes.fromhex(address_hex)[::-1])
             except (ValueError, OSError):
                 continue
-            entries.append({"proto": proto, "address": address, "port": port})
-    seen = {(item["proto"], item["address"], item["port"]) for item in entries}
-    unique = [
-        {"proto": proto, "address": address, "port": port}
-        for proto, address, port in sorted(seen)
-    ]
-    return {"count": len(unique), "items": unique[:12]}
+            entries.append(
+                {
+                    "proto": proto,
+                    "address": address,
+                    "port": port,
+                    "inode": parts[9],
+                }
+            )
+    seen: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for entry in entries:
+        seen.setdefault((entry["proto"], entry["address"], entry["port"]), entry)
+    ordered = [seen[key] for key in sorted(seen, key=lambda key: (key[2], key[0], key[1]))]
+    owners = _socket_processes(proc_root, {entry["inode"] for entry in ordered[:LISTENING_MAX_ITEMS]})
+    items: list[dict[str, Any]] = []
+    for entry in ordered[:LISTENING_MAX_ITEMS]:
+        item = {"proto": entry["proto"], "address": entry["address"], "port": entry["port"]}
+        owner = owners.get(entry["inode"])
+        if owner:
+            item["process"] = owner
+        items.append(item)
+    return {"count": len(ordered), "items": items}
 
 
 def _systemd() -> dict[str, Any]:
@@ -227,7 +298,13 @@ def _load_oom_state(path: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _save_oom_state(path: str, state: dict[str, int]) -> None:
+def _boot_id(proc_root: str) -> str:
+    """内核启动标识；重启后变化，用来识别 oom_kill 计数被清零（GitHub #36）。"""
+
+    return _text(os.path.join(proc_root, "sys", "kernel", "random", "boot_id")).strip()
+
+
+def _save_oom_state(path: str, state: dict[str, Any]) -> None:
     """原子写 JSON 状态（0600）；os.replace 只替换目录项本身，不跟随符号链接。"""
 
     directory = os.path.dirname(os.path.abspath(path))
@@ -248,17 +325,22 @@ def _save_oom_state(path: str, state: dict[str, int]) -> None:
         raise
 
 
-def _oom(paths: Any, proc_root: str, moment: float) -> Optional[dict[str, int]]:
+def _oom(paths: Any, proc_root: str, moment: float) -> Optional[dict[str, Any]]:
     """把 /proc/vmstat 的 oom_kill 累计值与数据目录里的上次值比较。
 
     首次观测只建立基线（lastIncreaseAt=0），不把它当成刚发生的 OOM；
-    计数增长时记下采集时刻。数据目录不可写时仍上报本次计数。
+    同一 boot 内计数增长、或重启（bootId 变化）后计数从 0 重新累计到 >0，
+    都记为「自上次查看以来发生过 OOM」，并记下采集时刻。拉取模式下拿不到
+    真实发生时间，所以时间只代表面板采集时刻（GitHub #36）。
     """
 
     total = _oom_kill_count(proc_root)
     if total is None:
         return None
-    state: dict[str, int] = {"total": total, "lastIncreaseAt": 0}
+    boot_id = _boot_id(proc_root)
+    state: dict[str, Any] = {"total": total, "lastIncreaseAt": 0}
+    if boot_id:
+        state["bootId"] = boot_id
     data_dir = getattr(paths, "data_dir", None)
     if not isinstance(data_dir, str) or not data_dir:
         return state
@@ -266,10 +348,19 @@ def _oom(paths: Any, proc_root: str, moment: float) -> Optional[dict[str, int]]:
     previous = _load_oom_state(state_path)
     prev_total = previous.get("total")
     prev_at = previous.get("lastIncreaseAt")
+    prev_boot = previous.get("bootId")
     if isinstance(prev_at, int) and not isinstance(prev_at, bool) and prev_at >= 0:
         state["lastIncreaseAt"] = prev_at
-    if isinstance(prev_total, int) and not isinstance(prev_total, bool) and total > prev_total:
-        state["lastIncreaseAt"] = int(moment)
+    has_prev_total = isinstance(prev_total, int) and not isinstance(prev_total, bool)
+    same_boot = bool(boot_id) and isinstance(prev_boot, str) and prev_boot == boot_id
+    if not boot_id or same_boot:
+        # 同一 boot（或旧状态文件没有 bootId）：计数增长才是新增。
+        if has_prev_total and total > prev_total:
+            state["lastIncreaseAt"] = int(moment)
+    else:
+        # 重启：上一 boot 的 lastIncreaseAt 不再适用。当前 boot 已有 OOM 才记为
+        # 新增，否则清零；首次观测（无 prev_total）仍只建立基线。
+        state["lastIncreaseAt"] = int(moment) if has_prev_total and total > 0 else 0
     if previous != state:
         try:
             _save_oom_state(state_path, state)

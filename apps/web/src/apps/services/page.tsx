@@ -44,6 +44,7 @@ import {
 } from '../../data/sites';
 import {
   classifyBackend,
+  listeningUpstream,
   unpublishedListeningPorts,
   type BackendContext,
   type BackendInfo,
@@ -258,7 +259,11 @@ export default function HubServicesPage() {
     .map((site) => ({ site }));
   const forwardRows: ForwardRowView[] = forwardConfig.forwards.map((forward) => ({ forward }));
   const otherSiteCount = config.sites.filter((site) => site.kind !== 'proxy').length;
-  const listeningPorts = unpublishedListeningPorts(stateQuery.data?.state?.ops, config.sites);
+  const listeningPorts = unpublishedListeningPorts(
+    stateQuery.data?.state?.ops,
+    config.sites,
+    forwardConfig.forwards,
+  );
   const listeningLoading = stateQuery.isLoading || caddyQuery.isLoading;
   const listeningError = stateQuery.isError;
 
@@ -644,8 +649,8 @@ export default function HubServicesPage() {
       type: 'name',
       header: zh.services.listeningColPort,
       width: '28%',
-      value: (row) => String(row.port),
-      narrow: (row) => `${row.address} · ${row.proto}`,
+      value: (row) => (row.process ? `${row.port} · ${row.process}` : String(row.port)),
+      narrow: (row) => [row.address, row.proto, row.process].filter(Boolean).join(' · '),
     },
     {
       key: 'address',
@@ -819,7 +824,7 @@ export default function HubServicesPage() {
                 title: zh.services.listeningEmpty,
                 description: zh.services.listeningHint,
               }}
-              onRowOpen={(row) => openSiteCreate(`127.0.0.1:${row.port}`)}
+              onRowOpen={(row) => openSiteCreate(listeningUpstream(row))}
             />
           </Stack>
         )}

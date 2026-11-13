@@ -2,11 +2,16 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
-## [Unreleased]
+## [0.12.7] - 2026-11-14
 
 ### Fixed
 
 - 节点包安装改用 `systemd-run` 跳出 Agent 沙箱，`ProtectSystem=full` 下不再因 `/usr` 只读而失败（Agent 0.1.46）。
+- 包安装的 `systemd-run` 分配唯一 `--unit` 并加 `RuntimeMaxSec`，客户端超时后停掉残留单元，不再与新回滚争 dpkg 锁（Agent 0.1.47）。
+- `logs.errors` 的 OOM 只统计「killed process」主事件，同一次 OOM 的其他内核行作为上下文附在同一条，不再一次算成 3–4 条（Agent 0.1.47）。
+- OOM 计数在节点重启后按新 boot 重新计算，不再漏报；诊断文案改为「自上次查看以来发生过 OOM 杀进程」（Agent 0.1.47 / 面板 0.12.7）。
+- 进程列表先按两次采样的 CPU% 排序再截 Top N，刚启动就跑满一核的进程不再被 `ps` 生命周期均值挤出列表（Agent 0.1.47 / 脚本 1.5.4）。
+- 对外服务「本机监听端口」只列 TCP LISTEN，不再把系统端口、Caddy 管理口、UDP 服务、站点与转发的对外端口列为可发布；显示归属进程，IPv6 回环预填改为 `[::1]:<port>`（面板 0.12.7 / Agent 0.1.47）。
 
 ## [0.12.6] - 2026-11-13
 

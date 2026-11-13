@@ -102,14 +102,17 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 | `memory_low` | warn | 有 swap：可用内存 < 10% 且 swap 已用 > 50%；无 swap：可用内存 < 5% | 已有 `ops.mem` / `ops.swap`（不是 `ops.memory`） |
 | `units_failed` | warn | 存在非受管 failed 单元；evidence 列前 5 个名字 | 已有 `ops.services.failedUnits` |
 | `reboot_required` | info | `rebootRequired === true` | 已有 `ops.rebootRequired` |
-| `oom_killed` | warn | `oom.lastIncreaseAt` 在最近 24 小时内（> 0 且不晚于 now） | 新增 `ops.oom = {total, lastIncreaseAt}` |
+| `oom_killed` | warn | `oom.lastIncreaseAt` 在最近 24 小时内（> 0 且不晚于 now） | 新增 `ops.oom = {total, lastIncreaseAt, bootId?}` |
 | `fs_readonly` | error | `rootReadonly === true` | 新增 `ops.rootReadonly` |
 | `memory_pressure` | warn | `some avg60 > 20` | 新增 `ops.memoryPressure` |
 
 `units_failed` 过滤受管单元 `caddy`、`khc-*`、`wg-quick@*`（对应适配器已报），避免重复。
 新增的 3 个字段在 `agentOpsSchema` 中**都是可选的**：`oom` 由 Agent 读 `/proc/vmstat` 的
 `oom_kill` 累计值，与数据目录 `<data_dir>/oom_state.json`（0600，原子写）里的上次值比较，
-计数增长时把 `lastIncreaseAt` 记为采集时刻；`rootReadonly` 读 `/proc/mounts` 的根挂载选项；
+计数增长时把 `lastIncreaseAt` 记为采集时刻；状态里另存 `/proc/sys/kernel/random/boot_id`，
+重启后（bootId 变化）按新 boot 的计数重新判定，当前 boot 已有 OOM 才记为新增、否则清零，
+首次观测只建立基线。因拿不到真实发生时刻，`lastIncreaseAt` 只代表面板采集时刻，面板文案
+也按此表述（「自上次查看以来发生过 OOM 杀进程」）；`rootReadonly` 读 `/proc/mounts` 的根挂载选项；
 `memoryPressure` 读 `/proc/pressure/memory` 的 `some avg60`。三者都不起子进程。
 
 **旧 Agent 跳过规则**：旧 Agent 不上报这些字段（或整个 `ops` 缺失）时，`hostProblems` 对
