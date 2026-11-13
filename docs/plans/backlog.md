@@ -8,7 +8,7 @@
 
 | 项 | 说明 | 来源 |
 |---|---|---|
-| 启用面板 TOTP | 代码已实现，生产是否启用待主人确认；workers.dev 入口不经过第三方边缘 | 2026-11-10 测试工作单 N10 |
+| 启用面板 TOTP | 代码已实现，生产是否启用待主人确认；也是面板终端（diagnostics-and-terminal 提案批次 4）的开工前置 | 2026-11-10 测试工作单 N10 |
 | 确认 `MASTER_ENC_KEY` 有离线备份 | Worker secret 无法读回，只能主人核实 | 2026-11-10 测试工作单 F4 |
 | CI 部署后校验失败自动 `wrangler rollback`，冒烟扩展到登录与 D1 查询 | 现在失败只报错，线上保持新版本 | N6 |
 | uptime 探测接入定时任务与告警 webhook | `scripts/uptime-check.mjs` 已有，未运行 | N7 |
