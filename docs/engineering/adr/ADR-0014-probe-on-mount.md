@@ -3,7 +3,7 @@
 - 状态：已接受（主人 2026-11-12 拍板 A：规范向实现看齐）
 - 日期：2026-11-12
 - 决策者：主人
-- 关联：`docs/plans/ui-ia-redesign-2026-11-12.md` §2.2、`apps/web/src/data/useHubProbe.ts`、`docs/ui-redesign/page-specs.md` §1.2、`docs/ui-redesign/ui-guidelines.md` §8.12、`docs/ui-redesign/audit-2026-11-08.md`
+- 关联：`docs/archive/plans/ui-ia-redesign-2026-11-12.md` §2.2、`apps/web/src/data/useHubProbe.ts`、`docs/ui-redesign/page-specs.md` §1.2、`docs/ui-redesign/ui-guidelines.md` §8.12、`docs/ui-redesign/audit-2026-11-08.md`
 - 不取代：ADR-0009 / ADR-0010 中关于观测通道的结论
 
 ## 背景

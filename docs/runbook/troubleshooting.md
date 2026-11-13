@@ -1,6 +1,7 @@
 # 故障排查手册（troubleshooting）
 
-> 状态：现行 ｜ 适用范围：控制面（Worker/面板）与 Agent 的线上故障排查；按症状组织，每节 = 症状 → 判定链 → 处置 → 验证 ｜ 最后核验：2026-11-10（新增 §11 Agent 远程升级纪律与 upgrade.json 判定） ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`、`docs/design-v3.md` §1.1
+> 状态：现行 ｜ 最后核验：2026-11-10 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`
+> 范围：控制面（Worker/面板）与 Agent 的线上故障排查；按症状组织，每节 = 症状 → 判定链 → 处置 → 验证
 
 ## 1. Agent 离线 / 节点不可达
 

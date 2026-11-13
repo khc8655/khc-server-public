@@ -4,14 +4,14 @@
 - 状态：已接受（主人 2026-11-07 拍板选 C 档「完整发版分层」）
 - 适用范围：`package.json`、`apps/web/src/version.ts`、`apps/api/src/version.ts`、`packages/contracts`（health/version 响应）、`wrangler.toml`、`.github/workflows/ci.yml`、`scripts/check-release-consistency.mjs`、`scripts/prune-agent-packages.mjs`；**不改** Agent 运行时（`VERSION` 保持 0.1.20）
 - 最后核验：2026-11-07
-- 关联：`docs/release-versioning.md`、`docs/engineering/release.md`、`docs/agent-releases.md`、`scripts/verify-agent-release.mjs`、ADR-0008（生产复用 staging）、ADR-0011（清单随部署发布）
+- 关联：`docs/archive/2026-11/release-versioning.md`、`docs/engineering/release.md`、`docs/agent-releases.md`、`scripts/verify-agent-release.mjs`、ADR-0008（生产复用 staging）、ADR-0011（清单随部署发布）
 
 ## 背景
 
 **症状**：面板与 Agent 两个产物的版本号行为完全相反，且都不满足"可追溯"。
 
 - **Agent 侧**：`scripts/verify-agent-release.mjs` 规则 1/2 强卡——改了 `agent/` 运行时代码就必须 bump `VERSION`，bump 了就必须出包入库。执行到位，但**粒度是提交级**：2026-10-25 至 11-07 的 13 天里出了 19 个版本（0.1.0→0.1.20），其中 11-06 发 0.1.19、11-07 又发 0.1.20。每次 bump 都与"是否一次已验收的发布"无关，只与"这次提交有没有碰 agent 代码"有关。
-- **面板侧**：`apps/web/src/version.ts` 的 `PANEL_VERSION` 与 `apps/api/src/app.ts` 的 `APP_VERSION` **两处硬编码**，`docs/release-versioning.md` 写了 5 步发版检查，但 `ci.yml` 与 `verify.sh` 里**没有任何一行校验**（grep `PANEL_VERSION|APP_VERSION|CHANGELOG` 零命中）。实际结果是：`version.ts` 自 2026-10-31 创建（`9181420`）后**再未修改**，之后 8 天的功能改动（C3/C4、UI v2.2、TOTP、接入方案化改造）全部压在 `v0.2.0 · 2026-10-31` 下。
+- **面板侧**：`apps/web/src/version.ts` 的 `PANEL_VERSION` 与 `apps/api/src/app.ts` 的 `APP_VERSION` **两处硬编码**，`docs/archive/2026-11/release-versioning.md` 写了 5 步发版检查，但 `ci.yml` 与 `verify.sh` 里**没有任何一行校验**（grep `PANEL_VERSION|APP_VERSION|CHANGELOG` 零命中）。实际结果是：`version.ts` 自 2026-10-31 创建（`9181420`）后**再未修改**，之后 8 天的功能改动（C3/C4、UI v2.2、TOTP、接入方案化改造）全部压在 `v0.2.0 · 2026-10-31` 下。
 
 **后果**：线上出问题时无法回答"这是哪个提交"。仓库 `git tag` 数量为 **0**，CHANGELOG 只有 `[Unreleased]` 与 `[0.1.0]` 两段（0.1.1–0.1.20 全堆在 Unreleased），线上唯一标识是 Cloudflare Worker Version ID（如 `<worker-version-id>…`），与提交没有映射关系。回滚只能靠猜。
 

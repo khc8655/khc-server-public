@@ -1,8 +1,7 @@
 # 6.4a 观测层：服务端实现（v3 架构）
 
-> 状态：**2026-11-05 起前端 10s 快照轮询（本次修复）；SSE 停用但代码保留。**
-> 适用范围：观测层快照轮询、snap/live ticket、SSE 历史实现 ｜ 最后核验：2026-11-05
-> 关联：docs/data-layering.md、docs/engineering/adr/ADR-0010-snapshot-polling.md、agent/khc/live.py
+> 状态：现行 ｜ 最后核验：2026-11-05 ｜ 关联：docs/data-layering.md、docs/engineering/adr/ADR-0010-snapshot-polling.md、agent/khc/live.py
+> 范围：观测层 10s 快照轮询、snap/live ticket；SSE 已停用，代码保留
 > **2026-11-01：观测通道曾由 WebSocket 改为 SSE。**
 > **2026-11-04：ADR-0010 拍板方案 A——页面可见时 10s 轮询轻量 `/snapshot`，
 > 隐藏即停、10 分钟/60 次上限；无域名经 Worker 转发；SSE 不再被前端引用。**

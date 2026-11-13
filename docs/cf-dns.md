@@ -1,6 +1,7 @@
 # Cloudflare DNS 集成（cf-dns）
 
-> 状态：现行 ｜ 适用范围：面板托管 Cloudflare DNS A/AAAA 记录（多凭据设置、读取已有记录、代建与联动删除、节点域名与证书状态）的使用说明——Token 权限、配置入口、失败处理 ｜ 最后核验：2026-11-09（多凭据默认 Zone 与显式失败） ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`docs/security-boundaries.md` §10、`docs/runbook/node-onboarding.md` §6
+> 状态：现行 ｜ 最后核验：2026-11-09 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`docs/security-boundaries.md` §10
+> 范围：面板托管 Cloudflare DNS A/AAAA 记录（多凭据设置、读取已有记录、代建与联动删除、节点域名与证书状态）的使用说明——Token 权限、配置入口、失败处理
 
 ## 1. 是什么（第一期受限版，不做完整 DNS 管理面板）
 

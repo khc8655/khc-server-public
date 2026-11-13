@@ -1,6 +1,7 @@
 # 节点备份 / 恢复（C4）
 
-> 状态：现行 ｜ 适用范围：节点配置导出/导入 + 控制面灾备（secrets 与 D1）与密钥轮换 ｜ 最后核验：2026-11-11（§8 补发布签名密钥轮换已完成记录与封存位置） ｜ 关联：apps/api/src/lib/crypto.ts、agent/khc/release_verify.py、apps/api/src/routes/backup.ts、docs/engineering/release.md §3、docs/security-boundaries.md §7
+> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：apps/api/src/lib/crypto.ts、agent/khc/release_verify.py、apps/api/src/routes/backup.ts
+> 范围：节点配置导出/导入 + 控制面灾备（secrets 与 D1）与密钥轮换
 
 ## 1. 备份内容
 

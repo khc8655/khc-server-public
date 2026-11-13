@@ -1,7 +1,7 @@
 # khc-server v3：冻结核心 + 应用适配器 + 无损密钥轮换
 
-> **状态**：已定稿（2026-10-25，§9 全部拍板）
-> 适用范围：架构与冻结契约（核心/适配器/连接/数据模型） ｜ 最后核验：2026-11-06（§1.1 口径纠偏：三种并列接入方案、节点选定其一、无主备与跨方案回退；P1 直连 TLS 加固）（§1.1 rotate_token 标注降级为手动 SOP；§2.2/§2.3 增 rev epoch） ｜ 关联：docs/README.md、docs/plan-v4.md
+> 状态：现行 ｜ 最后核验：2026-11-06 ｜ 关联：ADR-0001、ADR-0012、docs/data-layering.md
+> 范围：架构与冻结契约（核心/适配器/连接/数据模型）
 > **取代**：`design-v1.md`（现 `docs/archive/2026-11/design-v1.md`）的连接层、插件包、transports 抽象；`design-v2-simple.md`（现 `docs/archive/2026-11/design-v2-simple.md`）的接口清单。v2 的原则（按需连接、无心跳、失败要快）继续有效。
 > **定位**：面板**不是监控面板**，是"替我安装 / 卸载 / 配置常用软件"的遥控器 + 配置仓库。一个月大约打开 10 次。
 > **数据边界**：面板只做配置读写与按需动作，**不承载重运维数据**；页面可见时以 10s 轮询轻量快照（有域名浏览器直连 `/_live/snapshot`，无域名经 Worker `/nodes/:id/snapshot` 转发，2s 去重），隐藏即停、10 分钟/60 次上限；适配器/端口/服务/进程等重数据仍来自打开工作区时的一次性 `/state`（ADR-0010）。
@@ -45,7 +45,7 @@
 
 ### 1.1 连接与鉴权（核心，一次定死）
 
-- **传输双通道（必须，见 [plan-v4](plan-v4.md) §0）**：Worker 出站有两条路——
+- **传输双通道（必须，见 ADR-0001）**：Worker 出站有两条路——
   1. **原生 `fetch()`**：域名可用自定义端口（`compatibility_date >= 2024-09-02` 或 `allow_custom_ports`）；但**裸 IP 一律返回 Cloudflare `403 error 1003`**（已实测：IP 的 80/8880/8788 全部失败），不能用于 IP 直连。
   2. **`cloudflare:sockets` `connect()` 手写 HTTP/1.1（可选 TLS）**：支持**任意 IP / 任意端口**，用于 IP 直连、非标端口、未备案 Host 绕过；即旧系统 `directTcpFetch()` 的方案。
   选路（同一接入方案内部）：域名走 `fetch`，裸 IP / 非标端口走 TCP socket；两条通道属于同一次连接尝试，失败即返回明确错误，**不跨接入方案切换**。适配器不感知传输差异。
@@ -54,7 +54,7 @@
   2. **方案 B：Cloudflare Tunnel**。Hub 常驻 `cloudflared` 出站、Agent 绑 `127.0.0.1`、`tunnel_endpoint` 填隧道域名；Worker 只连 Cloudflare 可信边缘，节点侧零公网入站端口。备案/端口限制或不想暴露入站端口时**直接选本方案**，不是 A 失败后的兜底。
   3. **方案 C：https + 域名 + 自签证书**。Worker 直连自签在平台侧**不可行**（`fetch()` / `cloudflare:sockets` 一律校验证书，无 `rejectUnauthorized:false` 或自定义 CA）；可行的落地形态是把自签放在 Tunnel 源站段（cloudflared `caPool` / `originServerName`）或 Workers VPC 私有服务段，Worker 侧始终面对可信证书。
   三种方案均为既有能力组合，不引入 provider 抽象；引导见 `docs/runbook/node-onboarding.md` §4.1。
-  > **已按 ADR-0012 落地（2026-11-07）**：三种并列方案、节点选定其一、无跨方案回退；同方案内 `fetch` / TCP 双通道保留。`orderedRoutes()` 只返回选定方案的单一目标，跨路由重试与 `onRouteSuccess` 自动回写 `preferred_route` 已删除，运行时不改写配置、失败即报明确错误；决策与迁移见 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`，实施登记见 `docs/TODO-2026-11-06.md` §3.8。
+  > **已按 ADR-0012 落地（2026-11-07）**：三种并列方案、节点选定其一、无跨方案回退；同方案内 `fetch` / TCP 双通道保留。`orderedRoutes()` 只返回选定方案的单一目标，跨路由重试与 `onRouteSuccess` 自动回写 `preferred_route` 已删除，运行时不改写配置、失败即报明确错误；决策与迁移见 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`。
 - **P1 直连传输加固（2026-11-06 实施）**：
   - **Agent TLS 监听**：Agent 支持直接 TLS 监听（`--tls-cert` / `--tls-key` 参数），主端口复用，无需 Caddy 前置。证书路径约定：优先读命令行参数，兜底读 `/etc/khc-agent/tls.{crt,key}`。
   - **证书热重载**：Agent 响应 `SIGHUP` 信号重新加载 TLS 证书，`acme.sh` / `certbot` 续期后可 `kill -HUP $PID` 无缝切换，无需重启服务。面板侧 `certificates/install_tls` 动作会先校验 PEM 配对、以 0600 原子写入 `<config_dir>/tls/{fullchain.pem,key.pem}`，再自动向自身发 `SIGHUP`；Agent 未以 `--tls-cert` 启动时返回 `restartRequired`（证书已写入，重启后生效）。
@@ -438,40 +438,8 @@ WireGuard 用**公钥识别 peer**。在面板上"把 peer 的密钥改掉"，�
 
 ---
 
-## 6. 对现有代码的处理
+## 6. 不做的事
 
-| 现有 | 处理 |
-|---|---|
-| Hono、登录/会话、错误格式、contracts 基础部分、CI、React 外壳 | 保留 |
-| `peers` / `exposures` 的 CRUD 路由、仓库、测试 | 删除，改由 `app_configs` + 通用路由承担 |
-| `migrations/0001_init.sql`（12 张表） | 尚未上线，直接改写为 §2.3 的 4 张表 |
-| README / design-v1 中的 KV、R2、Cron、DO、WS、签名模块、transports | 标记为作废，避免本地 Agent 照旧文档把这些加回来 |
+服务器监控、告警、指标图表；心跳和后台同步；离线命令队列；签名插件市场；多用户和权限系统。
 
-## 7. 里程碑
-
-| 阶段 | 内容 | 验收 |
-|---|---|---|
-| **C1 核心** | Worker 通用路由 + 4 张表；Agent 内核（鉴权、任务、原子写回滚、端口、Caddy 片段）；外壳 + 共享组件 + 通用 Schema 表单 | §3.4 用 node-exporter 演练：只加两个文件即可跑通全流程 |
-| **C2 WireGuard** | wireguard 适配器 + 页面 + 5.3 轮换状态机 | 测试 VM 上：手机轮换，切换间隙 ≤2s；PENDING 期间旧钥流量不中断；回滚可用；Agent 重启后轮换状态恢复 |
-| **C3 常用软件** | caddy-site、port-forward、chisel；其余应用待定 | 每个应用只新增两个文件 |
-
-## 8. 不做的事
-
-服务器监控、告警、指标图表（已有大量现成工具）；心跳和后台同步；离线命令队列；签名插件市场；多用户和权限系统。
-
-## 9. 已拍板（2026-10-25）
-
-| # | 问题 | 决定 |
-|---|---|---|
-| 1 | Hub 入口 | Caddy 高位端口 + HMAC（历史决定）；**2026-11-06 口径修订**：三种并列接入方案、节点选定其一、不做主备切换（见 §1.1） |
-| 2 | 手机类 peer 私钥 | 加密存入 D1（`secrets_enc`），以便重新下载配置 |
-| 3 | 轮换时限 | 宽限期 24h，PENDING 超时 7 天 |
-| 4 | Agent / 适配器语言 | 一期使用 Python（只用标准库）；**单文件 Go Agent 放到二期** |
-| 5 | 无 root peer | 默认用 chisel（WSS），wireproxy 作为可选 |
-| 6 | 直连端口/证书 | 默认 8443 + 橙云 + Cloudflare Origin CA；灰云任意端口 + acme.sh；`compatibility_date ≥ 2024-09-02` |
-| 7 | 无 root peer 控制通道 | 用户态 cloudflared 直连 Worker（核心不加代理）；chisel 仅数据面 |
-
-## 10. 二期（不在本期范围）
-
-- Agent 改写为单文件 Go 二进制。适配器接口 `api` 保持不变，Python 适配器通过子进程方式继续兼容，或逐个迁移。
-- 具体常用软件的适配器清单（待定）。
+> 原 §6–§10（对现有代码的处理、里程碑、已拍板、二期）已移至 `docs/archive/2026-11/design-v3-milestones.md`。

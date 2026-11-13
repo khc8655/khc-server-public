@@ -1,9 +1,9 @@
 # host-ops 独立 Peer E2E 验收（issue #14 预备）
 
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/host-ops.md §11
+> 范围：host-ops 真机 E2E 执行记录
 > 脚本：[`scripts/host-ops-peer-e2e.sh`](../scripts/host-ops-peer-e2e.sh)
 > 契约：[`docs/host-ops.md`](./host-ops.md) §3–§11、[`docs/host-ops-async.md`](./host-ops-async.md)
-> 状态：**真机执行通过（2026-10-27）**：独立 Peer，PASS=99 / FAIL=0 / SKIP=2；结果见 `docs/host-ops.md §11`。
-> 适用范围：host-ops 真机 E2E 执行记录 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/host-ops.md §11
 > 适用：staging / 专用测试机；**禁止对生产 Hub / 生产 Peer 跑 `E2E_WRITES=1`**
 
 ---

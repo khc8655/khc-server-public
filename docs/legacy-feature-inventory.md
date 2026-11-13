@@ -1,6 +1,7 @@
 # 旧系统功能清单 → v3 归属（Legacy Feature Inventory）
 
-> 状态：现行 ｜ 适用范围：旧系统功能对照（防漏功能）；历史对照表，功能状态以各领域权威文档为准 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/design-v3.md、docs/README.md
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/design-v3.md、docs/README.md
+> 范围：旧系统功能对照（防漏功能）；历史对照表，功能状态以各领域权威文档为准
 
 > 来源：`khc8655/wireguard`（原 `mgmt-console`）`README.md`、`docs/user-and-ops-guide.md`、`docs/architecture-spec.md`、`docs/SECURITY_SPEC.md`、`PROJECT_SPEC.md`、`backend/src/app.js`、`shared/*.js`、`hub-agent/agent.py`、`frontend/js/modules/*`。
 > 目的：C1 只完成了骨架；本清单确保后续不丢旧功能，并明确每项在新架构里的归属（核心 vs 适配器）。

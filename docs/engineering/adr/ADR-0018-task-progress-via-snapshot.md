@@ -4,7 +4,7 @@
 - 状态：**已接受**（主人 2026-11-12 重开；取代同日「不做」的旧决定）
 - 适用范围：`agent/khc/tasks.py`、`agent/khc/state.py`、`packages/contracts/`（`tasks` 可选字段）、`apps/web/src/app/TaskCenter.tsx`、`apps/web/src/data/tasks.ts`
 - 最后核验：2026-11-12
-- 关联：ADR-0010（10 秒快照）、ADR-0013（发版分层）、`docs/plans/ui-ia-redesign-2026-11-12.md`、`docs/ui-redesign/page-specs.md`
+- 关联：ADR-0010（10 秒快照）、ADR-0013（发版分层）、`docs/archive/plans/ui-ia-redesign-2026-11-12.md`、`docs/ui-redesign/page-specs.md`
 
 ## 背景
 

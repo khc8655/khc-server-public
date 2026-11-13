@@ -6,7 +6,7 @@
 
 ## 背景
 
-原设计（`docs/engineering/release.md` 旧版）为两套资源：staging Worker `<worker-name>` + `<d1-name>`，生产另建 `<worker-name>` + `<d1-name>`（`wrangler.toml` 用占位 D1 id，替换后才可部署）。2026-10-31 前后，主人确认**不再单独创建生产资源**：本面板为单用户个人项目，流量极低（月打开约 10 次），维护两套 Worker/D1 的成本与收益不成比例；且当时 GitHub Actions 账单/额度耗尽（见 `docs/auto-deploy.md`），部署路径需要收敛。
+原设计（`docs/engineering/release.md` 旧版）为两套资源：staging Worker `<worker-name>` + `<d1-name>`，生产另建 `<worker-name>` + `<d1-name>`（`wrangler.toml` 用占位 D1 id，替换后才可部署）。2026-10-31 前后，主人确认**不再单独创建生产资源**：本面板为单用户个人项目，流量极低（月打开约 10 次），维护两套 Worker/D1 的成本与收益不成比例；且当时 GitHub Actions 账单/额度耗尽（见 `docs/archive/2026-11/auto-deploy.md`），部署路径需要收敛。
 
 ## 选项
 

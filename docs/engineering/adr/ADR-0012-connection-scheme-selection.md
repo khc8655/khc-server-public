@@ -4,7 +4,7 @@
 - 状态：已接受（主人 2026-11-07 拍板；实现于分支 `feat/todo-closeout-2026-11-07`，基线 `2668075`，未合并、未部署）
 - 适用范围：`apps/api/src/lib/node-client.ts`、`apps/api/src/index.ts` 及其单测；不改 `packages/contracts` 契约、不改 Agent 内核、不改 D1 schema
 - 最后核验：2026-11-07
-- 关联：`docs/TODO-2026-11-06.md` §3.8 / §3.1、`docs/design-v3.md` §1.1、`docs/runbook/node-onboarding.md`、ADR-0001（双通道传输）、ADR-0010（单 isolate 内存去重口径）、ADR-0009（Worker 配额约束）
+- 关联：`docs/archive/2026-11/TODO-2026-11-06.md` §3.8 / §3.1、`docs/design-v3.md` §1.1、`docs/runbook/node-onboarding.md`、ADR-0001（双通道传输）、ADR-0010（单 isolate 内存去重口径）、ADR-0009（Worker 配额约束）
 - 备注：按 AGENTS.md 红线 9a，`docs/README.md` 索引登记由同一 PR 的并行代理负责，本改动不触碰索引文件
 
 ## 背景

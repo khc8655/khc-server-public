@@ -1,6 +1,7 @@
 # 控制面全丢重建 runbook（Worker / D1 / 主密钥）
 
-> 状态：现行 ｜ 适用范围：生产 Worker 部署、D1 数据、`MASTER_ENC_KEY` 等控制面凭据全部或部分丢失后的重建与验证 ｜ 最后核验：2026-11-10 ｜ 关联：`docs/backup.md` §7/§8、`docs/engineering/d1-migrations.md`、`docs/engineering/release.md` §3、`docs/agent-releases.md`、`wrangler.toml`、`docs/auto-deploy.md`
+> 状态：现行 ｜ 最后核验：2026-11-10 ｜ 关联：`docs/backup.md` §7/§8、`docs/engineering/d1-migrations.md`、`docs/engineering/release.md` §3
+> 范围：生产 Worker 部署、D1 数据、`MASTER_ENC_KEY` 等控制面凭据全部或部分丢失后的重建与验证
 
 本页只管"控制面怎么重建"；日常备份清单与密钥轮换 SOP 仍以 `docs/backup.md` 为权威。
 
@@ -93,7 +94,7 @@ for f in migrations/00*.sql; do npx wrangler d1 execute DB --remote --file="$f";
 ### 3.3 恢复入口
 - `wrangler.toml` 的 `workers_dev = true`、`LIVE_ORIGINS` 含两个入口（`panel.example.com` 与 workers.dev）；
 - 第三方边缘的源站保持指向 `<worker-name>.<subdomain>.workers.dev`；
-- 部署后按 `docs/auto-deploy.md` 的两道门禁核对 `/cdn-cgi/trace` 的 `h=` 与 `/api/v1/health`。
+- 部署后按 `docs/engineering/release.md` §3.2 的部署后校验核对 `/cdn-cgi/trace` 的 `h=` 与 `/api/v1/health`。
 
 ## 4. 主密钥真丢了的补救（逐节点重建 token）
 

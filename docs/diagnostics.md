@@ -1,7 +1,7 @@
 # 诊断（Diagnostics）设计与错误码目录
 
-> **状态**：已实现（#49 精简，2026-10-29）。基线 main `674f4b2`；旧码映射见 `CHANGELOG.md`。
-> 适用范围：诊断 7 核心码与 API ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
+> 范围：诊断 7 核心码与 API
 > **唯一权威范围**：核心错误码、适配器问题契约、Worker 诊断 API 形状、修复动作边界。
 > **一句话**：诊断只回答两件事——**节点连得上吗？哪个应用坏了、下一步点什么？** 核心只保留 7 个码，应用问题由适配器自己上报。
 

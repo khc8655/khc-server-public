@@ -1,6 +1,7 @@
 # Agent 安装预检与用户模式
 
-> 状态：现行 ｜ 适用范围：install.sh 预检与 user/system 安装模式 ｜ 最后核验：2026-11-03（批次 2 B-4：补 Python ≥3.11 硬门槛与 Ubuntu 22.04 处置） ｜ 关联：agent/install.sh、docs/agent-lifecycle.md
+> 状态：现行 ｜ 最后核验：2026-11-03 ｜ 关联：agent/install.sh、docs/agent-lifecycle.md
+> 范围：install.sh 预检与 user/system 安装模式
 
 ## 1. `install.sh --check`
 

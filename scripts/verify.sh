@@ -31,7 +31,9 @@ echo "==> d1 migrations (local)"
 echo "==> installer lifecycle"
 ./scripts/install-lifecycle-test.sh
 echo "==> node script syntax"
-for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs; do node --check "$f"; done
+for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/docs-lint.mjs; do node --check "$f"; done
+echo "==> docs lint"
+node scripts/docs-lint.mjs --strict
 echo "==> shell syntax"
 bash -n agent/install.sh agent/uninstall.sh agent/package.sh scripts/verify.sh scripts/host-ops-peer-e2e.sh scripts/install-lifecycle-test.sh scripts/install-system-test.sh scripts/d1-migration-local-test.sh scripts/caddy-tls-modes-e2e.sh scripts/build-agent-release.sh agent/recipes/demo-echo/install.sh agent/recipes/demo-echo/uninstall.sh agent/recipes/sing-box/install.sh agent/recipes/sing-box/uninstall.sh agent/recipes/generic-service/install.sh agent/recipes/generic-service/uninstall.sh
 echo "==> OK"

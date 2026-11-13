@@ -1,6 +1,7 @@
 # khc-agent（Hub 端 Agent 内核）
 
-> 状态：现行 ｜ 适用范围：Agent 内核/适配器契约与已知限制 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
+> 范围：Agent 内核/适配器契约与已知限制
 
 只用 **Python 3.11 标准库**，供 Cloudflare Worker 按需 HTTPS 调用（HMAC 鉴权）。
 内核冻结、适配器可插；加一个应用 = `adapters/<app>.py` 一个文件（+ 前端页面）。

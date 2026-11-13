@@ -1,6 +1,7 @@
 # Agent 发布清单与签名（#32）
 
-> 状态：现行 ｜ 适用范围：Agent 发布包清单、Ed25519 签名与升级源约束 ｜ 最后核验：2026-11-05（ADR-0011：清单随部署发布，secret 仅兜底） ｜ 关联：docs/agent-lifecycle.md、agent/khc_agent.py、docs/engineering/adr/ADR-0011-manifest-with-deploy.md
+> 状态：现行 ｜ 最后核验：2026-11-05 ｜ 关联：docs/agent-lifecycle.md、agent/khc_agent.py、docs/engineering/adr/ADR-0011-manifest-with-deploy.md
+> 范围：Agent 发布包清单、Ed25519 签名与升级源约束
 
 > 目标：升级包 URL/sha256 不再由浏览器随意填写；Worker 只接受固定发布源，且清单由 Ed25519 签名。
 

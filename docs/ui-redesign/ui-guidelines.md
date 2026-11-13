@@ -1,7 +1,7 @@
 # 面板 UI 规范（ui-guidelines）
 
-> 状态：现行（强制） ｜ 适用范围：`apps/web/src` 全部页面与后续 UI 改动 ｜ 最后核验：2026-11-12（B2 中性显示与 §8.1 颜色语义） ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)、AGENTS.md §6.4
-> 日期：2026-11-02（初版）· 2026-11-05（规范补齐）· 2026-11-08（节点状态词）· 按页面类型归纳，逐页细节见 [page-specs.md](page-specs.md)。
+> 状态：现行 ｜ 最后核验：2026-11-12 ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)
+> 范围：`apps/web/src` 全部页面与后续 UI 改动
 > 总原则：**一页一套范式**。看状态用状态带/指标，看明细用一张对象表，所有详情与操作都进全页唯一的右侧抽屉。
 > 轻量约束：只复用 `apps/web/src/ui/` 现有组件（Card / Table / Drawer / Dialog / ConfirmDialog / Banner / Badge / Button / Segmented / KeyValue / Stat / Field / CodeBlock / InlineError / EmptyState / Skeleton / Toast / Menu），**不引入任何重型组件库**（不加 antd/MUI/echarts/xterm 等），不做多层弹窗与重动效。
 > **设计令牌唯一权威：`apps/web/src/styles/tokens.css`**（见 §8.8）。本文只写变量名与用途，不复制 hex 值。

@@ -1,6 +1,7 @@
 # D1 迁移 runbook
 
-> 状态：现行 ｜ 适用范围：`migrations/` 到任意环境的执行顺序、命令与核对 ｜ 最后核验：2026-11-11（生产已应用 0001–0012） ｜ 关联：`docs/engineering/release.md`、ADR-0008
+> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：`docs/engineering/release.md`、ADR-0008
+> 范围：`migrations/` 到任意环境的执行顺序、命令与核对
 
 ## 原则
 

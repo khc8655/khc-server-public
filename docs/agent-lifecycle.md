@@ -1,7 +1,7 @@
 # C5 Agent 生命周期（命令生成，阶段一）
 
-> 状态：**阶段一已实现（2026-10-26）**。面板生成可复制、可校验的安装/升级/卸载命令；不引入 Agent 自升级执行。
-> 适用范围：Agent 安装/升级/卸载命令生命周期 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/agent-releases.md、docs/install.md
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/agent-releases.md、docs/install.md
+> 范围：Agent 安装/升级/卸载命令生命周期
 
 ## 1. 原则
 

@@ -1,20 +1,20 @@
 ## 变更内容
 
+- 关联提案 / 批次：`docs/plans/<提案>.md` 批次 N（小修复写「无，小修复」）
 - 做了什么：
-- 为什么：
+- 偏离提案之处：（没有写「无」；有则说明原因）
 
-## 范围与门禁
+## 门禁
 
-- [ ] 已获得主人对方案的确认（架构/契约/数据模型/UI）
-- [ ] UI 改动：已归类页面类型（A/B/C/D/E/L）并更新 `docs/ui-redesign/page-specs.md` 路由总表；遵守 `docs/ui-redesign/ui-guidelines.md`（唯一抽屉、行内按钮 ≤2、L2/L3 确认、令牌只用 `apps/web/src/styles/tokens.css`）
-- [ ] 未超出确认范围
+- [ ] 改动没有超出提案批次的范围
+- [ ] 面板 / Agent 版本按 `docs/engineering/release.md` §2 处理（bump 或注明不需要）
+- [ ] UI 改动：遵守 `ui-guidelines.md` 与 `page-specs.md`，附浅色、深色、390 截图与四态说明
 
-## 验证
+## 证据
 
-- [ ] `./scripts/verify.sh` 通过
-- [ ] 新增/修改测试覆盖（说明）
-- [ ] staging E2E（如适用）：节点 / 操作 / 结果
-- [ ] UI：浅色、深色、390 截图已附；四态覆盖
+- [ ] `./scripts/verify.sh` 通过（附关键输出）
+- 新增或修改的测试：
+- 真机 / E2E（按 `testing.md` §5 的发版类型）：节点 / 操作 / 结果
 
 ## 风险与回滚
 
@@ -23,6 +23,6 @@
 
 ## 文档
 
-- [ ] 已更新权威文档（`docs/README.md` 中对应项）
-- [ ] 已更新 `CHANGELOG.md`
-- [ ] 架构决策已补 ADR（如适用）
+- [ ] 已更新对应的权威文档（见 `docs/README.md`）
+- [ ] CHANGELOG 按 `CONTRIBUTING.md` 格式更新（每条一行）
+- [ ] 新的重大决策已写 ADR

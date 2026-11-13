@@ -3,7 +3,7 @@
 - 状态：已接受（主人 2026-11-12 拍板：先 C 后 A；只读聚合，不新增数据模型）
 - 日期：2026-11-12
 - 决策者：主人
-- 关联：`docs/plans/ui-ia-redesign-2026-11-12.md` §4、§5、`docs/ui-redesign/page-specs.md`、`agent/adapters/caddy_site.py`、`agent/adapters/wireguard.py`、`agent/adapters/port_forward.py`
+- 关联：`docs/archive/plans/ui-ia-redesign-2026-11-12.md` §4、§5、`docs/ui-redesign/page-specs.md`、`agent/adapters/caddy_site.py`、`agent/adapters/wireguard.py`、`agent/adapters/port_forward.py`
 
 ## 背景
 
