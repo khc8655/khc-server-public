@@ -287,7 +287,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 
 1. **受控系统包安装**（`agent/khc/pkg.py`，仅 system profile / root）
    - 白名单固定：`caddy`、`wireguard-tools`、`socat`；其他包名一律拒绝。
-   - 自动识别 `apt-get` / `dnf` / `yum` / `apk`；命令全部是 argv 列表，经 `ctx.run()`，不拼 shell。
+   - 自动识别 `apt-get` / `dnf` / `yum` / `apk`；命令全部是 argv 列表，经 `ctx.run()`，不拼 shell。unit 是 `ProtectSystem=full`，`/usr` 只读，故 update / 安装 / 回滚卸载包成 `systemd-run --wait --pipe --collect` 一次性 unit 在沙箱外执行，`APT_ENV` 经 `--setenv=` 传入。
    - 超时：探测 15s、`apt-get update` 180s、安装 300s；输出只保留尾部。
    - 失败回滚：安装前记录二进制是否存在；安装失败或装后二进制不可用 → 尝试卸载并报 `pkg_install_failed`。
    - 适配器通过 `capabilities: {"pkgInstall": true}` 声明能力；面板只在看到该能力时展示「一键安装」，旧 Agent 不露按钮。

@@ -6,6 +6,8 @@
 - **白名单固定**：``caddy`` / ``wireguard-tools`` / ``socat``，其余包名一律拒绝。
 - **自动识别包管理器**：apt-get / dnf / yum / apk；找不到就明确报错。
 - **命令不经 shell 拼接**：全部是 argv 列表，经 ``ctx.run()`` 执行（可注入 mock）。
+- **跳出 Agent 沙箱**：unit 是 ``ProtectSystem=full``，包管理器写不了 ``/usr``；
+  update / 安装 / 回滚卸载经 ``systemd-run`` 一次性 unit 在沙箱外执行。
 - **超时与输出截断**：安装 300s、探测 15s；日志只保留尾部。
 - **失败回滚**：安装前记录包是否已存在；安装失败或装后二进制不可用则尝试卸载。
 
@@ -36,6 +38,26 @@ UPDATE_TIMEOUT = 180.0
 INSTALL_TIMEOUT = 300.0
 
 APT_ENV = {"DEBIAN_FRONTEND": "noninteractive"}
+
+#: 跳出 Agent 沙箱的 systemd-run 固定参数：--wait 同步等待并透传退出码，
+#: --pipe 把 stdout/stderr 接回调用方（无 tty 可用），--collect 结束即回收
+#: 临时 unit，--quiet 抑制 "Running as unit" 噪声。不用 --pty（无 tty 时不可用）。
+SYSTEMD_RUN_PREFIX = ("systemd-run", "--quiet", "--collect", "--wait", "--pipe")
+
+
+def _escape_argv(inner: list[str], env: Optional[dict[str, str]] = None) -> list[str]:
+    """把包管理器命令包成 systemd-run 一次性 unit，在 Agent 沙箱外以 root 执行。
+
+    ``ProtectSystem=full`` 下 ``/usr`` 只读，包管理器直接跑必然失败。一次性 unit
+    不继承调用进程环境，APT_ENV 必须经 ``--setenv=`` 显式传入。全程 argv 数组，
+    不拼 shell 字符串；包名只来自固定白名单（由 ``ensure_packages`` 校验）。
+    """
+
+    argv = list(SYSTEMD_RUN_PREFIX)
+    for key, value in (env or {}).items():
+        argv.append(f"--setenv={key}={value}")
+    argv.extend(inner)
+    return argv
 
 
 def _run_ok(ctx, argv: list[str], *, timeout: float = PROBE_TIMEOUT) -> bool:
@@ -102,7 +124,12 @@ def _rollback(ctx, manager: str, package: str) -> None:
     """尽力卸载（失败只记日志，不覆盖原始错误）。"""
 
     try:
-        result = ctx.run(_remove_argv(manager, package), check=False, timeout=INSTALL_TIMEOUT)
+        env = APT_ENV if manager == "apt-get" else None
+        result = ctx.run(
+            _escape_argv(_remove_argv(manager, package), env),
+            check=False,
+            timeout=INSTALL_TIMEOUT,
+        )
         _log_output(ctx, f"回滚卸载 {package}", result)
         if result.rc == 0:
             ctx.log(f"已回滚：卸载 {package}")
@@ -154,9 +181,15 @@ def ensure_packages(ctx, packages: tuple[str, ...] | list[str]) -> dict[str, str
             details={"packages": requested},
         )
 
+    env = APT_ENV if manager == "apt-get" else None
     if manager == "apt-get":
         # 源信息过期时 install 会失败；update 失败只告警，install 仍可能用缓存成功。
-        result = ctx.run(["apt-get", "update", "-q"], check=False, timeout=UPDATE_TIMEOUT, env=APT_ENV)
+        # update 与 install 同走沙箱外的一次性 unit，保持 apt 状态视图一致。
+        result = ctx.run(
+            _escape_argv(["apt-get", "update", "-q"], env),
+            check=False,
+            timeout=UPDATE_TIMEOUT,
+        )
         if result.rc != 0:
             ctx.warn("apt-get update 失败（继续尝试安装）：" + tail(result.stderr, 800))
 
@@ -166,8 +199,11 @@ def ensure_packages(ctx, packages: tuple[str, ...] | list[str]) -> dict[str, str
             ctx.log(f"{package} 已安装，跳过")
             continue
         ctx.log(f"安装系统包 {package}（{manager}）")
-        env = APT_ENV if manager == "apt-get" else None
-        result = ctx.run(_install_argv(manager, package), check=False, timeout=INSTALL_TIMEOUT, env=env)
+        result = ctx.run(
+            _escape_argv(_install_argv(manager, package), env),
+            check=False,
+            timeout=INSTALL_TIMEOUT,
+        )
         _log_output(ctx, f"安装 {package}", result)
         if result.rc != 0 or not binary_present(ctx, package):
             _rollback(ctx, manager, package)
