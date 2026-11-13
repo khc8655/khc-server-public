@@ -1,7 +1,7 @@
 # host-ops 长耗时动作任务化（issue #17）— 并行契约
 
-> 状态：已实现（2026-10-26；Agent 676 测试、前端 132 测试；staging `call_task fw.apply` 实测通过）。
-> 适用范围：host-ops 长动作（call_task）异步化 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/host-ops.md
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/host-ops.md
+> 范围：host-ops 长动作（call_task）异步化
 > 目的：`fw.apply` 可能超过 6 秒同步窗口。固定 `call_task` 契约，后端与 UI 可并行实现。
 > 2026-10-29（#50）：`kill` 动词已移除，`call_task` 只剩 `fw.apply` 使用。
 

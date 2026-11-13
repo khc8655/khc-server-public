@@ -1,6 +1,6 @@
 ---
 name: UI 改动提案
-about: 任何界面改动先提案获批（docs/ui-redesign/ui-guidelines.md + page-specs.md；AGENTS.md §6.4）
+about: 任何界面改动先提案获批（docs/ui-redesign/ui-guidelines.md + page-specs.md；AGENTS.md §3）
 ---
 
 1. 页面类型归类：A 分诊概览 / B 列表对象 / C 单对象详情 / D 配置表单 / E 运维动作 / L 登录

@@ -1,7 +1,7 @@
 # Caddy 管理面（站点/服务）完整 schema
 
-> 状态：已实现（caddy-site 1.2.0 + 站点/Caddy 服务 UI），2026-10-26 staging 真机验收。
-> 适用范围：Caddy 站点与服务管理 ｜ 最后核验：2026-11-11（存量纳管影子预览） ｜ 关联：agent/adapters/caddy_site.py
+> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：agent/adapters/caddy_site.py
+> 范围：Caddy 站点与服务管理
 
 > 目标：把旧系统 Caddy 管理能力全部迁到 `caddy-site` 适配器 + 站点页；Worker 仍不解析 config。
 

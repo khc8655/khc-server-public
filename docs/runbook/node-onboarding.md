@@ -1,6 +1,7 @@
 # 节点接入 Runbook（node-onboarding）
 
-> 状态：现行 ｜ 适用范围：把一台干净 Linux 机器从零接入面板，直至节点 `/state` 上线的端到端步骤 ｜ 最后核验：2026-11-06（§4.1 口径修订：三种并列接入方案、节点选定其一、无主备与跨方案回退；保留 `--with-*` 代装、Caddy 自动 LE、`--tls` 仅可选自签） ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`、`docs/cf-dns.md`、`docs/design-v3.md` §1.1
+> 状态：现行 ｜ 最后核验：2026-11-06 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
+> 范围：把一台干净 Linux 机器从零接入面板，直至节点 `/state` 上线的端到端步骤
 
 ## 1. 前置条件
 
@@ -83,9 +84,9 @@ acme.sh 会安装续期任务；`--reloadcmd` 让证书续期后自动 reload Ag
 
 三种方案共用既有字段（`endpoint` / `tunnel_endpoint` / `preferred_route`），不新增代码路径。
 
-> **已按 ADR-0012 落地（2026-11-07）**：三种并列方案、节点选定其一、无跨方案回退；同方案内 fetch / TCP 双通道保留。`orderedRoutes()` 只返回选定方案单一目标，跨路由重试与 `onRouteSuccess` 自动回写 `preferred_route` 已删除，运行时不改写配置、失败即报明确错误；决策见 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`，实施登记见 `docs/TODO-2026-11-06.md` §3.8。
+> **已按 ADR-0012 落地（2026-11-07）**：三种并列方案、节点选定其一、无跨方案回退；同方案内 fetch / TCP 双通道保留。`orderedRoutes()` 只返回选定方案单一目标，跨路由重试与 `onRouteSuccess` 自动回写 `preferred_route` 已删除，运行时不改写配置、失败即报明确错误；决策见 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`。
 
-> **实测记录（2026-11-06/07，境外测试 hub `203.0.113.10`，IPv6 `2001:db8::10`）**：Agent 0.1.19 在 `/tmp` 实跑，HTTP / 自签 TLS 的 `/health` 200、无签名 `/state` 401、HMAC `/state` 200、SIGHUP 热重载生效；**方案 A** 用 `/tmp` 临时 Caddy 自动签发 Let's Encrypt 证书（`203-0-113-10.sslip.io`），443/8443 双端口 `ssl_verify=0`、HMAC `/state` 200，本机公网复核 0.5s；**方案 B** Quick Tunnel 得 `ssl_verify=0`、HMAC `/state` 200；**方案 C** 自签源站加 `--no-tls-verify` 得 200（`caPool` 未测）。完整数据与未测项见 `docs/TODO-2026-11-06.md` §2 P0 实测记录。
+> **实测记录（2026-11-06/07，境外测试 hub `203.0.113.10`，IPv6 `2001:db8::10`）**：Agent 0.1.19 在 `/tmp` 实跑，HTTP / 自签 TLS 的 `/health` 200、无签名 `/state` 401、HMAC `/state` 200、SIGHUP 热重载生效；**方案 A** 用 `/tmp` 临时 Caddy 自动签发 Let's Encrypt 证书（`203-0-113-10.sslip.io`），443/8443 双端口 `ssl_verify=0`、HMAC `/state` 200，本机公网复核 0.5s；**方案 B** Quick Tunnel 得 `ssl_verify=0`、HMAC `/state` 200；**方案 C** 自签源站加 `--no-tls-verify` 得 200（`caPool` 未测）。完整数据见 `docs/verification/2026-11-07/p0-closeout.md`。
 
 ## 5. 安装
 

@@ -1,6 +1,6 @@
 # 文档瘦身与协作流程（提案）
 
-> 状态：提案（待主人拍板） ｜ 最后核验：2026-11-13（main `0c3207d`） ｜ 关联：`AGENTS.md` 红线 9、`docs/README.md`、`CHANGELOG.md`、`docs/engineering/release.md`
+> 状态：历史（已实施，2026-11-13） ｜ 最后核验：2026-11-13 ｜ 关联：`AGENTS.md` §4–§5、`scripts/docs-lint.mjs`
 
 ## 1. 问题
 
@@ -186,3 +186,16 @@ PR 模板（`.github/pull_request_template.md`）增加「关联提案 / 批次�
 4. backlog 的载体：推荐 `docs/plans/backlog.md`，任何执行者都能直接读；备选 GitHub Issues，需要执行者有 gh 权限。
 5. 确认 §4.6 的归档清单。
 6. 批次 2 改 `ci.yml` 会触发一次部署：可以接受，或把注释收敛并入下一次功能发版。
+
+## 8. 实施记录（2026-11-13）
+
+主人决定由规划者直接实施三个批次，§7 待拍板项按推荐值执行。与提案的偏离：
+
+| 项 | 提案 | 实际 | 原因 |
+|---|---|---|---|
+| `dual-mode.md` | ≤ 300 行 | 385 行 | 保留 §0–§4 与预检 API 后无法再删而不丢机制；仍在通用上限 400 内 |
+| `design-v3.md`、`ui-guidelines.md` | ≤ 400 行 | 445 / 427 行，列入 `docs-lint.mjs` 白名单 | 契约与 UI 规范需要集中在一份 |
+| `docs-lint` | 先告警两周 | 直接以 `--strict` 接入 `verify.sh` | 实施后当前 main 零问题，没有需要过渡的存量 |
+| `ci.yml` 注释收敛 | 批次 2 | 未做，转入 backlog | 改 `ci.yml` 会触发部署，并入下次功能发版 |
+| CHANGELOG 迁出 | 按月份 | 0.7.6 及更早整体迁入 `docs/archive/changelog/before-0.7.7.md` | 0.3.0 一段横跨 10 月至 11 月，按月拆会切断条目 |
+| 代码注释中的旧文档路径 | 未提 | 未改，转入 backlog | 改 `apps/*/src` 会触发面板 bump |

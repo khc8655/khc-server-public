@@ -1,7 +1,7 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：**已实现（2026-10-26，方案 B2；staging 真机验收；2026-11-03 D-5/T4.6 如实化 Hub 失陷边界表述，见 §0.1）**；决策见 `docs/engineering/adr/ADR-0007-host-ops-ssh-via-hub.md`，界面与交互以 `docs/ui-redesign/ui-guidelines.md`（类型 E 运维动作）+ `docs/ui-redesign/page-specs.md` 为准。
-> 适用范围：主机运维写操作与 Peer 按需 SSH ｜ 最后核验：2026-11-03（D-5/T4.6 §0.1 如实化） ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-03 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
 ## 0. 三句话

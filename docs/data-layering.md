@@ -1,6 +1,7 @@
 # 数据分层：控制面与观测面
 
-> 状态：现行 ｜ 适用范围：D1/Agent 数据归属边界（配置 vs 运行快照） ｜ 最后核验：2026-11-04 ｜ 关联：docs/design-v3.md §2.3、docs/live-observation.md §8、ADR-0010
+> 状态：现行 ｜ 最后核验：2026-11-04 ｜ 关联：docs/design-v3.md §2.3、docs/live-observation.md §8、ADR-0010
+> 范围：D1/Agent 数据归属边界（配置 vs 运行快照）
 
 本文件定义 khc-server 的数据归属，避免“实时状态”和“可恢复配置”混在一起。
 
@@ -77,7 +78,7 @@ control.reachable !== true && 有快照数据（live/stopped/fallback 且有上�
                                  → presence = live-only, canApply = false
 两边都不可达                     → presence = offline, canApply = false
 探测中                           → presence = unknown, canApply = false
-canSave 恒为 true（保存只写 D1，与通道无关，见 docs/plan-gate-split.md）
+canSave 恒为 true（保存只写 D1，与通道无关，见 docs/design-v3.md §1.2）
 ```
 
 - live 成功**不能**把节点标成“在线可管理”。

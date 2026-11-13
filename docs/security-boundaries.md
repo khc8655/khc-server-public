@@ -1,6 +1,7 @@
 # 安全与边界说明（security-boundaries）
 
-> 状态：现行 ｜ 适用范围：回答"装了这个 Agent / 这个 Worker 之后，它们到底被授权做什么、不能做什么"；面向安全审计与边界自查 ｜ 最后核验：2026-11-06（P1 直连传输加固；批次 B Recipe 注入 + DNS 凭据隔离；§1 口径纠偏为三种并列接入方案） ｜ 关联：`agent/khc-agent.service`、`apps/api/src/lib/rate-limit.ts`、`apps/api/src/lib/agent-commands.ts`、`docs/cf-dns.md`、`docs/agent-releases.md`、ADR-0005/0006/0007、AGENTS.md 红线 4
+> 状态：现行 ｜ 最后核验：2026-11-06 ｜ 关联：`agent/khc-agent.service`、`apps/api/src/lib/rate-limit.ts`、`apps/api/src/lib/agent-commands.ts`
+> 范围：回答"装了这个 Agent / 这个 Worker 之后，它们到底被授权做什么、不能做什么"；面向安全审计与边界自查
 
 ## 1. 控制面（Worker + 面板）
 

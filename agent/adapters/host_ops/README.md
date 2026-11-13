@@ -1,6 +1,7 @@
 # host-ops 静态脚本目录
 
-> 状态：现行 ｜ 适用范围：host-ops 静态脚本 khc_host.py 的双重加载方式 ｜ 最后核验：2026-11-02（docs consolidation） ｜ 关联：docs/host-ops.md、agent/adapters/host_ops.py
+> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/host-ops.md、agent/adapters/host_ops.py
+> 范围：host-ops 静态脚本 khc_host.py 的双重加载方式
 
 本目录只有一份**脚本实现**：`khc_host.py`。它被两处使用：
 

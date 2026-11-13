@@ -1,6 +1,7 @@
 # 测试与验收规范
 
-> 状态：现行（强制） ｜ 适用范围：测试分层、功能覆盖矩阵、发版类型必测项、真机验收与缺口计划 ｜ 最后核验：2026-11-08（补齐功能矩阵与发版类型矩阵） ｜ 关联：`./scripts/verify.sh`、`docs/engineering/release.md`、`docs/auto-deploy.md`、`docs/release-versioning.md`、`.github/workflows/ci.yml`
+> 状态：现行 ｜ 最后核验：2026-11-08 ｜ 关联：`./scripts/verify.sh`、`docs/engineering/release.md`、`.github/workflows/ci.yml`
+> 范围：测试分层、功能覆盖矩阵、发版类型必测项、真机验收与缺口计划
 
 本文回答三个问题：**平台有哪些功能要测、每一层怎么测、不同类型的发版分别必须跑哪些测试**。所有数量以实跑为准，不在文档里写死“应有 N 个用例”。
 
@@ -251,21 +252,14 @@
 | **X 跨层/架构** | 契约 + Worker + Web + Agent | 双版本 bump | `verify.sh` 全量 + 兼容矩阵 | 全部关键链路 | 预览版本 + 测试 Hub/Peer | 验收报告 + 回滚演练 |
 | **H 紧急热修** | 单点故障 | 同对应类型 | 最小相关测试 + `verify.sh` | 复现环境回归 | 预览冒烟 | 复现用例 + 修复前后对比 |
 
-### 5.1 每次发版固定 8 步
+### 5.1 发版步骤
 
-1. 明确发版类型（上表）并确认版本 bump / CHANGELOG / Agent 包。
-2. 跑 `./scripts/verify.sh` 全绿（本地全量，CI 是其子集）。
-3. 按类型补做真机/E2E；修复 bug 必须先有失败测试。
-4. UI 改动附浅/深/390 截图与四态说明。
-5. `npx wrangler versions upload` → 预览 URL 冒烟（health/version）。
-6. 部署（main 推送由 CI 执行；本地兜底 `deploy-local.sh`）。
-7. 部署后核对：`/api/v1/version` 的 commit/versionId、线上 Agent 包 sha256。
-8. 记录证据；清理测试残留；更新相关文档与 CHANGELOG。
+按上表判定类型、补齐测试与证据后，发版流程见 `docs/engineering/release.md` §3。修复 bug 必须先有失败测试；测试残留在 PR 合并前清理。
 
 ## 6. 测试环境与数据
 
 - **生产 = staging 同一 Worker/D1（ADR-0008）**：不存在独立预发环境，上线前靠版本预览 URL 冒烟。
-- **允许改动的测试节点**：测试 Hub、测试 Peer、`node-test-2`（按主人约定）；`node-prod-1` 等生产节点只读观察，禁止改配置。
+- **节点**：当前全部节点均为测试用途，可以改动（主人 2026-11-10 确认）；改动已有节点前先导出该节点备份，测完恢复。
 - **命名**：测试资源统一 `ux-*` / `e2e-*` 前缀（节点、站点、Peer、转发、DNS、SSH 公钥），便于清理。
 - **清理清单**：节点/隧道、DNS 记录、SSH 公钥、站点、Peer、端口转发、Agent 进程/unit、测试 HTTP 服务、acme.sh/cron、临时目录。
 - **禁止**：测试依赖 root（除明确标注的真机步骤）、访问外网第三方 API（用注入 mock）、把真实凭据写进仓库/日志。
