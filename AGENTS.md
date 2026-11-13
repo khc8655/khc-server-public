@@ -88,3 +88,4 @@ node scripts/docs-lint.mjs          # 文档规则检查
 - 不要用 `pkill -f <含自身命令行的串>`，会杀掉 SSH 会话；按 PID 处理。
 - macOS `/tmp` 会被清理，SSH 的 askpass、known_hosts 不要长期放在那里。
 - 测试和脚本不依赖 root、不联网（外部 API 用注入的 mock）。
+- `agent/khc/`、`agent/adapters/` 下任何文件（包括 README）改动都算 Agent 运行代码，必须 bump `VERSION`。
