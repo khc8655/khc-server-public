@@ -1,6 +1,6 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：现行 ｜ 最后核验：2026-11-03 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
 > 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
