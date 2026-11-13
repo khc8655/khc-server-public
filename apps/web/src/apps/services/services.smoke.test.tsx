@@ -471,8 +471,9 @@ describe('对外服务页 · 本机监听端口（T-C 批次 3）', () => {
     expect(rows.length).toBeGreaterThan(0);
     const first = rows[0] as HTMLElement;
     expect(first.textContent).toContain('9000');
-    expect(first.querySelector('.ui-list-meta-narrow')?.textContent).toContain('0.0.0.0');
-    expect(first.querySelector('.ui-list-meta-narrow')?.textContent).toContain('tcp');
+    const meta = first.querySelector('.ui-list-meta')?.textContent ?? '';
+    expect(meta).toContain('0.0.0.0');
+    expect(meta).toContain('tcp');
     expect(first.querySelector('.ui-list-side button')).toBeNull();
     await userEvent.click(first);
     expect(await screen.findByText('添加站点')).toBeTruthy();
