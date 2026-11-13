@@ -1,9 +1,10 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AdapterState, AgentState, DiagnosticCheck } from '@khc/contracts';
+import type { AdapterState, AgentOps, AgentState, DiagnosticCheck } from '@khc/contracts';
 import {
   adapterProblemSchema,
+  agentOpsSchema,
   diagnosticHintSchema,
   diagnosticHintsResponseSchema,
   nodeDiagnosticsResponseSchema,
@@ -27,6 +28,7 @@ import {
   isCertificateRelevant,
   selectRelevantCertificates,
 } from '../src/lib/app-diagnostics/certificates';
+import { hostProblems } from '../src/lib/app-diagnostics/host';
 import { HubUnreachableError } from '../src/lib/node-client';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
@@ -463,6 +465,142 @@ describe('控制面证书 → 通用问题', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 主机问题（/state.ops → app-diagnostics/host.ts）
+// ---------------------------------------------------------------------------
+
+const hostOps = (fields: Record<string, unknown>): AgentOps => agentOpsSchema.parse(fields);
+const hostCodes = (fields: Record<string, unknown>): string[] =>
+  hostProblems(hostOps(fields), NOW).map((problem) => problem.code);
+const oneProblem = (fields: Record<string, unknown>, code: string) => {
+  const found = hostProblems(hostOps(fields), NOW).find((problem) => problem.code === code);
+  if (!found) throw new Error(`missing host problem ${code}`);
+  return found;
+};
+
+describe('主机问题：7 类问题由 /state.ops 派生', () => {
+  it('disk_full：空间/inode ≥85% warn、≥95% error，低于 85% 不报', () => {
+    expect(hostCodes({ disks: [{ name: 'root', path: '/', percent: 84.9 }] })).toEqual([]);
+    expect(oneProblem({ disks: [{ name: 'root', path: '/', percent: 85 }] }, 'disk_full').severity).toBe('warn');
+    expect(oneProblem({ disks: [{ name: 'root', path: '/', percent: 95 }] }, 'disk_full').severity).toBe('error');
+    const inode = oneProblem(
+      { disks: [{ name: 'data', path: '/var/lib/khc-agent', percent: 10, inodesPercent: 96 }] },
+      'disk_full',
+    );
+    expect(inode.severity).toBe('error');
+    expect(inode.evidence).toMatchObject({ disk: 'data', metric: 'inodes', percent: 96 });
+    expect(inode.hint).toContain('主机运维');
+  });
+
+  it('memory_low：有 swap 需可用内存 <10% 且 swap >50%；无 swap 时只看 <5%', () => {
+    const withSwap = { mem: { total: 1000, available: 50, percent: 95 }, swap: { total: 1000, percent: 60 } };
+    expect(oneProblem(withSwap, 'memory_low').severity).toBe('warn');
+    expect(oneProblem(withSwap, 'memory_low').evidence).toMatchObject({ hasSwap: true, swapPercent: 60 });
+    expect(hostCodes({ ...withSwap, swap: { total: 1000, percent: 50 } })).toEqual([]);
+    expect(hostCodes({ ...withSwap, mem: { total: 1000, available: 100, percent: 90 } })).toEqual([]);
+    const noSwap = { mem: { total: 1000, available: 40, percent: 96 }, swap: null };
+    expect(oneProblem(noSwap, 'memory_low').evidence).toMatchObject({ hasSwap: false, swapPercent: null });
+    expect(hostCodes({ ...noSwap, mem: { total: 1000, available: 50, percent: 95 } })).toEqual([]);
+    expect(hostCodes({ mem: { total: 1000, available: 40, percent: 96 }, swap: undefined })).toContain('memory_low');
+  });
+
+  it('units_failed：过滤受管单元，evidence 只列前 5 个名字', () => {
+    expect(
+      hostCodes({ services: { failedUnits: ['caddy.service', 'khc-agent.service', 'wg-quick@wg0.service'] } }),
+    ).toEqual([]);
+    expect(hostCodes({ services: { failedUnits: [] } })).toEqual([]);
+    const problem = oneProblem(
+      { services: { failedUnits: ['a.service', 'b.service', 'c.service', 'd.service', 'e.service', 'f.service'] } },
+      'units_failed',
+    );
+    expect(problem.severity).toBe('warn');
+    expect(problem.evidence).toMatchObject({
+      count: 6,
+      units: 'a.service, b.service, c.service, d.service, e.service',
+    });
+    expect(String(problem.evidence?.units)).not.toContain('f.service');
+  });
+
+  it('reboot_required：info 且指向主机运维页', () => {
+    expect(hostCodes({ rebootRequired: false })).toEqual([]);
+    const problem = oneProblem({ rebootRequired: true }, 'reboot_required');
+    expect(problem.severity).toBe('info');
+    expect(problem.hint).toContain('主机运维');
+  });
+
+  it('oom_killed：lastIncreaseAt 在 24h 内才报，0/超时/未来不报', () => {
+    expect(oneProblem({ oom: { total: 3, lastIncreaseAt: NOW - 3600 } }, 'oom_killed').severity).toBe('warn');
+    expect(oneProblem({ oom: { total: 3, lastIncreaseAt: NOW - 3600 } }, 'oom_killed').evidence).toMatchObject({
+      total: 3,
+      lastIncreaseAt: NOW - 3600,
+    });
+    expect(hostCodes({ oom: { total: 3, lastIncreaseAt: 0 } })).toEqual([]);
+    expect(hostCodes({ oom: { total: 3, lastIncreaseAt: NOW - DAY - 1 } })).toEqual([]);
+    expect(hostCodes({ oom: { total: 3, lastIncreaseAt: NOW + 60 } })).toEqual([]);
+  });
+
+  it('fs_readonly：error', () => {
+    expect(hostCodes({ rootReadonly: false })).toEqual([]);
+    const problem = oneProblem({ rootReadonly: true }, 'fs_readonly');
+    expect(problem.severity).toBe('error');
+    expect(problem.hint).toContain('主机运维');
+  });
+
+  it('memory_pressure：avg60 > 20 才报', () => {
+    expect(hostCodes({ memoryPressure: 20 })).toEqual([]);
+    expect(hostCodes({ memoryPressure: null })).toEqual([]);
+    const problem = oneProblem({ memoryPressure: 25.5 }, 'memory_pressure');
+    expect(problem.severity).toBe('warn');
+    expect(problem.evidence).toMatchObject({ avg60: 25.5 });
+  });
+
+  it('旧 Agent 不上报 ops 新字段时跳过；7 类问题形状合法、无 action', () => {
+    expect(hostProblems(null, NOW)).toEqual([]);
+    expect(hostProblems(undefined, NOW)).toEqual([]);
+    expect(hostProblems(hostOps({}), NOW)).toEqual([]);
+    // 旧 Agent 只有原来的 mem/swap/disks/services/rebootRequired，不产生新字段相关告警
+    const legacy = hostOps({
+      mem: { total: 1000, available: 900, percent: 10 },
+      swap: { total: 1000, percent: 0 },
+      disks: [{ name: 'root', path: '/', percent: 10, inodesPercent: 1 }],
+      services: { failedUnits: [] },
+      rebootRequired: false,
+    });
+    expect(hostProblems(legacy, NOW)).toEqual([]);
+    expect('oom' in legacy && 'rootReadonly' in legacy && 'memoryPressure' in legacy).toBe(false);
+
+    const all = hostProblems(
+      hostOps({
+        disks: [{ name: 'root', path: '/', percent: 96 }],
+        mem: { total: 1000, available: 50 },
+        swap: { total: 1000, percent: 60 },
+        services: { failedUnits: ['demo.service'] },
+        rebootRequired: true,
+        oom: { total: 2, lastIncreaseAt: NOW - 60 },
+        rootReadonly: true,
+        memoryPressure: 30,
+      }),
+      NOW,
+    );
+    expect(all.map((problem) => problem.code).sort()).toEqual(
+      [
+        'disk_full',
+        'memory_low',
+        'units_failed',
+        'reboot_required',
+        'oom_killed',
+        'fs_readonly',
+        'memory_pressure',
+      ].sort(),
+    );
+    for (const problem of all) {
+      expect(adapterProblemSchema.safeParse(problem).success).toBe(true);
+      expect(problem.action).toBeUndefined();
+      expect(problem.hint).toContain('主机运维');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 路由
 // ---------------------------------------------------------------------------
 
@@ -756,6 +894,105 @@ describe('诊断 API 路由', () => {
     expect(raw).not.toContain('Bearer abc.def');
     expect(raw).not.toContain('supersecret');
     const body = JSON.parse(raw) as { checks: DiagnosticCheck[] };
+    for (const check of body.checks) {
+      expect(check.detail.length).toBeLessThanOrEqual(300);
+      for (const value of Object.values(check.evidence ?? {})) {
+        if (typeof value === 'string') expect(value.length).toBeLessThanOrEqual(200);
+      }
+    }
+  });
+
+  it('主机问题经路由渲染为 khc.host.*，响应 ≤64KB 且无 action', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    await ctx.apps.put(id, 'demo-app', { config: {}, schemaVersion: 1, actor: 'test' });
+    await ctx.apps.setAppliedRev(id, 'demo-app', 1);
+    const now = Math.floor(Date.now() / 1000);
+    const state = okState();
+    state.ops = {
+      disks: [{ name: 'root', path: '/', percent: 96, inodesPercent: 97 }],
+      mem: { total: 1000, available: 50, percent: 95 },
+      swap: { total: 1000, percent: 60 },
+      services: { failedUnits: ['demo.service', 'other.service'] },
+      rebootRequired: true,
+      oom: { total: 2, lastIncreaseAt: now - 60 },
+      rootReadonly: true,
+      memoryPressure: 30,
+    };
+    ctx.agent.handler = async () => ({ status: 200, body: state });
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${id}/diagnostics`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(64 * 1024);
+    const body = JSON.parse(raw) as { checks: DiagnosticCheck[] };
+    expect(nodeDiagnosticsResponseSchema.safeParse(body).success).toBe(true);
+    const hostChecks = body.checks.filter((check) => check.app === 'host');
+    expect(hostChecks.map((check) => check.code).sort()).toEqual(
+      [
+        'khc.host.disk_full',
+        'khc.host.memory_low',
+        'khc.host.units_failed',
+        'khc.host.reboot_required',
+        'khc.host.oom_killed',
+        'khc.host.fs_readonly',
+        'khc.host.memory_pressure',
+      ].sort(),
+    );
+    for (const check of hostChecks) {
+      expect(check.actions ?? []).toEqual([]);
+      expect(check.detail).toContain('主机运维');
+      expect(check.detail.length).toBeLessThanOrEqual(300);
+      for (const value of Object.values(check.evidence ?? {})) {
+        if (typeof value === 'string') expect(value.length).toBeLessThanOrEqual(200);
+      }
+    }
+    expect(ctx.agent.requests).toHaveLength(1);
+  });
+
+  it('大量问题仍受 30 条截断与 64KB 上限约束', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    await ctx.apps.put(id, 'demo-app', { config: {}, schemaVersion: 1, actor: 'test' });
+    await ctx.apps.setAppliedRev(id, 'demo-app', 1);
+    const state = okState();
+    state.ops = {
+      disks: [{ name: 'root', path: '/', percent: 96 }],
+      services: { failedUnits: Array.from({ length: 50 }, (_, i) => `unit-${i}.service`) },
+      rootReadonly: true,
+    };
+    state.adapters = [
+      {
+        name: 'demo-app',
+        version: '1.0.0',
+        status: {
+          problems: Array.from({ length: 40 }, (_, i) => ({
+            code: `noisy_${i}`,
+            severity: 'error',
+            title: '噪声问题',
+            hint: 'x'.repeat(400),
+            evidence: { blob: 'y'.repeat(150) },
+          })),
+        },
+      },
+    ];
+    ctx.agent.handler = async () => ({ status: 200, body: state });
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${id}/diagnostics`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    const raw = await res.text();
+    expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(64 * 1024);
+    const body = JSON.parse(raw) as { checks: DiagnosticCheck[]; truncated?: boolean };
+    expect(nodeDiagnosticsResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.checks.length).toBeLessThanOrEqual(30);
+    expect(body.truncated).toBe(true);
     for (const check of body.checks) {
       expect(check.detail.length).toBeLessThanOrEqual(300);
       for (const value of Object.values(check.evidence ?? {})) {

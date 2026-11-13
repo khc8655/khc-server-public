@@ -1,7 +1,7 @@
 # 诊断（Diagnostics）设计与错误码目录
 
-> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
-> 范围：诊断 7 核心码与 API
+> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
+> 范围：诊断 7 核心码、控制面/主机补充问题与 API
 > **唯一权威范围**：核心错误码、适配器问题契约、Worker 诊断 API 形状、修复动作边界。
 > **一句话**：诊断只回答两件事——**节点连得上吗？哪个应用坏了、下一步点什么？** 核心只保留 7 个码，应用问题由适配器自己上报。
 
@@ -83,11 +83,39 @@ Cloudflare 错误码只进 `evidence.cf`，文案按码选一句（1003/522/524/
 
 证书库在 D1，Agent 看不到，因此 Worker 用 `apps/api/src/lib/app-diagnostics/certificates.ts`
 把“最近到期的一张证书”翻译成同样的 `problems` 形状（app = `certificates`），再交给核心统一渲染。
-这是唯一不在 Agent 里的问题来源；核心求值仍不认识应用名。
+控制面补充问题不经 Agent；核心求值仍不认识应用名。
 
 **ACME 降噪口径（2026-11-13）**：同一文件里的 `adjustAcmeProblems` 会在节点**没有 ACME 证书**时，
 把 `certificates/acme_failed`（reason=env_missing）降为 `info` 并附安装命令；只有节点确实存在
 ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项未通过」只统计 error + warn。
+
+### 2.4 补充问题：主机指标（app = `host`）
+
+`apps/api/src/lib/app-diagnostics/host.ts` 的 `hostProblems(ops, now)` 从 `/state.ops` 派生 7 类
+主机问题，形状与证书补充一致（`code/severity/title/hint/evidence`，**无 action**）：诊断只读、
+不给一键修复，`hint` 写手工处理方法并指向「主机运维」页（`/hubs/<节点>/ops`）。
+阈值全部集中在这一个文件，调整阈值只改 Worker、不必发 Agent 版本。
+
+| code | 严重度 | 阈值（唯一维护处：`host.ts`） | 数据来源 |
+|---|---|---|---|
+| `disk_full` | warn / error | 空间或 inode 使用率 ≥ 85% warn、≥ 95% error；取最严重的一条 | 已有 `ops.disks[].percent` / `inodesPercent` |
+| `memory_low` | warn | 有 swap：可用内存 < 10% 且 swap 已用 > 50%；无 swap：可用内存 < 5% | 已有 `ops.mem` / `ops.swap`（不是 `ops.memory`） |
+| `units_failed` | warn | 存在非受管 failed 单元；evidence 列前 5 个名字 | 已有 `ops.services.failedUnits` |
+| `reboot_required` | info | `rebootRequired === true` | 已有 `ops.rebootRequired` |
+| `oom_killed` | warn | `oom.lastIncreaseAt` 在最近 24 小时内（> 0 且不晚于 now） | 新增 `ops.oom = {total, lastIncreaseAt}` |
+| `fs_readonly` | error | `rootReadonly === true` | 新增 `ops.rootReadonly` |
+| `memory_pressure` | warn | `some avg60 > 20` | 新增 `ops.memoryPressure` |
+
+`units_failed` 过滤受管单元 `caddy`、`khc-*`、`wg-quick@*`（对应适配器已报），避免重复。
+新增的 3 个字段在 `agentOpsSchema` 中**都是可选的**：`oom` 由 Agent 读 `/proc/vmstat` 的
+`oom_kill` 累计值，与数据目录 `<data_dir>/oom_state.json`（0600，原子写）里的上次值比较，
+计数增长时把 `lastIncreaseAt` 记为采集时刻；`rootReadonly` 读 `/proc/mounts` 的根挂载选项；
+`memoryPressure` 读 `/proc/pressure/memory` 的 `some avg60`。三者都不起子进程。
+
+**旧 Agent 跳过规则**：旧 Agent 不上报这些字段（或整个 `ops` 缺失）时，`hostProblems` 对
+相应检查返回空，不产生误报；`disk_full` / `memory_low` / `units_failed` / `reboot_required`
+使用已有字段，旧 Agent 照常参与判定。缺 `/proc/pressure/memory` 的旧内核不上报
+`memoryPressure`，对应检查同样跳过。
 
 ---
 
@@ -107,8 +135,15 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 | certificates | `expiring` | info/warn/error | 最近到期证书；≤30 天 info、≤14 天 warn、≤3 天或过期 error |
 | certificates | `acme_failed` | error | 缺 acme.sh/openssl（reason=env_missing）或最近一次签发失败（reason=dns_credential/issue_failed） |
 | port-forward | `unit_failed` | error | 缺 socat（reason=socat_missing）或单元未运行；action `app.apply` |
+| host | `disk_full` | warn / error | 空间或 inode ≥ 85% / ≥ 95%；evidence `disk/path/metric/percent`；无 action |
+| host | `memory_low` | warn | 可用内存与 swap 组合判定；evidence `availablePercent/swapPercent/hasSwap`；无 action |
+| host | `units_failed` | warn | 非受管 failed 单元；evidence `count` 与前 5 个 `units`；无 action |
+| host | `reboot_required` | info | 存在 reboot-required 标记；evidence `rebootRequired`；无 action |
+| host | `oom_killed` | warn | 24h 内 oom_kill 增长；evidence `total/lastIncreaseAt`；无 action |
+| host | `fs_readonly` | error | 根挂载只读；evidence `rootReadonly`；无 action |
+| host | `memory_pressure` | warn | PSI `some avg60 > 20`；evidence `avg60`；无 action |
 
-去掉的噪音：Peer 离线（WG 页面已展示）、未托管应用、端口转发端口冲突（apply 时 409 已提示）、动作失败（操作处已 toast）。
+去掉的噪音：Peer 离线（WG 页面已展示）、未托管应用、端口转发端口冲突（apply 时 409 已提示）、动作失败（操作处已 toast）、受管单元 failed（对应适配器已报）。
 
 ---
 
@@ -178,6 +213,7 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 | `apps/api/src/lib/diagnostics/hints.ts` | 核心 7 码知识库 |
 | `apps/api/src/lib/diagnostics/evaluate.ts` | 核心检查 + 适配器问题通用渲染 + 排序/截断 |
 | `apps/api/src/lib/app-diagnostics/certificates.ts` | D1 证书 → 通用 problems |
+| `apps/api/src/lib/app-diagnostics/host.ts` | `/state.ops` → 7 类主机 problems；阈值唯一维护处 |
 | `apps/api/src/routes/diagnostics.ts` | 两个只读 GET |
 | `agent/adapters/*.py` | 各应用 `status().problems` |
 | `apps/web/src/apps/diagnostics/` | 卡片/抽屉；只渲染问题，未知码通用卡片 |

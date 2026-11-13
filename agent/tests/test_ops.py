@@ -94,6 +94,58 @@ class OpsTests(unittest.TestCase):
             self.assertIn("cpu", third)
             self.assertEqual(third["network"]["dns"], ["1.1.1.1"])
 
+    def collect(self, now: float) -> dict:
+        with mock.patch.object(ops, "_systemd", return_value={"services": [], "failedUnits": []}), \
+             mock.patch.object(ops, "_resolvers", return_value=[]):
+            return ops.collect_ops(self.paths, proc_root=self.root, now=now, force=True)
+
+    def test_oom_baseline_increase_and_0600_state(self) -> None:
+        write(self.root, "vmstat", "nr_free_pages 12345\noom_kill 5\n")
+        first = self.collect(1000.0)
+        # 首次采集只建立基线，不把它当成刚发生的 OOM
+        self.assertEqual(first["oom"], {"total": 5, "lastIncreaseAt": 0})
+        state_path = os.path.join(self.root, ops.OOM_STATE_FILE)
+        self.assertTrue(os.path.isfile(state_path))
+        self.assertEqual(os.stat(state_path).st_mode & 0o777, 0o600)
+
+        write(self.root, "vmstat", "oom_kill 6\n")
+        second = self.collect(2000.0)
+        self.assertEqual(second["oom"], {"total": 6, "lastIncreaseAt": 2000})
+        third = self.collect(3000.0)
+        self.assertEqual(third["oom"], {"total": 6, "lastIncreaseAt": 2000})
+        # 计数回退（重启）不误报增长，但基线更新，后续增长仍能被发现
+        write(self.root, "vmstat", "oom_kill 2\n")
+        self.assertEqual(self.collect(4000.0)["oom"], {"total": 2, "lastIncreaseAt": 2000})
+        write(self.root, "vmstat", "oom_kill 3\n")
+        self.assertEqual(self.collect(5000.0)["oom"], {"total": 3, "lastIncreaseAt": 5000})
+
+    def test_root_readonly_from_mounts(self) -> None:
+        write(self.root, "mounts", "/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 0\n")
+        self.assertIs(self.collect(1000.0)["rootReadonly"], False)
+        write(self.root, "mounts", "tmpfs /run tmpfs rw,nosuid 0 0\n/dev/sda1 / ext4 ro,relatime 0 0\n")
+        self.assertIs(self.collect(2000.0)["rootReadonly"], True)
+
+    def test_memory_pressure_some_avg60(self) -> None:
+        write(
+            self.root,
+            "pressure/memory",
+            "some avg10=1.00 avg60=25.50 avg300=3.00 total=123\n"
+            "full avg10=0.10 avg60=99.00 avg300=1.00 total=45\n",
+        )
+        self.assertEqual(self.collect(1000.0)["memoryPressure"], 25.5)
+        write(self.root, "pressure/memory", "some avg10=1.00 avg300=3.00 total=123\n")
+        self.assertNotIn("memoryPressure", self.collect(2000.0))
+
+    def test_new_fields_absent_without_proc_files(self) -> None:
+        """旧内核缺 /proc/pressure、vmstat、mounts 时字段跳过，不影响其它 ops。"""
+
+        payload = self.collect(1000.0)
+        self.assertNotIn("oom", payload)
+        self.assertNotIn("memoryPressure", payload)
+        self.assertIs(payload["rootReadonly"], False)
+        self.assertIn("mem", payload)
+        self.assertIn("disks", payload)
+
 
 if __name__ == "__main__":
     unittest.main()
