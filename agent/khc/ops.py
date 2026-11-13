@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Mapping, Optional
 
 CACHE_TTL = 5.0
+OOM_STATE_FILE = "oom_state.json"
 _lock = threading.Lock()
 _cache: dict[str, Any] = {"at": 0.0, "value": None}
 _last_cpu: dict[str, float] = {}
@@ -204,6 +207,111 @@ def _systemd() -> dict[str, Any]:
     return {"services": services, "failedUnits": failed[:10]}
 
 
+def _oom_kill_count(proc_root: str) -> Optional[int]:
+    for line in _text(os.path.join(proc_root, "vmstat")).splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "oom_kill":
+            try:
+                return int(parts[1])
+            except ValueError:
+                return None
+    return None
+
+
+def _load_oom_state(path: str) -> dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _save_oom_state(path: str, state: dict[str, int]) -> None:
+    """原子写 JSON 状态（0600）；os.replace 只替换目录项本身，不跟随符号链接。"""
+
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".oom_state.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _oom(paths: Any, proc_root: str, moment: float) -> Optional[dict[str, int]]:
+    """把 /proc/vmstat 的 oom_kill 累计值与数据目录里的上次值比较。
+
+    首次观测只建立基线（lastIncreaseAt=0），不把它当成刚发生的 OOM；
+    计数增长时记下采集时刻。数据目录不可写时仍上报本次计数。
+    """
+
+    total = _oom_kill_count(proc_root)
+    if total is None:
+        return None
+    state: dict[str, int] = {"total": total, "lastIncreaseAt": 0}
+    data_dir = getattr(paths, "data_dir", None)
+    if not isinstance(data_dir, str) or not data_dir:
+        return state
+    state_path = os.path.join(data_dir, OOM_STATE_FILE)
+    previous = _load_oom_state(state_path)
+    prev_total = previous.get("total")
+    prev_at = previous.get("lastIncreaseAt")
+    if isinstance(prev_at, int) and not isinstance(prev_at, bool) and prev_at >= 0:
+        state["lastIncreaseAt"] = prev_at
+    if isinstance(prev_total, int) and not isinstance(prev_total, bool) and total > prev_total:
+        state["lastIncreaseAt"] = int(moment)
+    if previous != state:
+        try:
+            _save_oom_state(state_path, state)
+        except OSError:
+            pass
+    return state
+
+
+def _root_readonly(proc_root: str) -> bool:
+    """根挂载（/）的挂载选项里是否含独立的 ro 标记。"""
+
+    found = False
+    readonly = False
+    for line in _text(os.path.join(proc_root, "mounts")).splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "/":
+            found = True
+            if "ro" in parts[3].split(","):
+                readonly = True
+    return readonly if found else False
+
+
+def _memory_pressure(proc_root: str) -> Optional[float]:
+    """/proc/pressure/memory 的 some avg60；旧内核没有该文件时返回 None。"""
+
+    text = _text(os.path.join(proc_root, "pressure", "memory"))
+    if not text.strip():
+        return None
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts or parts[0] != "some":
+            continue
+        for item in parts[1:]:
+            key, separator, value = item.partition("=")
+            if separator and key == "avg60":
+                try:
+                    return float(value)
+                except ValueError:
+                    return None
+    return None
+
+
 def collect_ops(
     paths: Any,
     *,
@@ -220,6 +328,8 @@ def collect_ops(
         if not force and cached is not None and moment - float(_cache.get("at", 0)) < ttl:
             return cached  # type: ignore[return-value]
     try:
+        oom = _oom(paths, proc_root, moment)
+        memory_pressure = _memory_pressure(proc_root)
         payload = {
             "cpu": cpu(proc_root, now=moment),
             **memory(proc_root),
@@ -231,8 +341,13 @@ def collect_ops(
             },
             "services": _systemd(),
             "rebootRequired": os.path.exists("/var/run/reboot-required"),
+            "rootReadonly": _root_readonly(proc_root),
             "collectedAt": int(moment),
         }
+        if oom is not None:
+            payload["oom"] = oom
+        if memory_pressure is not None:
+            payload["memoryPressure"] = memory_pressure
     except Exception:  # noqa: BLE001 - 运维状态失败不能拖垮 /state
         payload = {"collectedAt": int(moment), "error": "ops_collect_failed"}
     with _lock:

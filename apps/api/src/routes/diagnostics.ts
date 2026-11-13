@@ -23,6 +23,7 @@ import {
   certificateProblems,
   selectRelevantCertificates,
 } from '../lib/app-diagnostics/certificates';
+import { hostProblems } from '../lib/app-diagnostics/host';
 
 /** 响应体硬上限（§4.2）：64 KB。 */
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -195,7 +196,10 @@ export function diagnosticsRoutes(deps: AppDeps): Hono<AppBindings> {
       reachable,
       routeErrors,
       error: transportError,
-      extraProblems: [{ app: 'certificates', problems: certificateProblems(relevantCerts, now) }],
+      extraProblems: [
+        { app: 'certificates', problems: certificateProblems(relevantCerts, now) },
+        { app: 'host', problems: hostProblems(state?.ops, now) },
+      ],
     });
 
     const finalized = finalizeChecks(checks);

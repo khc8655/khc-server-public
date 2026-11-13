@@ -586,6 +586,20 @@ export const agentOpsSchema = z
       )
       .optional(),
     rebootRequired: z.boolean().optional(),
+    /**
+     * 主机诊断新增的可选指标（旧 Agent 不上报，Worker 侧对应检查自动跳过）：
+     * - oom：/proc/vmstat 的 oom_kill 累计值与最近一次增长时刻（Unix 秒）
+     * - rootReadonly：根挂载是否被内核置为只读
+     * - memoryPressure：/proc/pressure/memory 的 some avg60；缺 PSI 支持时不上报
+     */
+    oom: z
+      .object({
+        total: z.number().int().nonnegative(),
+        lastIncreaseAt: z.number().int().nonnegative(),
+      })
+      .optional(),
+    rootReadonly: z.boolean().optional(),
+    memoryPressure: z.number().nullable().optional(),
     collectedAt: z.number().int().nonnegative().optional(),
     error: z.string().optional(),
   })
