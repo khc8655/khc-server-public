@@ -35,7 +35,7 @@ from khc.util import (
 )
 
 APP_NAME = "port-forward"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 UNIT_PREFIX = "khc-forward-"
 UNIT_SUFFIX = ".service"
 DEFAULT_PROTOCOL = "tcp"
@@ -45,7 +45,9 @@ MAX_FORWARDS = 128
 MAX_NOTE_LENGTH = 128
 MAX_HOST_LENGTH = 255
 PROTOCOLS = ("tcp", "udp")
-ACTIVE_STATES = ("active", "activating", "reloading")
+# 只有 active 视为转发可用；activating 要看 SubState/NRestarts 再判
+# （Restart=always 的崩溃循环会一直停在 activating/auto-restart）。
+ACTIVE_STATES = ("active",)
 # 面板与 Agent 自身占用的端口：转发监听这些端口会顶掉 SSH/控制面/Caddy，
 # 或形成 8880 → 127.0.0.1:8880 这类自环转发。Agent 端口可被 KHC_PORT 覆盖，
 # 运行时再按环境补进来（见 reserved_listen_ports）。
@@ -63,6 +65,17 @@ EXEC_START_RE = re.compile(
 # 避免任何形式的命令/参数/unit 注入（socat 参数与 unit 文本都会用到它）。
 HOST_FORBIDDEN = set(" \t\r\n\x00'\"`$;&|<>()*?!#~\\/%{}[]=\u3000")
 HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$")
+
+
+def _parse_systemctl_show(text: str) -> dict[str, str]:
+    """解析 ``systemctl show -p A -p B`` 的 key=value 输出。"""
+
+    values: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
 
 
 def _text(value: Any) -> str:
@@ -632,7 +645,25 @@ class PortForward(Adapter):
                 lines = (probe.stdout or "").strip().splitlines()
                 state = lines[0].strip() if lines else ""
                 active = state in ACTIVE_STATES
-                if not active:
+                if state == "activating":
+                    detail = ctx.systemctl(
+                        "show", "-p", "SubState", "-p", "NRestarts", "-p", "Result", unit, check=False
+                    )
+                    info = _parse_systemctl_show(detail.stdout or "")
+                    sub = info.get("SubState", "")
+                    try:
+                        restarts = int(info.get("NRestarts") or 0)
+                    except ValueError:
+                        restarts = 0
+                    if sub == "auto-restart" or restarts > 0:
+                        # Restart=always 的崩溃循环（如端口被占用）永远停在
+                        # activating/auto-restart；不能当成运行中，按失败上报。
+                        active = False
+                        error = f"unit auto-restart (N={restarts}, sub={sub or 'unknown'})"
+                    else:
+                        # 首次启动尚未完成：短暂放行，避免 apply 后立刻误报失败。
+                        active = True
+                elif not active:
                     error = f"unit {state or 'unknown'}"
                     if state in ("failed", "inactive"):
                         detail = ctx.systemctl("show", "-p", "Result", "--value", unit, check=False)

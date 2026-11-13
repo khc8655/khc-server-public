@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 端口转发（Agent 0.1.43 / 适配器 1.2.1）：`Restart=always` 的崩溃循环（如监听端口被占用）
+  会一直停在 `activating/auto-restart`，此前被当作「生效」。现在按失败上报（error 含
+  `auto-restart` 与重启次数），并在诊断里给出 `unit_failed`；首次启动中的 activating 仍正常放行。
+
 ## [0.12.3] - 2026-11-13
 
 ### Changed
