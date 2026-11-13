@@ -5,7 +5,7 @@
  * 证书快到期了”翻译成与适配器 `status().problems` 相同的通用结构，再交给
  * `lib/diagnostics/evaluate.ts` 统一渲染。核心诊断不引用应用名。
  */
-import type { AdapterProblem, Certificate } from '@khc/contracts';
+import type { AdapterProblem, AgentState, Certificate } from '@khc/contracts';
 
 export interface CertRefConfig {
   app: string;
@@ -35,6 +35,42 @@ export function selectRelevantCertificates(
   certs: Certificate[],
 ): Certificate[] {
   return certs.filter((cert) => isCertificateRelevant(nodeId, configs, cert));
+}
+
+const ACME_INSTALL_HINT =
+  '节点未安装 acme.sh。只有使用证书库 ACME 签发/续期时才需要；安装命令：' +
+  'curl https://get.acme.sh | sh -s email=<你的邮箱>（需 root 与出站 443）。';
+
+/**
+ * acme.sh 缺失的告警口径：本节点存在 ACME 证书时保持 error（续期会失败）；
+ * 没有 ACME 证书时降为 info 提示，不参与「诊断未通过」计数，避免误报。
+ */
+export function adjustAcmeProblems(state: AgentState | null, hasAcmeCertificate: boolean): AgentState | null {
+  if (!state || hasAcmeCertificate) return state;
+  return {
+    ...state,
+    adapters: state.adapters.map((adapter) => {
+      const status = adapter.status;
+      if (adapter.name !== 'certificates' || !status || !Array.isArray(status.problems)) return adapter;
+      return {
+        ...adapter,
+        status: {
+          ...status,
+          problems: status.problems.map((item) => {
+            const problem = item as AdapterProblem | null;
+            if (!problem || problem.code !== 'acme_failed') return item;
+            if (problem.evidence?.reason !== 'env_missing') return item;
+            return {
+              ...problem,
+              severity: 'info' as const,
+              title: 'ACME 环境未安装（可选）',
+              hint: ACME_INSTALL_HINT,
+            };
+          }),
+        },
+      };
+    }),
+  };
 }
 
 /**

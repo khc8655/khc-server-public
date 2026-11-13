@@ -62,7 +62,7 @@ import tempfile
 import time
 from typing import Any, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.1"
+SCRIPT_VERSION = "1.5.2"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -1760,8 +1760,10 @@ def _service_unit_param(params: Mapping[str, Any]) -> str:
 
 def svc_list_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     rc, stdout, stderr = _run(
+        # --plain：failed 单元默认带 "●" 前缀，不加会让解析器把整行丢掉，
+        # 出现「状态带显示 N 个失败、列表里却看不到」的口径不一致。
         ["systemctl", "list-units", "--type=service", "--state=running,failed",
-         "--no-legend", "--no-pager"],
+         "--no-legend", "--no-pager", "--plain"],
         timeout=10,
     )
     if rc != 0:

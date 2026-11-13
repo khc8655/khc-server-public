@@ -107,7 +107,7 @@ class AdapterTestBase(unittest.TestCase):
 class SchemaTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "port-forward")
-        self.assertEqual(self.adapter.version, "1.1.0")
+        self.assertEqual(self.adapter.version, "1.2.0")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -698,6 +698,14 @@ class KernelApplyTests(AdapterTestBase):
         self.assertTrue(
             [call for call in self.runner.calls if call[:2] == ["systemctl", "disable"] and "khc-forward-web.service" in call]
         )
+        # 删除单元后必须清掉 failed 记录，否则运维页仍报「N 个失败」但列表看不到。
+        self.assertTrue(
+            [
+                call
+                for call in self.runner.calls
+                if call[:2] == ["systemctl", "reset-failed"] and "khc-forward-web.service" in call
+            ]
+        )
         self.assertTrue(os.path.exists(self.unit_file("ssh")))
 
     def test_disabled_forward_unit_is_cleaned(self) -> None:
@@ -1033,6 +1041,10 @@ class InstallUninstallTests(AdapterTestBase):
                 name,
             )
             self.assertTrue(
+                [call for call in self.runner.calls if call[:2] == ["systemctl", "reset-failed"] and name in call],
+                name,
+            )
+            self.assertTrue(
                 [call for call in self.runner.calls if call[:2] == ["systemctl", "disable"] and name in call],
                 name,
             )
@@ -1063,7 +1075,7 @@ class LoaderTests(unittest.TestCase):
         self.assertIn("port-forward", names)
         adapter = names["port-forward"]
         self.assertEqual(type(adapter).__name__, "PortForward")
-        self.assertEqual(adapter.version, "1.1.0")
+        self.assertEqual(adapter.version, "1.2.0")
         self.assertTrue(adapter.requires_root)
         self.assertIn("forwards", adapter.schema.get("properties", {}))
 

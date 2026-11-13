@@ -22,6 +22,7 @@ import {
   type EvalInput,
 } from '../src/lib/diagnostics';
 import {
+  adjustAcmeProblems,
   certificateProblems,
   isCertificateRelevant,
   selectRelevantCertificates,
@@ -472,6 +473,56 @@ function okState(): Record<string, unknown> {
 }
 
 beforeEach(() => resetRateLimitForTests());
+
+describe('ACME 缺失告警口径（3A）', () => {
+  const acmeProblem = {
+    code: 'acme_failed',
+    severity: 'error',
+    title: 'ACME 环境不可用',
+    hint: '节点缺少 acme.sh，无法签发或续期 ACME 证书。',
+    evidence: { reason: 'env_missing', acme: 'missing', openssl: 'ok' },
+  };
+
+  function state(): AgentState {
+    return {
+      host: { hostname: 'hub' },
+      adapters: [
+        { name: 'certificates', version: '1.0.0', status: { problems: [acmeProblem] } },
+        {
+          name: 'wireguard',
+          version: '1.0.0',
+          status: {
+            problems: [{ code: 'interface_down', severity: 'error', title: '接口未运行', hint: '' }],
+          },
+        },
+      ],
+      ports: [],
+    } as unknown as AgentState;
+  }
+
+  const problemsOf = (adjusted: AgentState | null, name: string) =>
+    (adjusted?.adapters.find((item) => item.name === name)?.status?.problems ?? []) as Array<
+      Record<string, unknown>
+    >;
+
+  it('节点没有 ACME 证书时降为 info，并给出安装命令', () => {
+    const problems = problemsOf(adjustAcmeProblems(state(), false), 'certificates');
+    expect(problems).toHaveLength(1);
+    expect(problems[0]?.severity).toBe('info');
+    expect(problems[0]?.title).toBe('ACME 环境未安装（可选）');
+    expect(String(problems[0]?.hint)).toContain('get.acme.sh');
+  });
+
+  it('节点存在 ACME 证书时保持 error（续期会失败）', () => {
+    const problems = problemsOf(adjustAcmeProblems(state(), true), 'certificates');
+    expect(problems[0]?.severity).toBe('error');
+  });
+
+  it('不影响其他适配器的问题', () => {
+    const problems = problemsOf(adjustAcmeProblems(state(), false), 'wireguard');
+    expect(problems[0]?.severity).toBe('error');
+  });
+});
 
 describe('诊断 API 路由', () => {
   it('hints：未登录 401；登录 200 + 缓存头 + layer 过滤', async () => {

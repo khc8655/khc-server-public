@@ -19,6 +19,7 @@ import {
   type EvalTransportError,
 } from '../lib/diagnostics/evaluate';
 import {
+  adjustAcmeProblems,
   certificateProblems,
   selectRelevantCertificates,
 } from '../lib/app-diagnostics/certificates';
@@ -184,9 +185,11 @@ export function diagnosticsRoutes(deps: AppDeps): Hono<AppBindings> {
       certRows,
     );
 
+    // acme.sh 缺失只在节点确实有 ACME 证书时才算失败；否则降为提示（3A）。
+    const hasAcmeCert = relevantCerts.some((cert) => cert.issuer === 'acme');
     const checks = evaluateDiagnostics({
       node: { lastSeenAt: node.lastSeenAt },
-      state,
+      state: adjustAcmeProblems(state, hasAcmeCert),
       configs: evalConfigs,
       now,
       reachable,

@@ -2455,6 +2455,21 @@ class SvcCronVerbTests(ScriptTestBase):
         self.assertEqual(caddy["description"], "Caddy")
         self.assertEqual(result["data"]["count"], len(services))
 
+    def test_svc_list_passes_plain_flag(self) -> None:
+        # failed 单元默认带 "●" 前缀；不加 --plain 会被解析器丢掉，
+        # 导致状态带说 N 个失败、列表里却看不到。
+        calls: list[list[str]] = []
+
+        def respond(argv, input_text):
+            calls.append(list(argv))
+            return (0, "caddy.service loaded active running Caddy\n", "")
+
+        self.runner.on("systemctl", respond)
+        result = self.run_verb("svc.list")
+        self.assertTrue(result["ok"])
+        self.assertTrue(calls)
+        self.assertIn("--plain", calls[0])
+
     def test_svc_list_unavailable(self) -> None:
         self.runner.on("systemctl", lambda argv, input_text: (1, "", "System has not been booted"))
         result = self.run_verb("svc.list")
