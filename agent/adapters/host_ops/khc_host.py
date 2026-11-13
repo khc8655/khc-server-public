@@ -31,6 +31,8 @@
 - ``svc.*``：服务列表只读（running/failed）；``svc.logs`` 只 journalctl 尾读
   （1..500 行）；``svc.restart`` 仅允许 ``*.service`` 且拒绝受保护单元
   （systemd-*、ssh/sshd、dbus），重启后回读 is-active。
+- ``logs.errors``：只读 journalctl 近 24 小时 0..3 级日志（≤50 条、每条 ≤300 字、
+  统一脱敏）与内核 OOM 记录（≤20 条）；脱敏函数内联，不依赖打包范围外的模块。
 - ``cron.*``：只管理 ``/etc/cron.d/khc-*`` 白名单文件；条目名严格正则，内容
   限行数/行长/禁控制字符，写前拒绝符号链接；面板外条目只读展示。
 - ``cleanup``：删除节点/Peer 时的残留清理（wg-quick@wg0、wg0.conf、/etc/caddy/khc.d
@@ -41,7 +43,7 @@
   khc-agent 自身不在清理范围。
 
 测试可替换的运行时依赖（模块级全局，测试/打包后覆盖）：``PROC_ROOT``、``ETC_ROOT``、
-``STATE_DIR``、``SYSTEMD_UNIT_DIR``、``CRON_DIR``、``RUNNER``、``USER_HOME_MAP``、
+``STATE_DIR``、``SYSTEMD_UNIT_DIR``、``CRON_DIR``、``RUNNER``、``SLEEP``、``USER_HOME_MAP``、
 ``NFT_AVAILABLE``、``MAX_OUTPUT_BYTES``、``CLEANUP_ROOT``（cleanup 目标路径前缀）。
 """
 
@@ -62,7 +64,7 @@ import tempfile
 import time
 from typing import Any, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.2"
+SCRIPT_VERSION = "1.5.3"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -73,6 +75,14 @@ DEFAULT_PROCESS_LIMIT = 50
 MAX_RULES = 100
 MAX_RULE_NOTE = 200
 MAX_KEYS = 100
+# 进程 CPU%：同一请求内两次采样求差的窗口（秒）。
+PROCESS_CPU_SAMPLE_INTERVAL = 0.5
+# logs.errors：最近 24 小时的错误日志与内核 OOM 记录上限。
+LOGS_ERRORS_SINCE = "24 hours ago"
+LOGS_ERRORS_MAX_ENTRIES = 50
+LOGS_ERRORS_MAX_MESSAGE = 300
+LOGS_ERRORS_MAX_OOM = 20
+LOGS_OOM_SCAN_LINES = 200
 
 FW_TABLE = "khc_fw"
 FW_CHAIN = "input"
@@ -139,6 +149,7 @@ PUBLIC_VERBS = (
     "svc.list",
     "svc.logs",
     "svc.restart",
+    "logs.errors",
     "cron.list",
     "cron.set",
     "cleanup",
@@ -205,6 +216,7 @@ NFT_BIN = "nft"
 NFT_AVAILABLE: Optional[bool] = None
 ROOT_OVERRIDE: Optional[bool] = None
 RUNNER = None  # 测试注入：runner(argv, input_text, timeout) -> (rc, stdout, stderr)
+SLEEP = time.sleep  # 测试注入：进程 CPU 两次采样之间的等待，mock 后不真的等
 USER_HOME_MAP: dict[str, str] = {}
 # cron.* 只管理 /etc/cron.d/khc-* 文件；测试注入改指临时目录。
 CRON_DIR = os.environ.get("KHC_HOST_CRON_DIR") or CRON_DIR_DEFAULT
@@ -630,28 +642,60 @@ def _username(uid: int) -> str:
         return str(uid)
 
 
+def _cpu_ticks(pid: int) -> Optional[int]:
+    """一次采样：某个 PID 的 (utime+stime) jiffies；进程已退出返回 None。"""
+
+    stat = read_stat(pid)
+    if stat is None:
+        return None
+    return stat["utime"] + stat["stime"]
+
+
+def _sample_process_cpu(pids: list[int]) -> dict[int, float]:
+    """同一请求内两次采样求差，得到采样窗口内的进程 CPU%（100 = 单核跑满）。
+
+    ``SLEEP`` 是模块级可注入依赖：测试用 side_effect 在两次采样之间改写 fixture，
+    不必真的等待。窗口内新建/退出的进程、jiffies 回绕一律跳过（按 0 处理）。
+    """
+
+    first: dict[int, int] = {}
+    for pid in pids:
+        ticks = _cpu_ticks(pid)
+        if ticks is not None:
+            first[pid] = ticks
+    SLEEP(PROCESS_CPU_SAMPLE_INTERVAL)
+    second: dict[int, int] = {}
+    for pid in pids:
+        ticks = _cpu_ticks(pid)
+        if ticks is not None:
+            second[pid] = ticks
+    span = _clock_ticks() * PROCESS_CPU_SAMPLE_INTERVAL
+    if span <= 0:
+        return {}
+    cpu: dict[int, float] = {}
+    for pid, after in second.items():
+        before = first.get(pid)
+        if before is None or after < before:
+            continue
+        cpu[pid] = round((after - before) / span * 100, 1)
+    return cpu
+
+
 def _collect_processes_proc(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMIT) -> list[dict[str, Any]]:
     """测试 / 非标准 PROC_ROOT：按 /proc 逐 PID 读取（fixture 用）。"""
 
-    proc_root = PROC_ROOT
     try:
-        names = os.listdir(proc_root)
+        names = os.listdir(PROC_ROOT)
     except OSError:
         return []
-    clk = _clock_ticks()
+    pids = [int(name) for name in names if name.isdigit()]
+    cpu = _sample_process_cpu(pids)
     page = _page_size()
-    uptime = _uptime_seconds()
     rows: list[dict[str, Any]] = []
-    for name in names:
-        if not name.isdigit():
-            continue
-        pid = int(name)
+    for pid in pids:
         stat = read_stat(pid)
         if stat is None:
             continue
-        cpu = 0.0
-        if uptime > 0:
-            cpu = round(((stat["utime"] + stat["stime"]) / clk) / uptime * 100, 1)
         rows.append(
             {
                 "pid": pid,
@@ -659,7 +703,7 @@ def _collect_processes_proc(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMI
                 "name": stat["name"],
                 "user": _username(_read_uid(pid)),
                 "startTime": stat["startTime"],
-                "cpu": cpu,
+                "cpu": cpu.get(pid, 0.0),
                 "mem": round(stat["rssPages"] * page / (1024 * 1024), 1),
                 "cmdline": _read_cmdline(pid),
             }
@@ -705,7 +749,7 @@ def _parse_ps_rows(stdout: str, sort: str, limit: int, now: float) -> list[dict[
 
 
 def _collect_processes_ps(sort: str, limit: int) -> list[dict[str, Any]]:
-    """生产路径：一条 ps 完成全表排序，只对入选的 N 行读 comm/cmdline。"""
+    """生产路径：一条 ps 完成全表排序；入选的 N 行两次采样求 CPU% 并读 comm/cmdline。"""
 
     sort_key = "mem" if sort == "mem" else "cpu"
     rc, stdout, _ = _run(
@@ -721,6 +765,10 @@ def _collect_processes_ps(sort: str, limit: int) -> list[dict[str, Any]]:
     if rc != 0:
         return []
     rows = _parse_ps_rows(stdout, sort, limit, time.time())
+    cpu = _sample_process_cpu([row["pid"] for row in rows])
+    for row in rows:
+        row["cpu"] = cpu.get(row["pid"], 0.0)
+    rows.sort(key=lambda item: (float(item.get(sort_key) or 0), item["pid"]), reverse=True)
     for row in rows:
         row["name"] = _read_text(_proc_path(row["pid"], "comm"), 256).strip()
         row["cmdline"] = _read_cmdline(row["pid"])
@@ -728,7 +776,8 @@ def _collect_processes_ps(sort: str, limit: int) -> list[dict[str, Any]]:
 
 
 def collect_processes(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMIT) -> list[dict[str, Any]]:
-    # 测试 fixture 用自定义 PROC_ROOT；生产 /proc 走单次 ps，避免逐 PID Python 读取。
+    # 测试 fixture 用自定义 PROC_ROOT；生产 /proc 走单次 ps 取元数据；两条路径的 CPU%
+    # 都用两次采样求差（间隔 0.5 秒）计算，不再展示进程生命周期均值。
     if PROC_ROOT != "/proc":
         return _collect_processes_proc(sort, limit)
     return _collect_processes_ps(sort, limit)
@@ -1819,6 +1868,185 @@ def svc_restart_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, An
 
 
 # ---------------------------------------------------------------------------
+# logs.errors：近 24 小时错误日志 + 内核 OOM 记录（只读，按需调用）
+# ---------------------------------------------------------------------------
+
+# 脱敏规则内联：build_script() 只拼 khc/ops.py + khc_host.py，agent/khc/tasks.py
+# 不在内联范围，Peer 脚本里不能 import，因此这里保留一份等价实现。
+_LOGS_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",
+    re.S,
+)
+_LOGS_URL_CREDENTIALS_RE = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.-]*://)(?:[^\s/@]*:[^\s/@]*|[^\s/@]+)@"
+)
+_LOGS_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&][A-Za-z0-9_-]*(?:token|ticket|password|passwd|secret|key)=)[^&\s]+",
+)
+_LOGS_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
+_LOGS_SECRET_KV_RE = re.compile(
+    r"(?i)\b([A-Za-z0-9_-]*(?:token|password|passwd|secret|key|authorization))"
+    r"\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+)
+_LOGS_OOM_RE = re.compile(
+    r"out of memory|oom-kill|oom_kill|oom_reaper|killed process|memory cgroup out of memory",
+    re.I,
+)
+JOURNAL_PRIORITY_NAMES = {
+    "0": "emerg",
+    "1": "alert",
+    "2": "crit",
+    "3": "err",
+    "4": "warning",
+    "5": "notice",
+    "6": "info",
+    "7": "debug",
+}
+
+
+def _redact_log_text(text: str) -> str:
+    """日志/错误消息脱敏（内联版，与 agent/khc/tasks.py 的规则一致）。"""
+
+    value = str(text)
+    value = _LOGS_PRIVATE_KEY_RE.sub("[REDACTED:private_key]", value)
+    value = _LOGS_URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", value)
+    value = _LOGS_QUERY_SECRET_RE.sub(r"\1[REDACTED]", value)
+    value = _LOGS_BEARER_RE.sub(lambda match: f"{match.group(1)} [REDACTED]", value)
+    value = _LOGS_SECRET_KV_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", value
+    )
+    return value
+
+
+def _log_entry_line(text: Any) -> str:
+    """控制字符折叠 + 脱敏 + 每条 ≤300 字。"""
+
+    value = CONTROL_RE.sub(" ", str(text)).strip()
+    value = _redact_log_text(value)
+    if len(value) > LOGS_ERRORS_MAX_MESSAGE:
+        value = value[: LOGS_ERRORS_MAX_MESSAGE - 1] + "…"
+    return value
+
+
+def _journal_message(record: Mapping[str, Any]) -> str:
+    message = record.get("MESSAGE", "")
+    if isinstance(message, list):
+        return "".join(
+            chr(byte) if isinstance(byte, int) and 0 <= byte <= 255 else str(byte)
+            for byte in message
+        )
+    return str(message)
+
+
+def _journal_records(stdout: str) -> list[Mapping[str, Any]]:
+    """解析 journalctl -o json；非 JSON 行按纯文本兜底。"""
+
+    records: list[Mapping[str, Any]] = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            records.append({"MESSAGE": line})
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def _journal_entry(record: Mapping[str, Any], *, level: Optional[str] = None) -> dict[str, Any]:
+    """归一成 {time, priority, level, message}；时间为 unix 秒，缺省 0。"""
+
+    priority = str(record.get("PRIORITY", "")).strip()
+    timestamp = 0
+    raw_ts = record.get("__REALTIME_TIMESTAMP") or record.get("_SOURCE_REALTIME_TIMESTAMP")
+    try:
+        timestamp = int(int(str(raw_ts)) / 1_000_000)
+    except (TypeError, ValueError):
+        pass
+    return {
+        "time": timestamp,
+        "priority": priority,
+        "level": level or JOURNAL_PRIORITY_NAMES.get(priority, "info"),
+        "message": _log_entry_line(_journal_message(record)),
+    }
+
+
+def _logs_errors_entries() -> list[dict[str, Any]]:
+    rc, stdout, stderr = _run(
+        [
+            "journalctl",
+            "-p",
+            "0..3",
+            "--since",
+            LOGS_ERRORS_SINCE,
+            "-n",
+            str(LOGS_ERRORS_MAX_ENTRIES),
+            "--no-pager",
+            "-o",
+            "json",
+        ],
+        timeout=15,
+    )
+    if rc != 0:
+        raise HostError(
+            "E_UNSUPPORTED",
+            f"journalctl 读取失败: {_log_entry_line((stderr or stdout).strip()[:200])}",
+        )
+    entries: list[dict[str, Any]] = []
+    for record in _journal_records(stdout):
+        entries.append(_journal_entry(record))
+        if len(entries) >= LOGS_ERRORS_MAX_ENTRIES:
+            break
+    return entries
+
+
+def _logs_errors_oom() -> list[dict[str, Any]]:
+    rc, stdout, _ = _run(
+        [
+            "journalctl",
+            "-k",
+            "--since",
+            LOGS_ERRORS_SINCE,
+            "-n",
+            str(LOGS_OOM_SCAN_LINES),
+            "--no-pager",
+            "-o",
+            "json",
+        ],
+        timeout=15,
+    )
+    if rc != 0:
+        return []
+    oom: list[dict[str, Any]] = []
+    for record in _journal_records(stdout):
+        if not _LOGS_OOM_RE.search(_journal_message(record)):
+            continue
+        oom.append(_journal_entry(record, level="oom"))
+        if len(oom) >= LOGS_ERRORS_MAX_OOM:
+            break
+    return oom
+
+
+def logs_errors_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    """只读：近 24 小时 journalctl -p 0..3 ≤50 条 + 内核 OOM 记录（统一脱敏）。"""
+
+    entries = _logs_errors_entries()
+    oom = _logs_errors_oom()
+    return ok(
+        {
+            "windowHours": 24,
+            "since": LOGS_ERRORS_SINCE,
+            "count": len(entries),
+            "entries": entries,
+            "oom": oom,
+            "oomCount": len(oom),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # cron.*：/etc/cron.d/khc-* 受控管理（#E2，白名单文件名，写前强制校验）
 # ---------------------------------------------------------------------------
 
@@ -2239,6 +2467,7 @@ _VERB_HANDLERS = {
     "svc.list": svc_list_verb,
     "svc.logs": svc_logs_verb,
     "svc.restart": svc_restart_verb,
+    "logs.errors": logs_errors_verb,
     "cron.list": cron_list_verb,
     "cron.set": cron_set_verb,
     "cleanup": cleanup_verb,

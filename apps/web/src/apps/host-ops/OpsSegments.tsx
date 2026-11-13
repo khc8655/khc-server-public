@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { AgentOps, SshKey } from '@khc/contracts';
-import { ConfirmAction } from '../../patterns';
+import { AdvancedSection, ConfirmAction } from '../../patterns';
 import { fetchSshKeys } from '../../data/sshKeys';
 import { action, type ActionRef } from '../../registry/actions';
 import {
   callHostOps,
   normalizeCronList,
   normalizeKeys,
+  normalizeLogErrors,
   normalizeProcesses,
   normalizeServices,
   normalizeSvcLogs,
@@ -18,6 +19,8 @@ import {
   type HostOpsCronList,
   type HostOpsError,
   type HostOpsKey,
+  type HostOpsLogEntry,
+  type HostOpsLogErrors,
   type HostOpsProcess,
   type HostOpsService,
   type HostOpsVersion,
@@ -162,6 +165,11 @@ export function ServicesSegment({
           onClick={() => void load()}
         />
       </Row>
+
+      <AdvancedSection title={zh.hostOps.logsErrors.sectionTitle}>
+        <p className="ui-field-help">{zh.hostOps.logsErrors.sectionHint}</p>
+        <SystemErrorsSegment hubId={hubId} disabled={disabled} />
+      </AdvancedSection>
 
       {restartTarget ? (
         <ConfirmAction
@@ -993,6 +1001,126 @@ export function KeyAddForm({
           variant="primary"
           loading={adding}
           onClick={() => void add()}
+        />
+      </Row>
+    </Stack>
+  );
+}
+
+/* -------------------------------------------------------- 系统错误折叠区 */
+
+const LOG_LEVEL_LABELS: Record<string, string> = {
+  '0': zh.hostOps.logsErrors.levelEmergency,
+  '1': zh.hostOps.logsErrors.levelAlert,
+  '2': zh.hostOps.logsErrors.levelCritical,
+  '3': zh.hostOps.logsErrors.levelError,
+};
+
+function logLevelLabel(entry: HostOpsLogEntry): string {
+  if (entry.oom) return zh.hostOps.logsErrors.levelOom;
+  return LOG_LEVEL_LABELS[entry.priority] ?? zh.hostOps.logsErrors.levelOther;
+}
+
+/**
+ * 系统错误折叠区（§3.5）：挂在服务分段内，由 AdvancedSection 按需挂载，
+ * 只有用户展开时才调用只读动词 logs.errors，不自动轮询。
+ * 四态沿用 ServicesSegment；错误日志与 OOM 合并成一张对象表，不新增详情入口。
+ */
+function SystemErrorsSegment({
+  hubId,
+  disabled,
+}: {
+  hubId: string;
+  disabled: boolean;
+}) {
+  const [logs, setLogs] = useState<HostOpsLogErrors | undefined>(undefined);
+  const [error, setError] = useState<HostOpsError | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    if (disabled) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await callHostOps(hubId, 'self', 'logs.errors');
+      if (!result.ok) setError(result.error);
+      else setLogs(normalizeLogErrors(result.data));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disabled]);
+
+  const columns: ColumnDef<HostOpsLogEntry>[] = [
+    {
+      key: 'message',
+      type: 'name',
+      header: zh.hostOps.logsErrors.message,
+      value: (entry) => entry.message,
+      dot: (entry) => (entry.oom ? 'danger' : undefined),
+      narrow: (entry) => `${logLevelLabel(entry)} · ${formatAbsoluteTime(entry.time)}`,
+    },
+    {
+      key: 'level',
+      type: 'text',
+      header: zh.hostOps.logsErrors.level,
+      priority: 'low',
+      value: (entry) => logLevelLabel(entry),
+    },
+    {
+      key: 'time',
+      type: 'time',
+      header: zh.hostOps.logsErrors.time,
+      priority: 'low',
+      value: (entry) => entry.time,
+    },
+  ];
+
+  return (
+    <Stack gap={3}>
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
+      {loading && logs === undefined && !error ? (
+        <Stack gap={2}>
+          <Skeleton height={10} />
+          <Skeleton height={10} />
+          <Skeleton height={10} width="70%" />
+        </Stack>
+      ) : null}
+      {logs ? (
+        <p className="ui-field-help">
+          {fmt(zh.hostOps.logsErrors.summary, {
+            hours: logs.windowHours,
+            count: logs.count,
+            oom: logs.oomCount,
+          })}
+        </p>
+      ) : null}
+      {error && logs === undefined ? null : (
+        <Table
+          rows={logs?.entries}
+          columns={columns}
+          rowKey={(entry) => entry.id}
+          objectLabel={zh.hostOps.logsErrors.title}
+          empty={{
+            icon: 'alert',
+            title: zh.hostOps.logsErrors.empty,
+            description: zh.hostOps.logsErrors.emptyDesc,
+          }}
+        />
+      )}
+      <Row gap={2}>
+        <Button
+          label={zh.common.refresh}
+          icon="refresh"
+          size="sm"
+          loading={loading}
+          disabled={disabled}
+          disabledReason={disabled ? zh.channels.controlFailed : undefined}
+          onClick={() => void load()}
         />
       </Row>
     </Stack>

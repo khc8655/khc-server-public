@@ -73,6 +73,7 @@ SCRIPT_GLOBAL_NAMES = (
     "NFT_BIN",
     "NFT_AVAILABLE",
     "RUNNER",
+    "SLEEP",
     "USER_HOME_MAP",
     "FW_ROLLBACK_SECONDS",
     "MAX_OUTPUT_BYTES",
@@ -155,6 +156,18 @@ def write_uptime(proc_root: str, seconds: float = 1000.0) -> None:
     _write(os.path.join(proc_root, "uptime"), f"{seconds:.2f} 0.00\n")
 
 
+def bump_proc_cpu(proc_root: str, pid: int, extra_ticks: int) -> None:
+    """在两次采样之间增加 /proc/<pid>/stat 的 utime（fixture 专用）。"""
+
+    path = os.path.join(proc_root, str(pid), "stat")
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    close = text.rfind(")")
+    rest = text[close + 2 :].split()
+    rest[11] = str(int(rest[11]) + extra_ticks)  # field 14 = utime
+    _write(path, text[: close + 2] + " ".join(rest))
+
+
 class HostRunner:
     """可注入的命令执行器：按 ``basename`` / ``basename sub`` 分发。"""
 
@@ -202,6 +215,7 @@ class ScriptTestBase(unittest.TestCase):
         HOST_SCRIPT.STATE_DIR = self.state_dir
         HOST_SCRIPT.SYSTEMD_UNIT_DIR = self.unit_dir
         HOST_SCRIPT.RUNNER = self.runner
+        HOST_SCRIPT.SLEEP = lambda _seconds: None  # CPU 两次采样不真的等待
         HOST_SCRIPT.USER_HOME_MAP = {}
         HOST_SCRIPT.NFT_AVAILABLE = True
         HOST_SCRIPT.ROOT_OVERRIDE = True  # 模拟 khcops 经 sudo 得到的 root
@@ -355,7 +369,13 @@ class ScriptProcessesTests(ScriptTestBase):
         write_proc(self.proc_root, 4242, comm="worker one", ppid=100, utime=500, stime=500, rss_pages=256, uid=0)
         write_proc(self.proc_root, 4243, comm="idle", ppid=100, utime=1, stime=1, rss_pages=10, uid=1000)
         HOST_SCRIPT.USER_HOME_MAP["root"] = "/root"
-        result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+
+        def advance(_seconds):
+            bump_proc_cpu(self.proc_root, 4242, 50)
+            bump_proc_cpu(self.proc_root, 4243, 1)
+
+        with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance):
+            result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
         self.assertTrue(result["ok"])
         rows = result["data"]["processes"]
         self.assertEqual([row["pid"] for row in rows], [4242, 4243])
@@ -365,6 +385,59 @@ class ScriptProcessesTests(ScriptTestBase):
         self.assertEqual(first["name"], "worker one")
         self.assertEqual(first["startTime"], 1000)
         self.assertEqual(rows[1]["startTime"], 1000)
+        self.assertGreater(first["cpu"], rows[1]["cpu"])
+
+    def test_processes_cpu_two_sample_delta(self) -> None:
+        """CPU% = 采样窗口内 (utime+stime) 差值；mock SLEEP 不真的等。"""
+
+        span = HOST_SCRIPT.PROCESS_CPU_SAMPLE_INTERVAL
+        full_core_ticks = int(round(HOST_SCRIPT._clock_ticks() * span))
+        write_proc(self.proc_root, 6100, comm="yes", utime=100, stime=0, rss_pages=10)
+
+        def advance(seconds):
+            self.assertEqual(seconds, span)
+            bump_proc_cpu(self.proc_root, 6100, full_core_ticks)
+
+        with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance) as sleep_mock:
+            result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+        sleep_mock.assert_called_once_with(span)
+        self.assertTrue(result["ok"])
+        rows = result["data"]["processes"]
+        self.assertEqual([row["pid"] for row in rows], [6100])
+        self.assertAlmostEqual(rows[0]["cpu"], 100.0, delta=0.5)
+
+    def test_processes_cpu_lifetime_average_is_gone(self) -> None:
+        """累计 CPU 时间很大但窗口内没有增量时 CPU% 为 0（不再是生命周期均值）。"""
+
+        write_proc(self.proc_root, 6103, comm="idle-now", utime=100000, stime=100000, rss_pages=10)
+        result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+        self.assertTrue(result["ok"])
+        row = result["data"]["processes"][0]
+        self.assertEqual(row["pid"], 6103)
+        self.assertEqual(row["cpu"], 0.0)
+
+    def test_collect_processes_ps_uses_sampled_cpu(self) -> None:
+        """生产 ps 路径同样用两次采样的 CPU%，不直接展示 ps 的生命周期均值。"""
+
+        saved = HOST_SCRIPT.PROC_ROOT
+        HOST_SCRIPT.PROC_ROOT = "/proc"
+        try:
+            pid = os.getpid()
+            with mock.patch.object(
+                HOST_SCRIPT, "_run", return_value=(0, f"{pid} 1 2.0 1024 0 10\n", "")
+            ), mock.patch.object(
+                HOST_SCRIPT, "_sample_process_cpu", return_value={pid: 99.9}
+            ) as sampler, mock.patch.object(
+                HOST_SCRIPT, "_read_text", return_value="demo\n"
+            ), mock.patch.object(
+                HOST_SCRIPT, "_read_cmdline", return_value="demo --flag"
+            ):
+                rows = HOST_SCRIPT.collect_processes("cpu", 5)
+            sampler.assert_called_once_with([pid])
+            self.assertEqual([row["pid"] for row in rows], [pid])
+            self.assertEqual(rows[0]["cpu"], 99.9)
+        finally:
+            HOST_SCRIPT.PROC_ROOT = saved
 
     def test_processes_mem_sort_and_limit(self) -> None:
         write_proc(self.proc_root, 5001, comm="big", rss_pages=1024)
@@ -1931,6 +2004,7 @@ class AdapterCallTests(AdapterTestBase):
         allowed = (
             "version", "status", "snapshot", "processes", "fw.show",
             "keys.list", "svc.list", "svc.logs", "cron.list", "svc.restart",
+            "logs.errors",
         )
         for verb in allowed:
             result = self.call({"target": "a", "verb": verb, "params": {}})
@@ -2415,6 +2489,121 @@ class ScriptPathResolutionTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "/tmp/khc-custom-state")
+
+
+# ===========================================================================
+# 脚本：logs.errors（只读，近 24 小时错误日志 + 内核 OOM）
+# ===========================================================================
+
+
+class LogsErrorsVerbTests(ScriptTestBase):
+    def _journal(self, records: list[dict], oom: list[dict] | None = None) -> None:
+        kernel = oom if oom is not None else []
+
+        def handler(argv, input_text):
+            if "-k" in argv:
+                return (0, "\n".join(json.dumps(item) for item in kernel) + "\n", "")
+            return (0, "\n".join(json.dumps(item) for item in records) + "\n", "")
+
+        self.runner.on("journalctl", handler)
+
+    def test_logs_errors_time_window_and_priority(self) -> None:
+        self._journal([{"PRIORITY": "3", "__REALTIME_TIMESTAMP": "1700000000000000", "MESSAGE": "boom"}])
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["windowHours"], 24)
+        self.assertEqual(result["data"]["count"], 1)
+        entry = result["data"]["entries"][0]
+        self.assertEqual(entry["priority"], "3")
+        self.assertEqual(entry["level"], "err")
+        self.assertEqual(entry["time"], 1700000000)
+        self.assertEqual(entry["message"], "boom")
+        errors_call, oom_call = self.runner.commands("journalctl")
+        self.assertIn("-p", errors_call)
+        self.assertIn("0..3", errors_call)
+        self.assertIn("--since", errors_call)
+        self.assertIn("24 hours ago", errors_call)
+        self.assertIn("50", errors_call)
+        self.assertIn("-k", oom_call)
+        self.assertIn("--since", oom_call)
+        self.assertIn("24 hours ago", oom_call)
+
+    def test_logs_errors_caps_at_50_entries(self) -> None:
+        records = [
+            {"PRIORITY": "2", "MESSAGE": f"error-{index}"} for index in range(80)
+        ]
+        self._journal(records)
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        entries = result["data"]["entries"]
+        self.assertEqual(len(entries), 50)
+        self.assertEqual(result["data"]["count"], 50)
+        self.assertEqual(entries[0]["message"], "error-0")
+
+    def test_logs_errors_clips_and_redacts_each_entry(self) -> None:
+        records = [
+            {
+                "PRIORITY": "0",
+                "MESSAGE": "password=hunter2 "
+                "token=abcdefghijklmnop Bearer abcdefgh12345678 "
+                "https://user:s3cr3t@example.com/x?api_key=leakme "
+                "-----BEGIN PRIVATE KEY-----SECRET-----END PRIVATE KEY----- "
+                + "A" * 900,
+            }
+        ]
+        self._journal(records)
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        message = result["data"]["entries"][0]["message"]
+        self.assertLessEqual(len(message), 300)
+        for secret in ("hunter2", "abcdefghijklmnop", "abcdefgh12345678", "s3cr3t", "leakme", "SECRET"):
+            self.assertNotIn(secret, message, secret)
+        self.assertIn("[REDACTED]", message)
+
+    def test_logs_errors_returns_kernel_oom_records(self) -> None:
+        self._journal(
+            [{"PRIORITY": "3", "MESSAGE": "caddy.service: 上游不可达"}],
+            [
+                {"PRIORITY": "4", "MESSAGE": "kernel: caddy started normally"},
+                {
+                    "PRIORITY": "3",
+                    "__REALTIME_TIMESTAMP": "1700000000000000",
+                    "MESSAGE": "Out of memory: Killed process 4321 (yes) password=topsecret",
+                },
+            ],
+        )
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["count"], 1)
+        oom = result["data"]["oom"]
+        self.assertEqual(len(oom), 1)
+        self.assertEqual(result["data"]["oomCount"], 1)
+        self.assertEqual(oom[0]["level"], "oom")
+        self.assertIn("Out of memory", oom[0]["message"])
+        self.assertNotIn("topsecret", oom[0]["message"])
+
+    def test_logs_errors_plain_text_fallback(self) -> None:
+        self.runner.on("journalctl", lambda argv, input_text: (0, "raw line\n", ""))
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["entries"][0]["message"], "raw line")
+
+    def test_logs_errors_journalctl_failure_redacts_message(self) -> None:
+        self.runner.on(
+            "journalctl",
+            lambda argv, input_text: (1, "", "No journal files token=SUPERSECRET123"),
+        )
+        result = self.run_verb("logs.errors")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "E_UNSUPPORTED")
+        self.assertNotIn("SUPERSECRET123", result["error"]["message"])
+
+    def test_logs_errors_is_readonly_verb(self) -> None:
+        self._journal([])
+        self.assertIn("logs.errors", HOST_SCRIPT.PUBLIC_VERBS)
+        self.assertNotIn("logs.errors", HOST_SCRIPT.WRITE_VERBS)
+        result = self.run_verb("logs.errors")
+        self.assertTrue(result["ok"])
 
 
 # ===========================================================================
