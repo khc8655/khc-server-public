@@ -75,6 +75,7 @@
 | 上生产前完整测试报告（2026-11-10） | `docs/verification/2026-11-10/preprod-test-report.md` | 面板 0.7.12（`acd9b41c`）/ Agent 0.1.35 的 A–H 八轨 126 条用例：75 通过、12 部分通过、9 失败、8 阻塞、1 跳过、21 未执行；结论 No-Go（S2：PP-F-08 cron 白名单、PP-C-05 Caddyfile 接管）；生产请求 40 次（只读 29、写入 11，逐类明细见报告 §6.2） |
 | Public 仓库开放前隐私与凭据审计（2026-11-11） | `docs/verification/2026-11-11/public-repo-readiness-audit.md` | 全历史 423 提交/96 分支引用/45 tag 只读扫描：1 项已泄露 WireGuard Peer 私钥（截图）须轮换、2 个一次性安装令牌须确认失效、20+ 文件含真实 IP/域名/资源标识；结论"处理后安全"，推荐新建干净 public 仓库而非直接公开历史 |
 | PR 决策抢救清单（2026-11-11） | `docs/verification/2026-11-11/pr-decision-salvage.md` | 116 个 PR + commit message 全量盘点：18 类架构决策已全部落在 ADR/设计文档，无需新增 ADR；抢救两份 2026-11-08 报告与 PR #128 的 N6/N8/N9 遗留项，并列出判定为无价值/不复刻的讨论及依据 |
+| Cloudflare Workers Builds 取证（2026-11-11） | `docs/verification/2026-11-11/workers-builds-forensics.md` | 旧库确实挂着 Git 集成且构建产物自动部署生产：16 条构建记录全部上线、同一 commit 3 分钟内被部署两次（构建 vs CI），线上版本缺 `commit` 字段即构建产物指纹；结论已落 ADR-0016「Workers Builds 必须保持断开」，Account ID / 邮箱 / 子域已脱敏 |
 | 端到端验收报告（2026-11-08） | `docs/verification/2026-11-08/e2e-acceptance-report.md` | 三种接入方式/Caddy/WireGuard/端口转发端到端验收；真实地址已脱敏，结论与证据保持原样 |
 | 面板交互测试与优化报告（2026-11-08） | `docs/verification/2026-11-08/ux-interaction-audit.md` | 状态一致性、门控、文案、展示与操作成本审计；真实地址已脱敏，结论与证据保持原样 |
 | 发版与部署 | `docs/engineering/release.md` | 版本、分层、CI 自动发版（合并 main 即上线，CI 内签包）、本机应急发版、部署前冒烟、回滚（ADR-0016；ADR-0015 已被取代）、发版带回 N-1 与 Agent 回滚（ADR-0019） |
