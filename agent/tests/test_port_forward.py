@@ -107,7 +107,7 @@ class AdapterTestBase(unittest.TestCase):
 class SchemaTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "port-forward")
-        self.assertEqual(self.adapter.version, "1.2.0")
+        self.assertEqual(self.adapter.version, "1.2.1")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -905,6 +905,50 @@ class StatusTests(AdapterTestBase):
         status = self.adapter.status(self.ctx)
         self.assertEqual(status["forwards"][0]["error"], "unit inactive")
 
+    def test_status_activating_auto_restart_reported_failed(self) -> None:
+        # Restart=always 的崩溃循环（如端口被占用）停在 activating/auto-restart，
+        # 不能被当成「生效」；必须按失败上报，否则面板显示可用但实际全断。
+        self.apply(config(forward()))
+        unit = "khc-forward-ssh.service"
+
+        def override(cmd: list[str]):
+            if cmd[:3] == ["systemctl", "is-active", unit]:
+                return RunResult(cmd=cmd, rc=3, stdout="activating\n")
+            if cmd[:2] == ["systemctl", "show"]:
+                return RunResult(
+                    cmd=cmd,
+                    rc=0,
+                    stdout="SubState=auto-restart\nNRestarts=40\nResult=exit-code\n",
+                )
+            return None
+
+        self.runner.overrides.append(override)
+        status = self.adapter.status(self.ctx)
+        row = status["forwards"][0]
+        self.assertFalse(row["active"])
+        self.assertIn("auto-restart", row["error"])
+        self.assertFalse(status["running"])
+        self.assertTrue(any(problem["code"] == "unit_failed" for problem in status["problems"]))
+
+    def test_status_activating_initial_start_is_active(self) -> None:
+        # 首次启动中的 activating（NRestarts=0、SubState=start）不应误报失败。
+        self.apply(config(forward()))
+        unit = "khc-forward-ssh.service"
+
+        def override(cmd: list[str]):
+            if cmd[:3] == ["systemctl", "is-active", unit]:
+                return RunResult(cmd=cmd, rc=3, stdout="activating\n")
+            if cmd[:2] == ["systemctl", "show"]:
+                return RunResult(cmd=cmd, rc=0, stdout="SubState=start\nNRestarts=0\nResult=success\n")
+            return None
+
+        self.runner.overrides.append(override)
+        status = self.adapter.status(self.ctx)
+        row = status["forwards"][0]
+        self.assertTrue(row["active"])
+        self.assertIsNone(row["error"])
+        self.assertTrue(status["running"])
+
     def test_status_one_failure_does_not_break_others(self) -> None:
         self.apply(config(forward(), forward(name="web", listenPort=7002)))
         bad_unit = "khc-forward-web.service"
@@ -1075,7 +1119,7 @@ class LoaderTests(unittest.TestCase):
         self.assertIn("port-forward", names)
         adapter = names["port-forward"]
         self.assertEqual(type(adapter).__name__, "PortForward")
-        self.assertEqual(adapter.version, "1.2.0")
+        self.assertEqual(adapter.version, "1.2.1")
         self.assertTrue(adapter.requires_root)
         self.assertIn("forwards", adapter.schema.get("properties", {}))
 
