@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { classifyBackend, ipv4InCidr } from './services';
+import {
+  RESERVED_PUBLISH_PORTS,
+  classifyBackend,
+  ipv4InCidr,
+  isLocalListenAddress,
+  publishedLocalPorts,
+  unpublishedListeningPorts,
+} from './services';
+
+const item = (port: number, address = '0.0.0.0', proto = 'tcp') => ({ proto, address, port });
+const ops = (items: unknown[]) => ({ network: { listening: { count: items.length, items } } });
 
 const wg = (peers: Array<{ name: string; allowedIps: string[]; online?: boolean }>, installed = true) => ({
   wireguard: { installed, peers },
@@ -101,5 +111,91 @@ describe('ipv4InCidr', () => {
     expect(ipv4InCidr('example.com', '10.0.0.0/8')).toBe(false);
     expect(ipv4InCidr('10.8.0.1', '10.8.0.0/33')).toBe(false);
     expect(ipv4InCidr('10.8.0.1', '0.0.0.0/0')).toBe(true);
+  });
+});
+
+describe('本机监听端口（T-C 批次 3）', () => {
+  it('去重：同一端口 tcp/tcp6、多地址只保留一个并按端口升序', () => {
+    const rows = unpublishedListeningPorts(
+      ops([
+        item(9100, '::', 'tcp6'),
+        item(9000, '0.0.0.0', 'tcp'),
+        item(9000, '::', 'tcp6'),
+        item(9000, '127.0.0.1', 'tcp'),
+        item(9200, '127.0.0.1', 'tcp'),
+      ]),
+      [],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9000, 9100, 9200]);
+  });
+
+  it('已发布端口不重复列出：upstreams / 旧 upstream / pathRoutes / scheme 都算', () => {
+    const rows = unpublishedListeningPorts(
+      ops([item(9000), item(9100), item(9200), item(9300), item(9400), item(9500)]),
+      [
+        { upstreams: ['127.0.0.1:9000'] },
+        { upstream: '127.0.0.1:9100' },
+        { pathRoutes: [{ upstreams: ['127.0.0.1:9200'] }] },
+        { upstreams: ['http://127.0.0.1:9300'] },
+        { upstreams: ['localhost:9400'] },
+        { upstreams: ['10.9.0.2:9500'] },
+      ],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9500]);
+  });
+
+  it('非本机上游不误判为已发布，unix 套接字与非本机地址不计入', () => {
+    expect(publishedLocalPorts([
+      { upstreams: ['10.9.0.2:3000', 'unix//run/app.sock', 'example.com:3100'] },
+      { upstreams: ['127.0.0.1:3200', '127.0.0.1:3200'] },
+    ])).toEqual([3200]);
+  });
+
+  it('过滤非本机监听地址与保留端口，避免把管理端口发布成站点', () => {
+    const reserved = [...RESERVED_PUBLISH_PORTS].map((port) => item(port, '127.0.0.1'));
+    const rows = unpublishedListeningPorts(
+      ops([
+        ...reserved,
+        item(9000, '203.0.113.10'),
+        item(9100, '10.9.0.2'),
+        item(9200, '192.168.1.7'),
+        item(9300, '0.0.0.0'),
+        item(9400, '::', 'tcp6'),
+        item(9500, '127.0.0.1'),
+        item(9600, 'localhost'),
+        item(9700, '::1', 'tcp6'),
+      ]),
+      [],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9300, 9400, 9500, 9600, 9700]);
+  });
+
+  it('listening 为空/缺失/形状异常时返回空数组，不抛异常', () => {
+    const missing: unknown[] = [
+      undefined,
+      null,
+      {},
+      { network: null },
+      { network: 'oops' },
+      { network: {} },
+      { network: { listening: null } },
+      { network: { listening: {} } },
+      { network: { listening: { items: [] } } },
+      { network: { listening: { items: 'oops' } } },
+      { network: { listening: { items: [null, 3, {}, { port: '9000' }, { port: 0 }, { port: 70000 }, { port: 9000.5 }] } } },
+    ];
+    for (const value of missing) {
+      expect(unpublishedListeningPorts(value, [])).toEqual([]);
+    }
+    expect(unpublishedListeningPorts(ops([]), [])).toEqual([]);
+  });
+
+  it('isLocalListenAddress：本机/回环/通配保留，外部与非法地址排除', () => {
+    for (const address of ['127.0.0.1', '127.2.3.4', 'localhost', '::1', '[::1]', '0.0.0.0', '::', '[::]']) {
+      expect(isLocalListenAddress(address), address).toBe(true);
+    }
+    for (const address of ['', '10.9.0.2', '192.168.1.7', '203.0.113.10', 'example.com', 'fd00::2']) {
+      expect(isLocalListenAddress(address), address).toBe(false);
+    }
   });
 });

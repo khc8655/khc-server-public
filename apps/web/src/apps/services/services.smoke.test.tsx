@@ -4,7 +4,7 @@
  * 两张表、空态、离线、未生效行内「生效」、未安装、390 后端可见、零新增请求。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
@@ -43,7 +43,10 @@ interface Options {
   caddyInstalled?: boolean;
   forwardInstalled?: boolean;
   stateRead?: boolean;
+  statePending?: boolean;
+  stateError?: boolean;
   withForwards?: boolean;
+  listening?: { proto: string; address: string; port: number }[];
 }
 
 let options: Options;
@@ -106,6 +109,10 @@ function mockApi() {
         });
       }
       if (url === '/api/v1/nodes/tyo-1/state') {
+        if (opts.statePending) return new Promise<Response>(() => {});
+        if (opts.stateError) {
+          return json({ error: { code: 'E_STATE', message: 'state failed' } }, 500);
+        }
         if (opts.stateRead === false) {
           return json({ reachable: false, route: 'direct', via: 'fetch', error: 'unreachable', state: null });
         }
@@ -116,6 +123,11 @@ function mockApi() {
           error: null,
           state: {
             host: { hostname: 'tyo-1' },
+            ops: {
+              network: {
+                listening: { count: (opts.listening ?? []).length, items: opts.listening ?? [] },
+              },
+            },
             adapters: [
               {
                 name: 'caddy-site',
@@ -319,5 +331,129 @@ describe('对外服务页（B4）', () => {
           item.url.includes('/apps/caddy-site'),
       ),
     ).toHaveLength(0);
+  });
+});
+
+describe('对外服务页 · 本机监听端口（T-C 批次 3）', () => {
+  function listeningCard(): HTMLElement {
+    return screen.getByText('本机监听端口').closest('.ui-card') as HTMLElement;
+  }
+
+  function withListening() {
+    options = {
+      ...options,
+      sites: [
+        {
+          name: 'blog',
+          domains: ['blog.example.dev'],
+          kind: 'proxy',
+          upstreams: ['10.99.0.2:8080'],
+          enabled: true,
+        },
+        {
+          name: 'local-app',
+          domains: ['local.example.dev'],
+          kind: 'proxy',
+          upstreams: ['127.0.0.1:9200'],
+          enabled: true,
+        },
+      ],
+      listening: [
+        { proto: 'tcp', address: '0.0.0.0', port: 9000 },
+        { proto: 'tcp6', address: '::', port: 9000 },
+        { proto: 'tcp', address: '127.0.0.1', port: 22 },
+        { proto: 'tcp', address: '127.0.0.1', port: 8899 },
+        { proto: 'tcp', address: '203.0.113.10', port: 9100 },
+        { proto: 'tcp', address: '127.0.0.1', port: 9200 },
+        { proto: 'tcp', address: '0.0.0.0', port: 9300 },
+      ],
+    };
+    mockApi();
+  }
+
+  it('有数据：只列未发布的本机端口，去重并过滤保留端口/外部地址/已发布端口', async () => {
+    withListening();
+    await renderRoute('/hubs/tyo-1/services');
+    expect(await screen.findByText('本机监听端口')).toBeTruthy();
+    const card = within(listeningCard());
+    expect((await card.findAllByText('9000')).length).toBeGreaterThan(0);
+    expect(card.getAllByText('9300').length).toBeGreaterThan(0);
+    expect(card.queryByText('9100')).toBeNull();
+    expect(card.queryByText('9200')).toBeNull();
+    expect(card.queryByText('22')).toBeNull();
+    expect(card.queryByText('8899')).toBeNull();
+    expect(card.queryByText('没有待发布的本机端口')).toBeNull();
+  });
+
+  it('点击端口：复用既有站点抽屉，预填 upstreams=127.0.0.1:<port>（不新增动作）', async () => {
+    withListening();
+    await renderRoute('/hubs/tyo-1/services');
+    const ports = await screen.findAllByText('9000');
+    await userEvent.click(ports[0]!);
+    expect(await screen.findByText('添加站点')).toBeTruthy();
+    expect(screen.getByText('127.0.0.1:9000')).toBeTruthy();
+    expect((screen.getByRole('spinbutton', { name: /目标端口/ }) as HTMLInputElement)?.value).toBe('9000');
+    expect(screen.queryByText('发布为站点')).toBeNull();
+    expect(
+      requests.filter((item) => ['PUT', 'POST', 'PATCH', 'DELETE'].includes(item.init?.method ?? 'GET')),
+    ).toHaveLength(0);
+  });
+
+  it('加载态：/state 未返回时列表为骨架，不提前显示空态', async () => {
+    options = { ...options, statePending: true };
+    mockApi();
+    await renderRoute('/hubs/tyo-1/services');
+    await screen.findByText('本机监听端口');
+    const card = listeningCard();
+    await waitFor(() => expect(card.querySelectorAll('.ui-skeleton').length).toBeGreaterThan(0));
+    expect(within(card).queryByText('没有待发布的本机端口')).toBeNull();
+  });
+
+  it('空态：没有未发布端口时显示空态与说明', async () => {
+    options = { ...options, listening: [] };
+    mockApi();
+    await renderRoute('/hubs/tyo-1/services');
+    expect(await screen.findByText('没有待发布的本机端口')).toBeTruthy();
+    expect(screen.getByText('节点上监听、但尚未发布为站点的本机端口；点击端口可预填站点抽屉。')).toBeTruthy();
+  });
+
+  it('错误态：读取运行状态失败时显示错误与重试，不误报为空', async () => {
+    options = { ...options, stateError: true };
+    mockApi();
+    await renderRoute('/hubs/tyo-1/services');
+    expect(
+      await screen.findByText('读取节点运行状态失败，无法显示本机监听端口。检查节点后重试。'),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+    expect(screen.queryByText('没有待发布的本机端口')).toBeNull();
+  });
+
+  it('离线：/state 未读取到状态时给出中性说明', async () => {
+    options = { ...options, stateRead: false };
+    mockApi();
+    await renderRoute('/hubs/tyo-1/services');
+    expect(await screen.findByText('节点运行状态未读取，暂时无法显示本机监听端口。')).toBeTruthy();
+  });
+
+  it('390：列表行仍显示端口与监听地址/协议，可点击预填', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    window.dispatchEvent(new Event('resize'));
+    withListening();
+    await renderRoute('/hubs/tyo-1/services');
+    await screen.findByText('本机监听端口');
+    await waitFor(() => expect(listeningCard().textContent).toContain('9000'));
+    const card = listeningCard();
+    const rows = [...card.querySelectorAll('.ui-list-row')].filter((row) =>
+      row.textContent?.includes('9000'),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const first = rows[0] as HTMLElement;
+    expect(first.textContent).toContain('9000');
+    expect(first.querySelector('.ui-list-meta-narrow')?.textContent).toContain('0.0.0.0');
+    expect(first.querySelector('.ui-list-meta-narrow')?.textContent).toContain('tcp');
+    expect(first.querySelector('.ui-list-side button')).toBeNull();
+    await userEvent.click(first);
+    expect(await screen.findByText('添加站点')).toBeTruthy();
+    expect(screen.getByText('127.0.0.1:9000')).toBeTruthy();
   });
 });

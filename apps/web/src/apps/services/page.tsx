@@ -42,7 +42,13 @@ import {
   type CaddySite,
   type CaddyStatus,
 } from '../../data/sites';
-import { classifyBackend, type BackendContext, type BackendInfo } from '../../data/services';
+import {
+  classifyBackend,
+  unpublishedListeningPorts,
+  type BackendContext,
+  type BackendInfo,
+  type ListeningPort,
+} from '../../data/services';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
@@ -52,6 +58,7 @@ import {
   Button,
   Card,
   EmptyState,
+  InlineError,
   PageHeader,
   Row,
   Stack,
@@ -67,6 +74,7 @@ import {
   createForm,
   editForm,
   siteBackendText,
+  siteSignature,
   validateSite,
   type SiteErrors,
   type SiteFormState,
@@ -250,6 +258,9 @@ export default function HubServicesPage() {
     .map((site) => ({ site }));
   const forwardRows: ForwardRowView[] = forwardConfig.forwards.map((forward) => ({ forward }));
   const otherSiteCount = config.sites.filter((site) => site.kind !== 'proxy').length;
+  const listeningPorts = unpublishedListeningPorts(stateQuery.data?.state?.ops, config.sites);
+  const listeningLoading = stateQuery.isLoading || caddyQuery.isLoading;
+  const listeningError = stateQuery.isError;
 
   const loading =
     caddyQuery.isLoading || (forwardConfigured !== false && !appsQuery.isLoading && forwardQuery.isLoading);
@@ -300,8 +311,13 @@ export default function HubServicesPage() {
     return hash;
   };
 
-  const openSiteCreate = () => {
-    setSiteForm(createForm());
+  const openSiteCreate = (upstreams?: string) => {
+    const form = createForm();
+    if (upstreams) {
+      form.upstreams = upstreams;
+      form.initial = siteSignature(form);
+    }
+    setSiteForm(form);
     setSiteErrors({});
     setSiteSaveError(null);
   };
@@ -622,6 +638,33 @@ export default function HubServicesPage() {
     { key: 'actions', type: 'actions', header: '', width: '56px' },
   ];
 
+  const listeningColumns: ColumnDef<ListeningPort>[] = [
+    {
+      key: 'port',
+      type: 'name',
+      header: zh.services.listeningColPort,
+      width: '28%',
+      value: (row) => String(row.port),
+      narrow: (row) => `${row.address} · ${row.proto}`,
+    },
+    {
+      key: 'address',
+      type: 'mono',
+      header: zh.services.listeningColAddress,
+      width: '40%',
+      value: (row) => row.address,
+      priority: 'low',
+    },
+    {
+      key: 'proto',
+      type: 'text',
+      header: zh.services.listeningColProto,
+      width: '18%',
+      value: (row) => row.proto,
+      priority: 'low',
+    },
+  ];
+
   const siteActions = (): ActionRef[] => [
     action('site.update'),
     action('site.copyAddress'),
@@ -664,7 +707,7 @@ export default function HubServicesPage() {
               label={zh.services.createSite}
               variant="primary"
               icon="plus"
-              onClick={openSiteCreate}
+              onClick={() => openSiteCreate()}
             />
           </Row>
         }
@@ -740,7 +783,7 @@ export default function HubServicesPage() {
                 label={zh.services.createSite}
                 variant="primary"
                 icon="plus"
-                onClick={openSiteCreate}
+                onClick={() => openSiteCreate()}
               />
             </Row>
           }
@@ -752,6 +795,35 @@ export default function HubServicesPage() {
           {fmt(zh.services.otherSites, { count: otherSiteCount })}
         </span>
       ) : null}
+
+      <Card title={zh.services.listeningTitle}>
+        {listeningError ? (
+          <Row gap={2}>
+            <InlineError message={zh.services.listeningLoadError} />
+            <Button label={zh.common.retry} size="sm" onClick={() => void stateQuery.refetch()} />
+          </Row>
+        ) : !listeningLoading && !stateRead ? (
+          <div className="ui-field-help">{zh.services.listeningUnread}</div>
+        ) : (
+          <Stack gap={2}>
+            {!listeningLoading && listeningPorts.length > 0 ? (
+              <span className="ui-field-help">{zh.services.listeningHint}</span>
+            ) : null}
+            <Table
+              rows={listeningLoading ? undefined : listeningPorts}
+              columns={listeningColumns}
+              rowKey={(row) => String(row.port)}
+              objectLabel={zh.services.listeningTitle}
+              empty={{
+                icon: 'activity',
+                title: zh.services.listeningEmpty,
+                description: zh.services.listeningHint,
+              }}
+              onRowOpen={(row) => openSiteCreate(`127.0.0.1:${row.port}`)}
+            />
+          </Stack>
+        )}
+      </Card>
 
       {siteForm ? (
         <SiteDrawer
