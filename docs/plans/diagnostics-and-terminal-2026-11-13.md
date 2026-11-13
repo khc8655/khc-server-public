@@ -1,8 +1,8 @@
 # 主机诊断增强与面板终端（提案）
 
-> 状态：已拍板（2026-11-13，按推荐值） ｜ 最后核验：2026-11-13（main `8779452`） ｜ 关联：`docs/diagnostics.md`、ADR-0007、`docs/security-boundaries.md`
+> 状态：已拍板（2026-11-13，按推荐值）；§8 评审增补待拍板 ｜ 最后核验：2026-11-13（main `8779452`） ｜ 关联：`docs/diagnostics.md`、ADR-0007、`docs/security-boundaries.md`
 
-> **执行者须知**：§7 已记录主人的决定。批次 1–3 已批准、可直接开工（§6），互不依赖，一个批次一个 PR。批次 4（面板终端）已原则批准，但**被 §7 第 6 条阻塞**——必须先在生产面板启用 TOTP 并由主人确认后才能开工；在此之前不要动批次 4 的代码。发现提案与代码不符时，在 PR 里提出，由规划者改提案，不要自行扩大范围。
+> **执行者须知**：§7 已记录主人的决定。批次 1–3 已批准、可直接开工（§6），互不依赖，一个批次一个 PR。批次 4（面板终端）已原则批准，但**被 §7 第 6 条阻塞**——必须先在生产面板启用 TOTP 并由主人确认后才能开工；在此之前不要动批次 4 的代码。发现提案与代码不符时，在 PR 里提出，由规划者改提案，不要自行扩大范围。**§8 是评审后的增补，逐条拍板前一律不实施**；拍板后由规划者把结论并入 §6、§7，执行者以 §6、§7 为准。
 
 ## 1. 背景
 
@@ -108,7 +108,7 @@ T-A 和 T-B 的核心风险相同：都允许从面板在节点上以 root 执�
 6. **审计**：开始、结束、时长写入 D1 `audit`。是否在节点本地记录完整输入（0600 文件，保留 7 天）作为待拍板项。
 7. **执行方式**：会话通过 `systemd-run --pty` 在 Agent 沙箱之外启动登录 shell，这样安装脚本才能写系统目录；会话结束即回收临时单元。
 8. **前端依赖**：解除 `ui-guidelines.md` §9 对终端模拟器的禁令，仅限终端页使用；xterm.js 按路由懒加载，不进主包。
-9. **传输**：浏览器直连节点主端口（与 `/_live/snapshot` 同一条路径和 Origin 校验），下行用流式响应，上行用 POST。不经过 Worker，不引入 Durable Objects 或 WebSocket。
+9. **传输**：浏览器直连节点主端口（与 `/_live/snapshot` 同一条路径和 Origin 校验），下行用流式响应，上行用 POST。不经过 Worker，不引入 Durable Objects 或 WebSocket。下行响应用 `Content-Type: text/event-stream`，Caddy 上 `/_term/*` 路由设 `flush_interval -1`，避免经 Caddy 与 Tunnel 时被缓冲导致输出卡顿。
 10. **凭据不落库**：终端输出不存储。安装后的端口由 T-C 的「发布本机端口」入口处理；账号密码由用户自行保存，面板不做正则抓取。
 
 ### 4.3 需要先核验的事实
@@ -117,7 +117,7 @@ T-A 和 T-B 的核心风险相同：都允许从面板在节点上以 root 执�
 
 ## 5. 范围与不做
 
-- 不做：持续高占用进程计数、Worker Cron 告警（§3.6 待拍板）、Peer 终端、IP 直连节点终端、终端输出存储与账密抓取、Durable Objects、WebSocket、把 sshd 暴露给 Worker 的路径（外部方案路径 B）。
+- 不做：持续高占用进程计数、Worker Cron 告警（§3.6 待拍板）、Peer 终端（第二期路径见 §8 R-7，待拍板）、IP 直连节点终端、终端输出存储与账密抓取、Durable Objects、WebSocket、把 sshd 暴露给 Worker 的路径（外部方案路径 B）。
 - 不改：核心 7 码、`lib/diagnostics/` 目录、D1 schema（审计复用 `audit` 表）。
 
 ## 6. 批次
@@ -127,7 +127,7 @@ T-A 和 T-B 的核心风险相同：都允许从面板在节点上以 root 执�
 | 1 | §3.3 主机诊断（含 Agent 新增 `oom`、`rootReadonly`、`memory_pressure` 字段）；§4.3 核验 | `agent/khc/ops.py`、`packages/contracts`（可选字段）、`apps/api/src/lib/app-diagnostics/host.ts`、`docs/diagnostics.md` | 7 类问题各有单测（含旧 Agent 不上报时跳过）；`lib/diagnostics/` 应用名 grep 断言仍通过；诊断响应 ≤ 64KB | 测试节点上：用 `fallocate` 把磁盘填到 > 85% 出现 `disk_full`，清理后消失；停一个测试单元使其 failed 出现 `units_failed`；§4.3 的真机结论写进 PR | Agent minor、面板 minor |
 | 2 | §3.4 进程 CPU 两次采样；§3.5 `logs.errors` 动词与「系统错误」分段 | `khc_host.py`（`SCRIPT_VERSION`）、`host_ops.py`、主机运维页、`page-specs.md` | 用 `yes > /dev/null` 起一个进程，列表 CPU% 接近 100；Peer 上 `logs.errors` 可读、写动词仍被拒；四态与 390 截图 | Hub 与 Peer 各一台 | Agent patch、面板 minor |
 | 3 | §4.1 T-C「发布本机监听端口」 | 站点页 / 对外服务页，复用 `caddy-site` 与站点抽屉 | 在测试节点起 `python3 -m http.server 9000`，面板列出 9000 并一键预填站点抽屉，保存并生效后外网可访问；已发布的端口不重复列出 | 1 台测试 Hub | 面板 minor |
-| 4（待 §7 拍板） | T-A 面板终端：ADR-0020、TOTP 前置校验、Agent `--enable-terminal` 与会话管理、终端票据、前端终端页 | Agent、Worker、契约、前端、`security-boundaries.md`、`ui-guidelines.md` §9 | §4.2 每一条都有对应测试或真机证据；未开启的节点签发票据被拒；TOTP 未启用时拒绝；空闲 10 分钟断开；会话内 `apt-get install -y htop` 成功 | 域名节点与 Tunnel 节点各一台 | Agent minor、面板 minor |
+| 4（待 §7 拍板） | T-A 面板终端：ADR-0020、TOTP 前置校验、Agent `--enable-terminal` 与会话管理、终端票据、前端终端页 | Agent、Worker、契约、前端、`security-boundaries.md`、`ui-guidelines.md` §9 | §4.2 每一条都有对应测试或真机证据；未开启的节点签发票据被拒；TOTP 未启用时拒绝；空闲 10 分钟断开；会话内 `apt-get install -y htop` 成功；Tunnel 节点上 `top` 流畅刷新（无明显成段卡顿） | 域名节点与 Tunnel 节点各一台 | Agent minor、面板 minor |
 
 批次 1–3 互不依赖，可以并行派发。批次 4 拍板后再细化，届时可能再拆成 2–3 个 PR。
 
@@ -141,3 +141,20 @@ T-A 和 T-B 的核心风险相同：都允许从面板在节点上以 root 执�
 6. **T-A 开工前置（阻塞项，只有主人能解除）**：先在生产面板启用 TOTP 并确认。未完成前批次 4 不开工。已登记到 `docs/plans/backlog.md`。
 
 批次 1–3 不受第 6 条影响，拍板即可派发。
+
+## 8. 评审增补（2026-11-13，待拍板）
+
+PR 评审时提出。方向与 §7 一致，补的是「报出问题之后能不能处理」「终端在真实网络下好不好用」和「VM 上装应用」三个缺口。每条给出选项和推荐；未拍板前不实施，也不阻塞批次 1–3 按 §6 现有范围开工。
+
+| # | 增补 | 选项 | 推荐 | 影响批次 |
+|---|---|---|---|---|
+| R-1 | **诊断附处理入口**：`units_failed` 卡片内直接显示该单元最后 20 行日志（已有只读动词 `svc.logs`），并提供「重启」按钮（已有动词 `svc.restart`，L2 确认） | A 做，`docs/diagnostics.md` §5 一键修复白名单由 3 个扩到 4 个（新增 `svc.restart`，不新增能力）；B 只显示日志，不给重启；C 不做，维持 §3.3「只给 hint」 | A | 1（前端与白名单）；动词已存在，Agent 不改 |
+| R-2 | **磁盘满时说明谁占的**：新增只读动词 `disk.top`，列出根分区下最大的 10 个目录，以及 journal、apt 缓存、docker 各自占用；`disk_full` 卡片链接到它 | A 只做 `disk.top`；B 再加两个写动作 `journal.vacuum`（`journalctl --vacuum-size=200M`）与 `apt.clean`（L2 确认，Peer 上拒绝）；C 不做 | A，B 留待真实需要时再加 | 2（`khc_host.py` 升 `SCRIPT_VERSION`） |
+| R-3 | **已发布应用的链路诊断**：对每个反代站点逐段判断：域名解析是否指向本节点（Worker 用 DoH 查询）→ 证书是否有效 → Caddy 到上游是否可达（`siteHealth`）→ 上游若属于某个 Peer，再看 WG 最近握手是否超过 3 分钟。输出一句结论，例如「grafana 打不开：office-vm 已 3 天没有 WG 握手」 | A 新增批次 5，Worker 侧派生（`app-diagnostics/site-chain.ts`），code 为 `khc.site.*`，只读、无一键修复；B 只在站点抽屉里显示分段状态，不进诊断；C 不做 | A | 新批次 5，只改 Worker 与前端；DoH 是 Worker 新增的出站请求，需在 PR 中说明 |
+| R-4 | **终端断线不杀进程**：浏览器断开后会话保留 10 分钟，Agent 保留最近 64KB 输出；同一面板重新打开终端时自动接回原会话。只有用户主动退出或空闲超时才回收临时单元。修订 §4.2 第 7 条「会话结束即回收」 | A 做（推荐）；B 维持断开即回收 | A。手机锁屏或网络抖动会把跑到一半的 apt 或安装脚本一起杀掉，留下半装状态 | 4 |
+| R-5 | **会话时长**：§4.2 第 5 条的 60 分钟总时长会打断编译类脚本 | A 去掉总时长，只保留空闲超时，「空闲」定义为 10 分钟内既无输入也无输出；B 总时长放宽到 4 小时；C 维持 60 分钟 | A | 4 |
+| R-6 | **输入记录会记下密码**（修订 §7 第 5 条）：脚本提示输入密码时，按键会落进 0600 文件 | A 只记录「回车前的整行」，提示符含 `password`、`passwd`、`密码` 等关键字后的那一行写为 `***`；B 只记录会话元数据（开始、结束、时长、退出码），不记输入；C 维持 §7 第 5 条原样 | A | 4 |
+| R-7 | **Peer（VM）终端第二期**：应用多半装在内网 VM 上。路径：VM 上安装只开终端的 Agent（`--enable-terminal --terminal-only`，只监听 WG 地址），Hub 的 Caddy 经 WG 把 `/_term/<peer>/` 反代过去，鉴权沿用同一种一次性票据。**不改 ADR-0007 的受限公钥** | A 批次 4 的 ADR-0020 预留此路径，第二期单独拍板实施；B 明确不做 | A | 4（仅 ADR 预留）；实施为后续批次 |
+| R-8 | **脚本库**：全局设置里保存常用一键脚本（名称 + 命令，不存任何凭据）；在节点上点一下即打开终端并自动输入该命令，交互部分由用户完成；结束后提示接到 T-C「发布本机端口」 | A 随批次 4 之后做（依赖终端）；B 不做 | A | 4 之后，前端 + D1 新表（需迁移，届时另附方案） |
+
+拍板方式：逐条回复选项即可（例如「R-1 A，R-2 A，R-6 B」）。规划者据此更新 §5、§6、§7，必要时拆出批次 5。
