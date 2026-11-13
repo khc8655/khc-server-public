@@ -93,6 +93,7 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `svc.list` | 读 | — | 只返回 failed 单元 + 面板受管单元（`caddy` / `khc-*` / `wg-quick@*`），不再枚举整机 running 服务 |
 | `svc.logs` | 读 | `{ unit, lines≤200 }` | `journalctl` 尾读，默认 100、上限 200 行 |
 | `svc.restart` | 写 | `{ unit }` | 受保护单元拒绝；重启后回读 `is-active` |
+| `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；返回时间、级别、脱敏后文本与条数；Peer 可读 |
 | `fw.show` | 读 | — | 只返回本系统管理的规则与 `table inet khc_fw` 状态；不再读取其他 nft 表或 iptables |
 | `fw.apply` | 写 | `{ rules, baseRev }` | 见 §5 |
 | `fw.confirm` | 写 | `{ token }` | 取消 60 秒回滚定时器 |
@@ -104,11 +105,16 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 
 `user` 默认 `root`；仅允许 `/etc/passwd` 中存在且有家目录的用户。
 
+Peer 放行 `PUBLIC_VERBS` 中除 `WRITE_VERBS` 外的全部只读动词（含 `logs.errors`）与 `svc.restart`；其余写动词在 `target != self` 时返回 `E_PEER_FORBIDDEN`。
+
 ### 4.1 进程只读
 
-- 生产路径：先执行一次 `ps -eo pid,ppid,%cpu,rss,uid,etimes --sort=-cpu|mem`，只对入选的
-  Top N 行读取 `/proc/<pid>/comm` 与 `cmdline`；不再逐 PID 全量读取 `/proc`（fixture 测试仍走
-  `_collect_processes_proc`）。
+- 生产路径：执行一次 `ps -eo pid,ppid,%cpu,rss,uid,etimes --sort=-cpu|mem` 取元数据，
+  对入选的 Top N 行读取 `/proc/<pid>/comm` 与 `cmdline`；不逐 PID 全量读取 `/proc`
+  （fixture 测试走 `_collect_processes_proc`）。
+- `cpu` 是同一请求内两次读取 `/proc/<pid>/stat` 的 `utime+stime` 求差，间隔 0.5 秒：
+  `差值 / (CLK_TCK × 0.5) × 100`，100 表示单核跑满；窗口内新建或退出的进程按 0 计。
+  两次采样之间用可注入的 `SLEEP`，测试不真的等待。
 - 面板默认只请求 Top 20；协议上限仍为 200，避免一次拉回整机进程表。
 - `processes` 不提供结束进程的动词；`E_PROTECTED` 仅保留给 `keys.*`。
 

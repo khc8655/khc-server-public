@@ -35,6 +35,7 @@ export type HostOpsVerb =
   | 'svc.list'
   | 'svc.logs'
   | 'svc.restart'
+  | 'logs.errors'
   | 'cron.list'
   | 'cron.set'
   | 'cleanup';
@@ -937,6 +938,54 @@ export function normalizeSvcLogs(data: unknown): HostOpsSvcLogs {
   return {
     unit: asString(record.unit) || '—',
     lines: rawLines.flatMap((line) => (typeof line === 'string' ? [line] : [])),
+  };
+}
+
+/** logs.errors：一条脱敏后的错误日志或内核 OOM 记录。 */
+export interface HostOpsLogEntry {
+  id: string;
+  time: number | null;
+  priority: string;
+  level: string;
+  message: string;
+  oom: boolean;
+}
+
+export interface HostOpsLogErrors {
+  windowHours: number;
+  count: number;
+  oomCount: number;
+  /** OOM 记录与错误日志合并成一张表，按时间倒序。 */
+  entries: HostOpsLogEntry[];
+}
+
+function normalizeLogEntryList(raw: unknown, oom: boolean, prefix: string): HostOpsLogEntry[] {
+  return (Array.isArray(raw) ? raw : []).flatMap((value, index) => {
+    const item = asRecord(value);
+    const message = asString(item.message);
+    if (!message) return [];
+    return [
+      {
+        id: `${prefix}-${index}`,
+        time: asNumber(item.time),
+        priority: asString(item.priority),
+        level: asString(item.level),
+        message,
+        oom,
+      },
+    ];
+  });
+}
+
+export function normalizeLogErrors(data: unknown): HostOpsLogErrors {
+  const record = asRecord(data);
+  const errors = normalizeLogEntryList(record.entries, false, 'err');
+  const oom = normalizeLogEntryList(record.oom, true, 'oom');
+  return {
+    windowHours: asNumber(record.windowHours) ?? 24,
+    count: errors.length,
+    oomCount: oom.length,
+    entries: [...oom, ...errors].sort((a, b) => (b.time ?? 0) - (a.time ?? 0)),
   };
 }
 
