@@ -643,6 +643,30 @@ export const agentStateSchema = z
   .passthrough();
 export type AgentState = z.infer<typeof agentStateSchema>;
 
+/**
+ * 控制面实测的 TLS 结论（GET /nodes/:id/state 附带）。
+ *
+ * Workers 拿不到握手对端证书的字段（fetch 与 cloudflare:sockets 都不暴露 peer cert），
+ * 但平台对 https 请求执行**完整且不可关闭**的校验（证书链 + 主机名 + 有效期），
+ * 所以「https endpoint 的 /state 能通」本身就是「此刻存在一张对该域名有效的受信证书」
+ * 的直接证据；带证书类报错的失败则是反证。这比读磁盘上的证书文件更接近事实——
+ * 外部反代 / Caddy / Tunnel 终结 TLS 的节点根本没有 Agent 侧的证书文件可读。
+ *
+ * - `verified`：https endpoint 探测成功 = 证书对当前主机名有效且受信
+ * - `failed`：探测失败且错误属于证书/TLS 类（过期、域名不匹配、不受信）
+ * - `none`：endpoint 是 http，未启用 TLS（不是"未签发"）
+ * - `unknown`：https endpoint 探测失败，但原因是网络/超时，无法判断证书
+ */
+export const tlsProbeSchema = z.object({
+  state: z.enum(['verified', 'failed', 'none', 'unknown']),
+  /** 实际被探测的接入地址（直连 endpoint 或隧道地址） */
+  endpoint: z.string(),
+  /** failed/unknown 时的失败原文，供展开详情查看 */
+  detail: z.string().nullable(),
+  checkedAt: z.number().int().nonnegative(),
+});
+export type TlsProbe = z.infer<typeof tlsProbeSchema>;
+
 /** GET /api/v1/nodes/:id/state */
 export const nodeStateResponseSchema = z.object({
   reachable: z.boolean(),
@@ -657,6 +681,8 @@ export const nodeStateResponseSchema = z.object({
    * Agent 基线并重新下发。旧 Agent 不回传 epoch 时不判定（视为待升级）。
    */
   epochStale: z.boolean().optional(),
+  /** 控制面实测的 TLS 结论；旧 Worker 不返回（前端回退到适配器/证书库口径） */
+  tls: tlsProbeSchema.nullable().optional(),
 });
 export type NodeStateResponse = z.infer<typeof nodeStateResponseSchema>;
 

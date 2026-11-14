@@ -215,6 +215,49 @@ describe('nodes CRUD（v3）', () => {
     expect(stored && 'lastStateJson' in stored).toBe(false);
   });
 
+  it('GET /state 附带控制面实测的 TLS 结论（https 探测成功 = verified）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    ctx.agent.handler = async () => ({
+      status: 200,
+      body: { ok: true, host: { hostname: 'hub-a' }, adapters: [], ports: [] },
+    });
+
+    const res = await ctx.app.request(`/api/v1/nodes/${id}/state`, { headers: authHeaders(cookie) }, ctx.env);
+    const body = (await res.json()) as { tls?: { state: string; endpoint: string; detail: string | null } };
+    // 拿到响应就说明平台对本节点的 HTTPS 做了完整校验并通过 → 证书有效
+    expect(body.tls?.state).toBe('verified');
+    expect(body.tls?.endpoint).toBe('https://hub.example.com:8443');
+    expect(body.tls?.detail).toBeNull();
+  });
+
+  it('GET /state 证书类失败 → tls.state=failed；网络类失败 → unknown（不冒充证书故障）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    const probe = async () => {
+      const res = await ctx.app.request(`/api/v1/nodes/${id}/state`, { headers: authHeaders(cookie) }, ctx.env);
+      return (await res.json()) as { tls?: { state: string; detail: string | null } };
+    };
+
+    ctx.agent.handler = async () => {
+      throw new HubUnreachableError('Hub 不可达', {
+        direct: 'fetch: 证书校验失败（节点可能使用自签名证书）: unable to verify',
+      });
+    };
+    const failed = await probe();
+    expect(failed.tls?.state).toBe('failed');
+    expect(failed.tls?.detail).toContain('证书校验失败');
+
+    ctx.agent.handler = async () => {
+      throw new HubUnreachableError('Hub 不可达', { direct: 'fetch: connect timeout' });
+    };
+    const unknown = await probe();
+    expect(unknown.tls?.state).toBe('unknown');
+    expect(unknown.tls?.detail).toContain('timeout');
+  });
+
   it('D-2/T2.2：/state 旧纪元判定（epoch 一致/不一致/旧 Agent 三态）', async () => {
     const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);

@@ -8,7 +8,7 @@
 域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录，只读选用已有记录，或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。
 
 
-选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，并在安装命令里自动带上 `--with-caddy --tls-cn=<域名>`（证书由 Caddy 自动申请 Let's Encrypt；默认**不带** `--tls`，Agent 自签证书 Worker 传输层不接受）。节点概况的「域名 / 证书状态」只认 Agent `caddy-site` 的实测结果，拿不到时显示「未知（Agent 未上报）」，不会用绿色兜底。
+选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，并在安装命令里自动带上 `--with-caddy --tls-cn=<域名>`（证书由 Caddy 自动申请 Let's Encrypt；默认**不带** `--tls`，Agent 自签证书 Worker 传输层不接受）。节点概况的「域名 / 证书状态」按**控制面实测 → Agent 站点探测 → 未知**三级判定：先看 `GET /nodes/:id/state` 附带的 `tls.state`（控制面对接入地址做完整 TLS 校验，探测成功即「证书对该域名有效且受信」），再退回 `caddy-site` 的站点健康，两者都没有证据才显示「未知」。这样 TLS 由外部反代 / Caddy / Cloudflare Tunnel 终结的节点不会再被误报成「未签发」（见 CHANGELOG 0.12.10）。
 
 ## 2. 配置步骤（设置页「Cloudflare DNS」分段）
 

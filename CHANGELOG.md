@@ -2,6 +2,15 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.12.10] - 2026-11-14
+
+### Fixed
+
+- 节点概况页「证书状态」不再误报「未签发」：TLS 由外部反代 / Caddy / Tunnel 终结的节点，域名 HTTPS 明明可用也会被判成未签发。
+- 判定改为「控制面实测 → Agent 站点探测 → 未知」三级：`GET /nodes/:id/state` 附带 `tls.state`（`verified/failed/none/unknown`），页面优先用它。
+- 证书类失败直接显示「证书校验失败：…」；接入地址非 https 显示「未启用 TLS」，不再与「未绑定域名」混为一谈。
+- 证书到期日在已知时（Agent 自报或证书库）一并显示，未知时不编造。
+
 ## [0.12.9] - 2026-11-14
 
 ### Fixed
