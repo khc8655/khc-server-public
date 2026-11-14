@@ -274,6 +274,61 @@ assert_rc "沿用的证书文件缺失时报错" "1"
 assert_contains "沿用的证书缺失时指出文件" "证书文件不存在或为空"
 
 # ---------------------------------------------------------------------------
+section "8. --acme-dns：provider 白名单、凭据前置检查、DNS-01 报告"
+# ---------------------------------------------------------------------------
+# 参数校验在读取任何系统状态之前完成，所以不需要预检环境即可断言。
+AD_HOME="$TMP/home-acmedns"; mkdir -p "$AD_HOME"
+printf 'cert' > "$TMP/ad-cert.pem"
+printf 'key' > "$TMP/ad-key.pem"
+
+# run_acme_dns [env...] -- [install.sh 参数...]
+# 注意：macOS 的 bash 3.2 在 set -u 下对空数组展开会报 unbound，所以用字符串拼接。
+run_acme_dns() {
+  local extra=""
+  while [ "$1" != "--" ]; do extra="$extra $1"; shift; done
+  shift
+  OUT="$(env -i PATH="$PATH" HOME="$AD_HOME" TMPDIR="$TMP" $extra \
+    /bin/bash "$INSTALL" "$@" 2>&1)"
+  RC=$?
+}
+
+run_acme_dns -- --acme-dns cloudflare
+assert_rc "--acme-dns 缺 --acme 被拒绝" "1"
+assert_contains "要求与 --acme 一起用" "需要与 --acme <域名> 一起使用"
+
+run_acme_dns -- --acme a.example.com --acme-dns godaddy --tls-cert "$TMP/ad-cert.pem" --tls-key "$TMP/ad-key.pem"
+assert_rc "未知 provider 被拒绝" "1"
+assert_contains "provider 白名单说明" "仅支持 cloudflare / route53"
+
+run_acme_dns -- --acme a.example.com --acme-dns cloudflare --tls-cert "$TMP/ad-cert.pem" --tls-key "$TMP/ad-key.pem"
+assert_rc "cloudflare 缺 CF_Token 被拒绝" "1"
+assert_contains "指出缺失的凭据变量" "CF_Token"
+assert_contains "凭据只从环境变量读" "凭据只从环境变量读"
+
+run_acme_dns AWS_ACCESS_KEY_ID=AKIAEXAMPLE -- --acme a.example.com --acme-dns route53 --tls-cert "$TMP/ad-cert.pem" --tls-key "$TMP/ad-key.pem"
+assert_rc "route53 缺 secret 被拒绝" "1"
+assert_contains "指出缺 AWS_SECRET_ACCESS_KEY" "AWS_SECRET_ACCESS_KEY"
+
+# 凭据齐全：预检应明确走 DNS-01（不需要入站 80/443），且不因缺 socat 而 FAIL。
+run_acme_dns CF_Token=dummy -- --check --user --insecure-http --prefix "$AD_HOME/prefix" \
+  --acme a.example.com --acme-dns cloudflare --tls-cert "$TMP/ad-cert.pem" --tls-key "$TMP/ad-key.pem"
+assert_rc "凭据齐全时预检通过" "0"
+assert_contains "预检标记 DNS-01 不占用 80/443" "ACME 走 DNS-01"
+
+# 未指定 --acme-dns 时预检应提示需要入站端口（避免运维以为 DNS-01 已是默认）。
+rm -f "$TMP/ad-cert.pem" "$TMP/ad-key.pem"
+printf 'cert' > "$TMP/ad-cert.pem"; printf 'key' > "$TMP/ad-key.pem"
+run_acme_dns -- --check --user --insecure-http --prefix "$AD_HOME/prefix" \
+  --acme a.example.com --tls-cert "$TMP/ad-cert2.pem" --tls-key "$TMP/ad-key2.pem"
+assert_contains "默认方式提示需要入站 443/80" "需要入站 443/80"
+
+# 已存在证书：跳过签发，但仍提示会安装续期 timer。
+printf 'cert' > "$TMP/ad-cert3.pem"; printf 'key' > "$TMP/ad-key3.pem"
+run_acme_dns -- --check --user --insecure-http --prefix "$AD_HOME/prefix" \
+  --acme a.example.com --tls-cert "$TMP/ad-cert3.pem" --tls-key "$TMP/ad-key3.pem"
+assert_contains "证书已存在时说明跳过签发并装 timer" "续期 timer"
+
+# ---------------------------------------------------------------------------
 section "汇总"
 # ---------------------------------------------------------------------------
 printf 'PASS=%s FAIL=%s\n' "$PASS" "$FAIL"
