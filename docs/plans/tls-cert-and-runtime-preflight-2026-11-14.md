@@ -1,6 +1,8 @@
 # TLS 证书落地与运行时前置检查（提案）
 
-> 状态：草案 ｜ 最后核验：2026-11-14 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/live-observation.md`、ADR-0010
+> 状态：**已拍板并全部分批实施**（2026-11-14）｜ 最后核验：2026-11-14 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/live-observation.md`、ADR-0010
+>
+> 四个批次的 PR：批次 1 #45、批次 4 #46、批次 3 #47、批次 2 #48。
 
 ## 1. 背景
 
@@ -130,10 +132,26 @@ A 的代价是每次 `/state` 多一次 TLS 握手；可用与 `/state` 相同�
 - 必测：`agent/tests/test_host_ops.py`；`./scripts/verify.sh`。
 - bump：`agent/VERSION` PATCH。
 
-## 8. 待拍板
+## 8. 拍板结果（2026-11-14）
 
-1. **P2 走 A 还是 B**：A 准确但要给 `/state` 加证书字段（契约变更，需单独评审）；B 一行文案，仍不回答「证书到底有没有」。
-2. **P2 的探测频率**：每次 `/state` 握手，还是仅在打开工作区时探一次（后者更省，但状态会滞后）。
-3. **P3 的凭据来源**：安装阶段从环境变量读（`CF_Token=... ./install.sh --acme-dns cloudflare`），还是改成交互提示。前者可脚本化，后者避免凭据进 shell history。
-4. **P1 的探测方式**：`systemctl show` 与 `/proc/<pid>/status` 二选一，还是两者都试（`systemctl` 在非 systemd 环境不可用）。
-5. **批次顺序**：批次 1 与 4 互不依赖可并行；批次 2、3 建议排在后面，因为都要动文档与截图。
+1. **P2 走 A（控制面实测）**：给 `/state` 增加**可选**字段 `tls`（`additive`，旧客户端/旧 Worker 双向兼容，不破坏既有契约）。落地时进一步收窄了范围——不是「读证书字段」（Workers 的 `fetch` 与 `cloudflare:sockets` **都不暴露 peer cert**），而是**用探测结果本身作证据**：平台对 https 请求做完整且不可关闭的校验，探测成功即「证书对该主机名有效且受信」，证书类失败即反证，网络类失败只能说未知。零额外握手、零外部依赖。见批次 2。
+2. **P2 的探测频率**：不额外探测——复用 `/nodes/:id/state` 已有的那次调用，页面每 10s 刷新即天然带上结论，不加缓存层也没有第二次握手。
+3. **P3 的凭据来源**：环境变量（可脚本化）。凭据缺失在**改动系统之前**就 `exit 1`，并在提示里给出可直接复制的 `CF_Token=... ./install.sh ...` 形式；凭据不写盘。
+4. **P1 的探测方式**：两条都试，顺序为 `/proc/<pid>` → `systemctl show -p User` → 回退用户名 `caddy`。`_find_process_uid` **优先返回非 root 候选**，避免误取适配器自己以 root 跑的 `caddy validate` 子进程。
+5. **批次顺序**：实际按 1 → 4 → 3 → 2 推进。1/3/4 都改 `agent/` 且都要 bump `VERSION`，同一行反复冲突，因此 4 堆叠在 1、3 堆叠在 4（#45 → #46 → #47，合并顺序固定）；批次 2 只动面板与契约，从 main 拉出独立合并（#48）。
+
+### 实施结果
+
+| 批次 | 内容 | PR | 门禁 |
+|---|---|---|---|
+| 1 | caddy-site manual 证书属主跟随 Caddy 运行用户；reload 失败复位 unit | #45 | 1074 tests |
+| 4 | host-ops 接入命令 python3 预检 + `E_RUNTIME_MISSING` | #46 | 1075 tests |
+| 3 | `install.sh --acme-dns`（DNS-01）+ systemd timer 续期 + 证书到期上报 | #47 | 1083 tests |
+| 2 | 证书状态以控制面实测为准（`tls.state` 四态） | #48 | 1071 py + 87 vitest files |
+
+### 仍未闭环
+
+- **批次 3 的 DNS-01 实签发与 `systemctl list-timers`** 需在有 root + 真实 DNS 凭据的节点上验证；本批次只覆盖了参数校验、预检报告与逻辑单测。
+- **批次 2 的 UI 截图**（浅色/深色/390 宽）未出图，四态由 jsdom 冒烟测试断言页脚渲染文本覆盖。
+- **`hk-nat` 节点**仍留在配置中（离线），保留或回滚待定。
+- **acme.sh 续期**：`unicom-cn-1` 现有证书是手工签发的，尚未安装 `khc-acme-renew.timer`；重跑一次带 `--acme` 的安装命令即可补上（证书已存在会跳过签发）。
