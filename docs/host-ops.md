@@ -225,6 +225,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 | `E_SSH_DENIED` | 公钥被拒 | 重新执行接入命令 |
 | `E_HOSTKEY_CHANGED` | 主机密钥变化 | 核对后在设置里重新确认指纹 |
 | `E_SCRIPT_MISSING` / `E_SCRIPT_OLD` | 脚本缺失/过旧 | 显示更新命令 |
+| `E_RUNTIME_MISSING` | 主机缺 `python3`，`khc-host` 的 shebang 无法执行 | 提示安装 `python3-minimal` 后重跑接入命令 |
 | `E_NO_PRIV` | 无 root（非 root Peer） | 仅可查看 |
 | `E_PROTECTED` / `E_LOCKOUT` / `E_LAST_KEY` | 护栏拦截 | 说明原因 |
 | `E_CONFLICT` | 防火墙已被他处修改 | 刷新后重试 |
@@ -236,7 +237,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 ## 9. 首次接入流程（每台 Peer 一次）
 
 1. 界面“运维”标签显示“未接入”，点“接入”；
-2. 界面展示**一条命令**（内含脚本、Hub 公钥、Hub WG IP，`gzip` + `base64` 内联，不依赖任何下载）；主人复制后在 Peer 上以 root 执行一次。命令完成：创建 `<ssh-user>`、写 sudoers（`visudo -c` 校验）、放置脚本、写入受限公钥；命令整体必须小于内核单参数上限（`MAX_ARG_STRLEN` 128 KiB），超过时返回 `E_COMMAND_TOO_LONG` 而不是给出一条必然失败的命令；
+2. 界面展示**一条命令**（内含脚本、Hub 公钥、Hub WG IP，`gzip` + `base64` 内联，不依赖任何下载）；主人复制后在 Peer 上以 root 执行一次。命令**首步做 `python3` 前置检查**，缺失时打印安装提示并以 `exit 90` 中止（不落地半截配置）；随后创建 `<ssh-user>`、写 sudoers（`visudo -c` 校验）、放置脚本、写入受限公钥；命令整体必须小于内核单参数上限（`MAX_ARG_STRLEN` 128 KiB），超过时返回 `E_COMMAND_TOO_LONG` 而不是给出一条必然失败的命令；
 3. 界面调用 `probe` 显示 Peer 主机密钥指纹，主人确认后写入配置（plan/apply）；
 4. 自动调用 `version` + `status`，成功即接入完成。
 
@@ -275,6 +276,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 
 ### 已知环境前提 / 限制
 
+- Peer 必须预装 `python3`（`khc-host` 的 shebang 是 `#!/usr/bin/env python3`）。接入命令已内建前置检查：缺失时直接中止并给出安装提示（`E_RUNTIME_MISSING`），不再等到第一次 `version` 调用才暴露、也不会被误报成 `E_SCRIPT_MISSING`。
 - Peer 必须开启 `PubkeyAuthentication yes`；接入命令不自动改 sshd（测试机默认关闭，需要运维开启后重启/reload ssh）。
 - 专用用户 `<ssh-user>` 的 shell 必须是可执行 shell（当前 `/bin/sh`）；`nologin` 会让 OpenSSH 的 forced command 返回 "This account is currently not available"。
 - `fw.apply` 最坏可能超过 6 秒，走 `call_task`；同步读动作仍为 6s 超时，超时返回 `E_SSH_TIMEOUT`，不重试。

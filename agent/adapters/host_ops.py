@@ -922,6 +922,11 @@ class HostOps(Adapter):
         steps = [
             "set -eu",
             "umask 077",
+            # khc-host 是 Python 脚本；缺 python3 时命令会“装完但永远跑不起来”，
+            # 之后每次调用都失败在 env: 'python3': No such file。投递前先拦下。
+            'if ! command -v python3 >/dev/null 2>&1; then '
+            'echo "khc-host 需要 python3：请先安装后重跑本命令（Debian/Ubuntu 可执行 '
+            'apt-get install -y python3-minimal）" >&2; exit 90; fi',
             "install -d -m 0755 /etc/khc-host",
             f"if id -u {user} >/dev/null 2>&1; then",
             f'  if ! grep -q "^{user}:" /etc/khc-host/original-shell 2>/dev/null; then',
@@ -1295,6 +1300,10 @@ class HostOps(Adapter):
             return "E_SSH_DENIED"
         if "connection refused" in stderr or "no route to host" in stderr or "connection closed" in stderr:
             return "E_SSH_TIMEOUT"
+        if "python3" in stderr and ("no such file" in stderr or "not found" in stderr):
+            # khc-host 的 shebang 找不到 python3：脚本文本没坏，缺的是运行时。
+            # 必须先于下面的通用 no such file 规则，否则会误报成「脚本不存在」。
+            return "E_RUNTIME_MISSING"
         if "no such file" in stderr or "command not found" in stderr or "khc-host" in stderr:
             return "E_SCRIPT_MISSING"
         if rc == 127:
