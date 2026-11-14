@@ -21,6 +21,7 @@ from adapters.caddy_site import (
     LIVE_GATEWAY_UPSTREAM,
     NO_SITES_COMMENT,
     CaddySite,
+    _find_process_uid,
     cert_covers_domain,
     classify_site_block,
     count_site_blocks,
@@ -299,6 +300,28 @@ class RenderTestBase(unittest.TestCase):
 
 
 class PureFunctionTests(unittest.TestCase):
+    def test_find_process_uid_prefers_non_root_candidate(self) -> None:
+        """适配器自己会以 root 调 caddy validate；瞬时子进程不能盖过真正的服务进程。"""
+
+        with tempfile.TemporaryDirectory() as proc_root:
+
+            def make(pid: str, comm: str, uid: int) -> None:
+                path = os.path.join(proc_root, pid)
+                os.makedirs(path)
+                with open(os.path.join(path, "comm"), "w", encoding="utf-8") as handle:
+                    handle.write(comm + "\n")
+                with open(os.path.join(path, "status"), "w", encoding="utf-8") as handle:
+                    handle.write(f"Name:\t{comm}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+
+            make("100", "caddy", 0)
+            make("101", "caddy", 999)
+            make("102", "nginx", 33)
+            self.assertEqual(_find_process_uid("caddy", proc_root), 999)
+
+            os.remove(os.path.join(proc_root, "101", "comm"))
+            self.assertEqual(_find_process_uid("caddy", proc_root), 0)
+            self.assertIsNone(_find_process_uid("ghost", proc_root))
+
     def test_normalize_domain(self) -> None:
         self.assertEqual(normalize_domain("Blog.Example.COM"), "blog.example.com")
         self.assertEqual(normalize_domain("a-b.example.com."), "a-b.example.com")
@@ -506,6 +529,36 @@ class RenderTests(RenderTestBase):
         snippet = [item for item in items if isinstance(item, CaddySnippet)][0].content
         self.assertIn(f"    tls {cert_file} {key_file}", snippet)
         self.assertEqual(os.path.dirname(cert_file), os.path.join(os.path.dirname(self.paths.caddy_dir), "khc-certs"))
+
+    def test_manual_tls_cert_files_follow_caddy_run_user(self) -> None:
+        """Caddy 以非 root 用户运行时，0600 root 的证书读不到 → reload 必失败。
+
+        证书文件必须 chown 给 Caddy 的实际运行用户。
+        """
+
+        fake_user = mock.Mock(pw_name="caddy", pw_uid=999, pw_gid=989)
+        fake_group = mock.Mock(gr_name="caddy")
+        with (
+            mock.patch("adapters.caddy_site._find_process_uid", return_value=999),
+            mock.patch("pwd.getpwuid", return_value=fake_user),
+            mock.patch("grp.getgrgid", return_value=fake_group),
+        ):
+            items = self.render(config(site(tls=manual_tls())))
+        cert_file = self.adapter.cert_path(self.ctx, "blog.example.com", "crt")
+        key_file = self.adapter.cert_path(self.ctx, "blog.example.com", "key")
+        files = {item.path: item for item in items if isinstance(item, File)}
+        self.assertEqual(files[cert_file].owner, "caddy")
+        self.assertEqual(files[cert_file].group, "caddy")
+        self.assertEqual(files[key_file].owner, "caddy")
+        self.assertEqual(files[key_file].group, "caddy")
+
+    def test_manual_tls_cert_files_stay_root_when_caddy_runs_as_root(self) -> None:
+        with mock.patch("adapters.caddy_site._find_process_uid", return_value=0):
+            items = self.render(config(site(tls=manual_tls())))
+        files = {item.path: item for item in items if isinstance(item, File)}
+        cert_file = self.adapter.cert_path(self.ctx, "blog.example.com", "crt")
+        self.assertIsNone(files[cert_file].owner)
+        self.assertIsNone(files[cert_file].group)
 
     def test_off_mode_uses_http_scheme(self) -> None:
         snippet = self.snippet(
