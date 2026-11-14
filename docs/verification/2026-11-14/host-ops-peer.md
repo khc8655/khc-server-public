@@ -12,7 +12,7 @@ Issue #34 的第二项：Peer 侧 `logs.errors` 是否可读、写动词是否�
 |---|---|
 | Hub | `oracle-x86-2`（`140.245.108.105`，WG `10.98.0.1`），面板节点 `nd_0500a03d6af5639b` |
 | Peer | `oracle-arm-1`（`10.98.0.2`，走本次新建的 `khc1` 隧道），接入用户 `khcops` |
-| 面板 | `0.12.8` |
+| 面板 | `0.12.8`（复测时为 `0.12.9`） |
 | Hub Agent | `0.1.46`（`host-ops` 报 `scriptVersion=1.5.3`；本仓库已是 1.5.4，说明 Hub 未升级） |
 
 ## 3. 接入过程实测
@@ -75,4 +75,17 @@ bash: line 1: /usr/bin/sudo: Argument list too long
 
 - #34 第二项（Peer 侧 `logs.errors` 只读 + 写动词拒绝）**已实测通过**。
 - 顺带发现并修复了阻断新 Peer 接入的 `Argument list too long`（面板 0.12.9 / Agent 0.1.48）。
-- 修复的端到端复测需先让 Hub 升级到 Agent 0.1.48（Hub 当前仍是 0.1.46，`scriptVersion=1.5.3`），升级后再执行一次 `onboard` + Peer 端执行，确认 49 KB 命令可直接跑通。
+
+## 7. 修复后的端到端复测
+
+面板 0.12.9 / Agent 0.1.48 部署完成后（`/api/v1/version` = `0.12.9`，commit `cd6fdbbc`），把 Hub 从 Agent `0.1.46` 拉取式升级到 `0.1.48`：
+
+| 步骤 | 结果 |
+|---|---|
+| `POST /nodes/:id/agent/upgrade`（0.1.48，`mode=system`） | `fromVersion=0.1.46`，升级后 `host-ops version` 报 `1.5.3 → 1.5.4` |
+| `onboard` 重新生成命令 | `scriptVersion=1.5.4`，**49,159 字节**（修复前 162,385） |
+| 在 Peer 上**原样**执行该命令（`bash -s` 喂入，内部仍是 `sudo bash -c '<49 KB>'`） | `khc-host 1.5.4 onboarded (sha256 4c9e02cd7eee)`，不再报 `Argument list too long` |
+| 升级后 `version` / `logs.errors` | Peer 报 `1.5.4`；`logs.errors` 仍 `ok=true count=13` |
+
+同一条命令在修复前必然失败、修复后一次跑通，闭环成立。
+
