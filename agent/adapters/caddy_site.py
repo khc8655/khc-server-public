@@ -108,6 +108,9 @@ APP_NAME = "caddy-site"
 VERSION = "1.2.0"
 CADDY_BIN = "caddy"
 CADDY_UNIT = "caddy.service"
+# 证书文件属主：Caddy 可能以非 root 用户运行（发行版 unit 默认 User=caddy）。
+CADDY_PROCESS_NAME = "caddy"
+CADDY_FALLBACK_USER = "caddy"
 DEFAULT_LISTEN_PORT = 443
 CERTS_DIRNAME = "khc-certs"
 STATE_FILENAME = "caddy-site-state.json"
@@ -224,6 +227,79 @@ def _inode_owner_command(proc_root: str, inodes: set[str]) -> str:
             except OSError:
                 return ""
     return ""
+
+
+def _find_process_uid(name: str, proc_root: str = "/proc") -> Optional[int]:
+    """按 comm 找到进程的 euid（找不到或读不到返回 None）。
+
+    Caddy 可能以非 root 用户运行（发行版 unit 默认 ``User=caddy``），
+    证书文件的属主要跟着它走，否则 0600 root 的私钥读不到。
+
+    适配器自己会以 root 调 ``caddy validate``/``caddy reload``，那些瞬时子进程
+    comm 同样是 ``caddy``。因此**优先返回非 root 的候选**，只有全是 root 时才返回 0。
+    """
+
+    try:
+        pids = [entry for entry in os.listdir(proc_root) if entry.isdigit()]
+    except OSError:
+        return None
+    first_uid: Optional[int] = None
+    for pid in pids:
+        try:
+            with open(os.path.join(proc_root, pid, "comm"), "r", encoding="utf-8", errors="replace") as handle:
+                if handle.read().strip() != name:
+                    continue
+            with open(os.path.join(proc_root, pid, "status"), "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("Uid:"):
+                        fields = line.split()
+                        if len(fields) > 1:
+                            uid = int(fields[1])
+                            if uid != 0:
+                                return uid
+                            first_uid = 0
+                        break
+        except (OSError, ValueError, IndexError):
+            continue
+    return first_uid
+
+
+def _user_group_for_uid(uid: int) -> tuple[Optional[str], Optional[str]]:
+    """uid -> (用户名, 主组名)；解析不出来就返回 (None, None)（保持 root）。"""
+
+    if uid <= 0:
+        return None, None
+    try:
+        import grp
+        import pwd
+
+        entry = pwd.getpwuid(uid)
+        try:
+            group = grp.getgrgid(entry.pw_gid).gr_name
+        except KeyError:
+            group = None
+        return entry.pw_name, group
+    except (KeyError, ImportError, OSError):
+        return None, None
+
+
+def _user_group_for_name(name: str) -> tuple[Optional[str], Optional[str]]:
+    """用户名 -> (用户名, 主组名)；用户不存在返回 (None, None)。"""
+
+    if not name or name == "root":
+        return None, None
+    try:
+        import grp
+        import pwd
+
+        entry = pwd.getpwnam(name)
+        try:
+            group = grp.getgrgid(entry.pw_gid).gr_name
+        except KeyError:
+            group = None
+        return entry.pw_name, group
+    except (KeyError, ImportError, OSError):
+        return None, None
 
 
 def _single_line(value: Any, field: str) -> str:
@@ -1880,8 +1956,13 @@ class CaddySite(Adapter):
         return sites
 
     def _certificate_files(self, ctx: Ctx, sites: list[dict[str, Any]]) -> list[File]:
-        """manual 模式把 PEM 落到 khc-certs/<domain>.crt|.key（0600），并按路径去重。"""
+        """manual 模式把 PEM 落到 khc-certs/<domain>.crt|.key（0600），并按路径去重。
 
+        属主跟随 Caddy 的运行用户：发行版 unit 默认 ``User=caddy``，
+        0600 root 的私钥它读不到，reload 会直接失败。
+        """
+
+        owner, group = self._caddy_owner(ctx)
         files: dict[str, File] = {}
         for site in sites:
             if site["tlsMode"] != "manual":
@@ -1900,8 +1981,30 @@ class CaddySite(Adapter):
                             details={"field": "sites", "path": path},
                         )
                     continue
-                files[path] = File(path, content, mode=0o600)
+                files[path] = File(path, content, mode=0o600, owner=owner, group=group)
         return list(files.values())
+
+    def _caddy_owner(self, ctx: Ctx) -> tuple[Optional[str], Optional[str]]:
+        """探测 Caddy 的运行用户/组，供证书文件 chown 使用。
+
+        顺序：进程 ``/proc/<pid>``（最准，Caddy 已被手工以其他用户拉起也能认）→
+        ``systemctl show ... -p User``（Caddy 尚未运行时读 unit 配置）→
+        发行版常见用户名回退。取不到就返回 ``(None, None)``，文件保持 root：
+        root 进程能读任何属主的文件，所以回退不会引入新故障。
+        """
+
+        uid = _find_process_uid(CADDY_PROCESS_NAME)
+        if uid is not None:
+            return _user_group_for_uid(uid)
+        result = ctx.run(
+            ["systemctl", "show", CADDY_UNIT, "-p", "User", "--value"],
+            check=False,
+        )
+        user = (result.stdout or "").strip().splitlines()
+        name = user[0].strip() if user else ""
+        if name:
+            return _user_group_for_name(name)
+        return _user_group_for_name(CADDY_FALLBACK_USER)
 
     # ------------------------------------------------------------------
     # Caddyfile 渲染辅助
@@ -2234,6 +2337,7 @@ class CaddySite(Adapter):
         if fallback.rc == 0:
             self._record_reload(ctx, ok=True, source="systemctl")
             return
+        unstuck = self._unstick_unit(ctx)
         error = f"caddy reload rc={result.rc}: {tail(result.stderr, 500)}"
         self._record_reload(ctx, ok=False, source="caddy", error=error)
         raise CommandFailed(
@@ -2243,8 +2347,21 @@ class CaddySite(Adapter):
                 "reloadStderr": tail(result.stderr),
                 "systemctlRc": fallback.rc,
                 "systemctlStderr": tail(fallback.stderr),
+                "unitRestarted": unstuck,
             },
         )
+
+    def _unstick_unit(self, ctx: Ctx) -> bool:
+        """reload 超时会把 unit 卡在 reloading，之后所有 reload 都不会生效。
+
+        systemd 在 reload 的控制进程被 kill 后不会自动复位，只能 restart。
+        """
+
+        state = ctx.systemctl("is-active", CADDY_UNIT, check=False)
+        current = (state.stdout or "").strip().splitlines()
+        if not current or current[0].strip() not in {"reloading", "activating", "deactivating"}:
+            return False
+        return ctx.systemctl("restart", CADDY_UNIT, check=False).rc == 0
 
     def _record_reload(self, ctx: Ctx, *, ok: bool, source: str, error: Optional[str] = None) -> None:
         path = self.state_path(ctx)
