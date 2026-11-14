@@ -17,7 +17,7 @@
     **只读、不自动接受**。
   - ``onboard``（读）：``{peerId?, host?, port?, user?}`` 返回 ``installCommand`` /
     ``uninstallCommand`` / ``publicKey`` / ``hubWgIp`` / ``scriptVersion`` /
-    ``expectedVersion``；接入命令内联 base64 脚本 + 受限 authorized_keys，不依赖下载。
+    ``expectedVersion``；接入命令内联 gzip+base64 脚本 + 受限 authorized_keys，不依赖下载。
   - ``call``（**写**，sync）：``{target: "self" | "<peerId>", verb, params}``；self 直接跑
     本地脚本，peer 用固定 SSH 参数（``-i/-p/BatchMode/IdentitiesOnly/
     StrictHostKeyChecking/UserKnownHostsFile/ConnectTimeout=4/ServerAlive*/ -T``），
@@ -70,6 +70,9 @@ PROBE_TIMEOUT = 8.0
 MAX_SSH_STDIN = 64 * 1024
 MAX_SSH_STDOUT = 1024 * 1024
 MANAGED_KEY_PREFIX = "khc-hub"
+# 接入命令是单条 shell 命令 = 一个 argv 元素；Linux MAX_ARG_STRLEN 为 128 KiB
+# （32 * PAGE_SIZE）。留 8 KiB 余量给环境指针，超出时必须报错而不是给出一条必然失败的命令。
+MAX_COMMAND_BYTES = 120 * 1024
 
 # peerId 只是配置里的 key（来自 WireGuard Peer 名，可能是中文/空格），不进任何 shell 命令，
 # 因此只限制长度与控制字符。
@@ -294,7 +297,7 @@ class HostOps(Adapter):
         "onboard": {
             "mode": "sync",
             "write": False,
-            "description": "生成 Peer 一键接入/卸载命令（内联 base64 脚本 + 受限 authorized_keys）",
+            "description": "生成 Peer 一键接入/卸载命令（内联 gzip+base64 脚本 + 受限 authorized_keys）",
         },
         "call": {
             "mode": "sync",
@@ -930,8 +933,8 @@ class HostOps(Adapter):
             "fi",
             f'usermod -s /bin/sh {user} >/dev/null 2>&1 || true',
             "install -d -m 0755 /usr/local/sbin",
-            'base64 -d > /usr/local/sbin/khc-host <<"KHC_SCRIPT"',
-            self._wrap_b64(script),
+            'base64 -d <<"KHC_SCRIPT" | gzip -dc > /usr/local/sbin/khc-host',
+            self._wrap_b64_gz(script),
             "KHC_SCRIPT",
             "chmod 0755 /usr/local/sbin/khc-host",
             'base64 -d > /etc/khc-host/config.json <<"KHC_CONFIG"',
@@ -990,6 +993,22 @@ class HostOps(Adapter):
         encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
         return "\n".join(encoded[index : index + 76] for index in range(0, len(encoded), 76))
 
+    @staticmethod
+    def _wrap_b64_gz(payload: str) -> str:
+        """接入命令里的脚本体：gzip 后 base64。
+
+        单条 shell 命令是一个 argv 元素，内核 ``MAX_ARG_STRLEN`` 上限 128 KiB；
+        脚本随版本增长，明文 base64 已到 150 KB 量级，直接 ``sudo bash -c '<脚本>'``
+        会失败在 ``Argument list too long``。压缩后约 1/4，留足余量。
+        """
+
+        import base64
+        import gzip
+
+        packed = gzip.compress(payload.encode("utf-8"), 9, mtime=0)
+        encoded = base64.b64encode(packed).decode("ascii")
+        return "\n".join(encoded[index : index + 76] for index in range(0, len(encoded), 76))
+
     def action_onboard(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         params = action_params(body)
         merged = self._config_from_body(body)
@@ -1030,6 +1049,14 @@ class HostOps(Adapter):
             script=script,
         )
         uninstall_command = self._uninstall_command(hub_id=hub_id, user=user)
+        too_long = len(install_command.encode("utf-8"))
+        if too_long > MAX_COMMAND_BYTES:
+            return self._err(
+                "E_COMMAND_TOO_LONG",
+                f"接入命令 {too_long} 字节，超过内核单参数上限（{MAX_COMMAND_BYTES} 字节），"
+                "请在 Hub 上把 Agent 升级到最新版本后重试",
+                peerId=peer_id or None,
+            )
         return self._ok(
             peerId=peer_id or None,
             host=host,

@@ -2,6 +2,13 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.12.9] - 2026-11-14
+
+### Fixed
+
+- Peer 接入命令改用 gzip + base64 内联脚本，体积从 162 KB 降到 49 KB，不再触发 `Argument list too long` 导致新 Peer 无法接入（Agent 0.1.48）。
+- 接入命令超过内核单参数上限时返回 `E_COMMAND_TOO_LONG`，不再给出一条必然失败的命令（Agent 0.1.48）。
+
 ## [0.12.8] - 2026-11-14
 
 ### Fixed

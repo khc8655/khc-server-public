@@ -229,13 +229,14 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 | `E_PROTECTED` / `E_LOCKOUT` / `E_LAST_KEY` | 护栏拦截 | 说明原因 |
 | `E_CONFLICT` | 防火墙已被他处修改 | 刷新后重试 |
 | `E_UNSUPPORTED` | 无 nft | 防火墙功能不可用 |
+| `E_COMMAND_TOO_LONG` | 接入命令超过单参数上限 | 升级 Hub 的 Agent 后重新生成 |
 
 `fw.apply` 可能超过 6 秒：走既有 `call_task`（mode=task），UI 轮询任务结果（见 `docs/host-ops-async.md`）。
 
 ## 9. 首次接入流程（每台 Peer 一次）
 
 1. 界面“运维”标签显示“未接入”，点“接入”；
-2. 界面展示**一条命令**（内含脚本、Hub 公钥、Hub WG IP，`base64` 内联，不依赖任何下载）；主人复制后在 Peer 上以 root 执行一次。命令完成：创建 `<ssh-user>`、写 sudoers（`visudo -c` 校验）、放置脚本、写入受限公钥；
+2. 界面展示**一条命令**（内含脚本、Hub 公钥、Hub WG IP，`gzip` + `base64` 内联，不依赖任何下载）；主人复制后在 Peer 上以 root 执行一次。命令完成：创建 `<ssh-user>`、写 sudoers（`visudo -c` 校验）、放置脚本、写入受限公钥；命令整体必须小于内核单参数上限（`MAX_ARG_STRLEN` 128 KiB），超过时返回 `E_COMMAND_TOO_LONG` 而不是给出一条必然失败的命令；
 3. 界面调用 `probe` 显示 Peer 主机密钥指纹，主人确认后写入配置（plan/apply）；
 4. 自动调用 `version` + `status`，成功即接入完成。
 
