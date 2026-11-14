@@ -93,6 +93,15 @@ if [ "$PROFILE" = "system" ]; then
   systemctl stop khc-agent.service 2>/dev/null || true
   systemctl disable khc-agent.service 2>/dev/null || true
   if [ -f "$UNIT_PATH" ]; then rm -f -- "$UNIT_PATH"; log "已删除 unit: $UNIT_PATH"; fi
+  # ACME 续期 timer（install.sh --acme / --acme-dns 创建）：连同 service 一起清掉。
+  # 证书文件本身保留——它可能还被 Caddy 或其它反代使用，删除属于破坏性动作。
+  for unit in khc-acme-renew.timer khc-acme-renew.service; do
+    systemctl disable --now "$unit" 2>/dev/null || true
+    if [ -f "/etc/systemd/system/$unit" ]; then
+      rm -f -- "/etc/systemd/system/$unit"
+      log "已删除 unit: /etc/systemd/system/$unit（证书文件保留）"
+    fi
+  done
   systemctl daemon-reload 2>/dev/null || true
 else
   systemctl --user stop khc-agent.service 2>/dev/null || true
