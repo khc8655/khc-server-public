@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import errno
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -1666,8 +1667,12 @@ class AdapterOnboardTests(AdapterTestBase):
         import re as _re
 
         blocks: list[str] = []
-        for match in _re.finditer(r'<<"(KHC_SCRIPT|KHC_CONFIG)"\n(.*?)\n\1', command, _re.S):
-            blocks.append(base64.b64decode(match.group(2).replace("\n", "")).decode("utf-8"))
+        for match in _re.finditer(r'<<"(KHC_SCRIPT|KHC_CONFIG)"[^\n]*\n(.*?)\n\1', command, _re.S):
+            raw = base64.b64decode(match.group(2).replace("\n", ""))
+            # 脚本体是 gzip（MAX_ARG_STRLEN 限制），配置是明文
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            blocks.append(raw.decode("utf-8"))
         return blocks
 
     def test_onboard_command_is_self_contained(self) -> None:
@@ -1701,6 +1706,25 @@ class AdapterOnboardTests(AdapterTestBase):
         # 外层单引号成对，内容不含裸单引号
         body = result["installCommand"][len("sudo bash -c '") : -1]
         self.assertNotIn("'", body)
+
+    def test_onboard_command_fits_single_argv(self) -> None:
+        """接入命令是单条 shell 命令 = 一个 argv 元素，必须小于内核 MAX_ARG_STRLEN（128 KiB）。"""
+
+        result = self.onboard(self.config("a"), {"peerId": "a"})
+        self.assertTrue(result["ok"], result)
+        size = len(result["installCommand"].encode("utf-8"))
+        self.assertLess(size, 131072, f"接入命令 {size} 字节会触发 Argument list too long")
+        self.assertLess(size, ADAPTER_MODULE.MAX_COMMAND_BYTES)
+        # 脚本体走 gzip，配置仍是明文 base64
+        self.assertIn('| gzip -dc > /usr/local/sbin/khc-host', result["installCommand"])
+        self.assertEqual(self._decode_blocks(result["installCommand"])[0], self.adapter.build_script())
+
+    def test_onboard_rejects_command_over_argv_limit(self) -> None:
+        # 不可压缩的高熵内容：gzip 也救不回来，必须显式报错而不是给一条必然失败的命令
+        with mock.patch.object(self.adapter, "build_script", return_value=os.urandom(160000).hex()):
+            result = self.onboard(self.config("a"), {"peerId": "a"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "E_COMMAND_TOO_LONG")
 
     def test_onboard_uses_first_time_params(self) -> None:
         result = self.onboard({"hubWgIp": "10.8.0.1", "hubId": ""}, {"host": "10.8.0.99", "user": "khcops"})

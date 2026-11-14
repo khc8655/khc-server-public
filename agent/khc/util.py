@@ -31,7 +31,7 @@ try:  # pragma: no cover - 非 Unix 平台没有 fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-VERSION = "0.1.47"
+VERSION = "0.1.48"
 
 # 版本协商（ADR-0013 / docs/engineering/release.md §1.1 兼容矩阵）：
 # 本 Agent 要求控制面面板最低版本。面板在每个 HMAC 请求里带 X-Khc-Panel-Version，
