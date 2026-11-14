@@ -149,9 +149,25 @@ A 的代价是每次 `/state` 多一次 TLS 握手；可用与 `/state` 相同�
 | 3 | `install.sh --acme-dns`（DNS-01）+ systemd timer 续期 + 证书到期上报 | #47 | 1083 tests |
 | 2 | 证书状态以控制面实测为准（`tls.state` 四态） | #48 | 1071 py + 87 vitest files |
 
+### 真机验证（2026-11-14 晚）
+
+用批次 3 的代码在**新加坡 NAT Peer**（`104.234.174.203`，Debian 12 / Python 3.11.2，可随意重装）上跑了完整 DNS-01：
+
+| 步骤 | 结果 |
+|---|---|
+| 不给凭据直接跑 | `exit 1`，提示 `需要环境变量凭据：CF_Token`，**`/opt/khc-agent` 未被创建**（证明在改动系统之前中止） |
+| `CF_Token=… --acme dns01-test.khc66.top --acme-dns cloudflare` | 签发成功：`CN=dns01-test.khc66.top`，issuer `Let's Encrypt YE2`，`notAfter=2027-02-12`，SAN 正确；未停 Agent/Caddy、未装 socat |
+| 证书落盘 | `/etc/khc-agent/tls/fullchain.pem` 0644 + `key.pem` **0600** |
+| 续期 timer | `khc-acme-renew.timer` `enabled` + `active`，`list-timers` 可见，24h 后首次触发 |
+| `systemctl start khc-acme-renew.service` | `Result=success` / `ExecMainStatus=0`，`acme.sh --cron` 输出 `Skipping. Next renewal time is: 2027-01-14`（ARI 窗口），不空转作废 |
+| `uninstall.sh --system --purge` | 两个 timer 单元一并删除、`list-timers` 中消失、配置与程序目录清空（证书材料留在 `~/.acme.sh`） |
+
+凭据在续期时是否可用也确认过：`dns_cf` 会把 token 写进 `~/.acme.sh/account.conf` 的 `SAVED_CF_Token`，`--cron` 不依赖环境变量。
+
+**联通云 `unicom-cn-1`（手工签发那张证书）**：原本既无 crontab 也无 timer，等于到期即失效。已补装同一套 `khc-acme-renew.{service,timer}`（`ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh`），`--cron` 空转到 `2027-01-12`；`Le_ReloadCmd` 仍是 `systemctl reload caddy`，续期后自动换证。该节点 Agent 仍是 **0.1.48**，所以面板的 `renewal.timerInstalled` 要等 Agent 升级到 0.1.51 才会显示。
+
 ### 仍未闭环
 
-- **批次 3 的 DNS-01 实签发与 `systemctl list-timers`** 需在有 root + 真实 DNS 凭据的节点上验证；本批次只覆盖了参数校验、预检报告与逻辑单测。
-- **批次 2 的 UI 截图**（浅色/深色/390 宽）未出图，四态由 jsdom 冒烟测试断言页脚渲染文本覆盖。
-- **`hk-nat` 节点**仍留在配置中（离线），保留或回滚待定。
-- **acme.sh 续期**：`unicom-cn-1` 现有证书是手工签发的，尚未安装 `khc-acme-renew.timer`；重跑一次带 `--acme` 的安装命令即可补上（证书已存在会跳过签发）。
+- **UI 截图**（浅色/深色/390 宽）由主人在面板上实拍确认，不在代码评审范围。
+- **`hk-nat` 已删除**：`wireguard` 应用 `rev 5 / appliedRev 5`，节点 `wg0` 只剩 `e2e-unicom-peer`（10.99.0.2）与 `sg-nat`（10.99.0.4）；删后复测 `http://106.74.24.207:2083/` = 200、`https://unicom-hub.khc66.top:8443/health` = 200。**香港 NAT 那台机器本身已下线（202.73.4.182:56686 不可达）**，无需再清理。
+- **`unicom-cn-1` 的 Agent 仍是 0.1.48**：四个批次的 Agent 侧改动（证书属主、python3 预检、`--acme-dns`、到期上报）都要等它升级到 0.1.51 才在线上生效；升级需重跑安装命令，属独立动作。
