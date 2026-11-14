@@ -754,6 +754,7 @@ export const zh = {
       E_SSH_DENIED: '公钥被拒绝，请重新执行接入命令。',
       E_HOSTKEY_CHANGED: '主机密钥已变化，请核对后重新确认指纹。',
       E_SCRIPT_MISSING: '主机上的运维脚本不存在，请重新执行接入命令。',
+      E_RUNTIME_MISSING: '主机缺少 python3，无法运行运维脚本，请先安装再重新执行接入命令。',
       E_SCRIPT_OLD: '主机上的运维脚本版本过旧，请执行更新命令。',
       E_NO_PRIV: '该主机没有管理员权限，仅可查看。',
       E_PROTECTED: '该操作被保护规则拦截。',
