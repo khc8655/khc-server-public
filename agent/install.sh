@@ -32,6 +32,9 @@ TLS_KEY_IN=""
 # 一键签发：证书缺失时用 acme.sh 自动申请（TLS-ALPN-01 走 443，失败回退 HTTP-01 走 80）。
 # 仅系统模式支持（443 需要 root）；已有证书时直接跳过。
 ACME_DOMAIN=""
+# DNS-01 签发（--acme-dns）：受限网络下 80/443 入站不可用时唯一的签发方式。
+# 取值与 agent/adapters/certificates.py 的 _PROVIDER_DNS 保持一致：cloudflare / route53。
+ACME_DNS=""
 # 明文 HTTP 只允许监听回环地址；监听其它地址必须显式 --insecure-http（仅测试）。
 INSECURE_HTTP=0
 
@@ -52,6 +55,13 @@ usage() {
   --tls-key FILE    与 --tls-cert 配对的私钥（PEM，建议 0600）
   --acme DOMAIN     证书缺失时自动用 acme.sh 签发到 --tls-cert/--tls-key（TLS-ALPN-01 走 443，
                     失败回退 HTTP-01 走 80；需系统模式 root，且域名已解析到本机、Cloudflare 为「仅 DNS」）
+  --acme-dns PROVIDER
+                    改用 DNS-01 签发（不占用 80/443，适合境内未备案/只开非标端口的节点）。
+                    PROVIDER 取 cloudflare 或 route53；凭据从环境变量读：
+                    cloudflare 需 CF_Token（可选 CF_Account_ID/CF_Zone_ID），
+                    route53 需 AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY（可选 AWS_SESSION_TOKEN）。
+                    例：CF_Token=xxx ./install.sh --acme a.example.com --acme-dns cloudflare
+                    无论用哪种方式签发，都会安装 khc-acme-renew.timer 每日检查续期。
   --insecure-http   允许在非回环地址上以明文 HTTP 监听（仅测试；生产禁用）
   --with-caddy      顺带安装系统包 caddy（已装则跳过）
   --with-wireguard  顺带安装系统包 wireguard-tools（已装则跳过）
@@ -103,6 +113,8 @@ while [ $# -gt 0 ]; do
     --tls-key=*) TLS_KEY_IN="${1#*=}" ;;
     --acme) ACME_DOMAIN="${2:?--acme 需要一个域名}"; shift ;;
     --acme=*) ACME_DOMAIN="${1#*=}" ;;
+    --acme-dns) ACME_DNS="${2:?--acme-dns 需要一个 provider}"; shift ;;
+    --acme-dns=*) ACME_DNS="${1#*=}" ;;
     --insecure-http) INSECURE_HTTP=1 ;;
     --tls-cn) TLS_CN="${2:?--tls-cn 需要一个参数}"; shift ;;
     --tls-cn=*) TLS_CN="${1#*=}" ;;
@@ -125,6 +137,22 @@ if [ -n "$ACME_DOMAIN" ]; then
   if [ -z "$TLS_CERT_IN" ] || [ -z "$TLS_KEY_IN" ]; then
     fail "--acme 需要与 --tls-cert/--tls-key 一起使用（证书写入这两个路径）"
   fi
+fi
+
+# --acme-dns 只认证书适配器认识的 provider；凭据缺失在改动系统之前就拦下，
+# 避免装完 acme.sh/socat 才发现环境变量没给。
+if [ -n "$ACME_DNS" ]; then
+  [ -n "$ACME_DOMAIN" ] || fail "--acme-dns 需要与 --acme <域名> 一起使用（DNS-01 仍要知道签发哪个域名）"
+  case "$ACME_DNS" in
+    cloudflare) ACME_DNS_REQUIRED="CF_Token" ;;
+    route53) ACME_DNS_REQUIRED="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY" ;;
+    *) fail "--acme-dns 仅支持 cloudflare / route53，收到: $ACME_DNS" ;;
+  esac
+  ACME_DNS_MISSING=""
+  for _cred in $ACME_DNS_REQUIRED; do
+    eval "[ -n \"\${$_cred:-}\" ]" || ACME_DNS_MISSING="$ACME_DNS_MISSING $_cred"
+  done
+  [ -z "$ACME_DNS_MISSING" ] || fail "--acme-dns $ACME_DNS 需要环境变量凭据：${ACME_DNS_MISSING# }（例：CF_Token=xxx ./install.sh --acme ... --acme-dns cloudflare；凭据只从环境变量读，不写盘）"
 fi
 
 if [ "$MODE" = "auto" ]; then
@@ -257,16 +285,25 @@ run_preflight() {
   if [ -n "$TRANSPORT_ERROR" ]; then
     ck_fail "$TRANSPORT_ERROR"
   elif [ -n "$TLS_CERT_IN" ]; then
-    ck_pass "控制通道使用 HTTPS（证书: $TLS_CERT_IN）"
+    ck_pass "控制通道使用 HTTPS（证书: ${TLS_CERT_IN}）"
   elif [ "$TLS" = "1" ]; then
     ck_warn "控制通道使用自签 HTTPS：控制面 Worker 不接受自签证书，仅本机测试可用"
   elif is_loopback_host "$HOST"; then
-    ck_pass "Agent 仅监听回环地址 $HOST（需经 Cloudflare 隧道 / 反代访问）"
+    ck_pass "Agent 仅监听回环地址 ${HOST}（需经 Cloudflare 隧道 / 反代访问）"
   else
-    ck_warn "明文 HTTP 监听 $HOST:$PORT（--insecure-http）：仅测试，生产禁用"
+    ck_warn "明文 HTTP 监听 $HOST:${PORT}（--insecure-http）：仅测试，生产禁用"
   fi
   if [ -n "$TLS_CN" ] && [ "$TLS" != "1" ]; then
     ck_warn "--tls-cn 仅用于自签证书（--tls-self-signed）；当前未启用自签，已忽略。域名 + 可信证书请用 --tls-cert/--tls-key"
+  fi
+  if [ -n "$ACME_DOMAIN" ]; then
+    if [ -n "$ACME_DNS" ]; then
+      ck_pass "ACME 走 DNS-01：provider=${ACME_DNS}，凭据环境变量齐全，不占用入站 80/443"
+    elif [ -s "$TLS_CERT_IN" ] && [ -s "$TLS_KEY_IN" ]; then
+      ck_pass "证书已存在，将跳过签发；续期 timer（khc-acme-renew.timer）仍会安装"
+    else
+      ck_warn "ACME 走 TLS-ALPN-01 → HTTP-01，需要入站 443/80；境内未备案或只开非标端口时改用 --acme-dns cloudflare"
+    fi
   fi
   if command -v wg >/dev/null 2>&1; then
     ck_pass "wg 已安装: $(command -v wg)"
@@ -409,7 +446,7 @@ HTTP-01 替代：~/.acme.sh/acme.sh --issue -d <证书域名> --standalone（需
     fi
     if [ ! -s "$TLS_KEY_IN" ]; then
       [ -n "$ACME_DOMAIN" ] && return 0
-      echo "私钥文件不存在或为空: $TLS_KEY_IN（与证书成对写入：acme.sh --install-cert --key-file 该路径）"
+      echo "私钥文件不存在或为空: ${TLS_KEY_IN}（与证书成对写入：acme.sh --install-cert --key-file 该路径）"
       return 0
     fi
     return 0
@@ -420,22 +457,107 @@ HTTP-01 替代：~/.acme.sh/acme.sh --issue -d <证书域名> --standalone（需
   echo "拒绝在 $HOST:$PORT 上以明文 HTTP 监听：控制通道会承载证书私钥与凭据。可选做法：①--tls-cert/--tls-key 使用可信证书（HTTPS 直连，推荐）；②--host 127.0.0.1 配合 Cloudflare 隧道；③仅测试时加 --insecure-http"
   return 0
 }
+
+# ---------------------------------------------------------------------------
+# ACME 辅助：provider 映射、acme.sh 定位、续期 timer
+# ---------------------------------------------------------------------------
+# provider -> acme.sh 的 dns 插件名。必须与 agent/adapters/certificates.py 的
+# _PROVIDER_DNS 保持一致（两处都改，否则面板签发与安装脚本会各说各话）。
+acme_dns_plugin() {
+  case "$1" in
+    cloudflare) printf 'dns_cf' ;;
+    route53) printf 'dns_aws' ;;
+    *) return 1 ;;
+  esac
+}
+
+# 定位 acme.sh：官方一键安装默认落在 ~/.acme.sh，通常不在 PATH。
+acme_binary() {
+  local candidate
+  for candidate in "$(command -v acme.sh 2>/dev/null || true)" \
+                   /root/.acme.sh/acme.sh "$HOME/.acme.sh/acme.sh" \
+                   /usr/local/bin/acme.sh /usr/bin/acme.sh; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ACME_RENEW_SERVICE="/etc/systemd/system/khc-acme-renew.service"
+ACME_RENEW_TIMER="/etc/systemd/system/khc-acme-renew.timer"
+
+# 续期载体是 systemd timer，不是 crontab：容器镜像里 cron 常装不上，而 Agent 本身
+# 就以 root + systemd 运行。acme.sh --cron 只在到期窗口内真正续签，多跑一次是空转。
+install_acme_renew_timer() {
+  local acme="$1"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    log "WARN: 无 systemctl，未安装自动续期；证书到期前请手工执行: $acme --cron"
+    return 0
+  fi
+  cat > "$ACME_RENEW_SERVICE" <<EOF
+[Unit]
+Description=khc-agent ACME 证书续期（acme.sh --cron）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$acme --cron --home $(dirname "$acme")
+Nice=10
+EOF
+  cat > "$ACME_RENEW_TIMER" <<'EOF'
+[Unit]
+Description=每日检查 khc-agent ACME 证书续期
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  chmod 0644 "$ACME_RENEW_SERVICE" "$ACME_RENEW_TIMER"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl enable --now khc-acme-renew.timer >/dev/null 2>&1; then
+    log "已启用自动续期: khc-acme-renew.timer（每日一次；systemctl list-timers 可查）"
+  else
+    log "WARN: 续期 timer 启用失败；请手工执行: systemctl enable --now khc-acme-renew.timer"
+  fi
+}
+
 # 一键签发（--acme）：证书缺失时用 acme.sh 申请并安装到 --tls-cert/--tls-key 路径。
-# 优先 TLS-ALPN-01（只占用 443），失败回退 HTTP-01（80）。已有证书直接跳过。
+# 优先 TLS-ALPN-01（只占用 443），失败回退 HTTP-01（80）；--acme-dns 走 DNS-01（不占端口）。
+# 已有证书直接跳过签发，但仍补齐续期 timer。
 acme_issue() {
   local domain="$1"
   [ -n "$domain" ] || return 0
   if [ -s "$TLS_CERT_IN" ] && [ -s "$TLS_KEY_IN" ]; then
     log "已存在证书，跳过 ACME 签发: $TLS_CERT_IN"
+    # 证书不重签，续期载体仍要补齐：缺 timer 的节点会在到期日静默失效。
+    local existing_acme
+    if [ "$PROFILE" = "system" ] && [ "$(id -u)" -eq 0 ] && existing_acme="$(acme_binary)"; then
+      install_acme_renew_timer "$existing_acme"
+    fi
     return 0
   fi
   [ "$PROFILE" = "system" ] || fail "--acme 仅支持系统模式（443 端口需要 root）；请改用 sudo 或手动准备证书"
   [ "$(id -u)" -eq 0 ] || fail "--acme 需要 root 权限"
   command -v curl >/dev/null 2>&1 || fail "自动签发需要 curl（未安装）"
 
-  # 443/80 需要独占：先停掉可能占用端口的 Agent 与 Caddy，签发完由安装流程重新启动。
-  systemctl stop khc-agent.service 2>/dev/null || true
-  systemctl stop caddy 2>/dev/null || true
+  # DNS-01 只靠出站 443 与 DNS 记录，不需要独占 80/443：不停服、不装 socat。
+  local dns_plugin=""
+  if [ -n "$ACME_DNS" ]; then
+    dns_plugin="$(acme_dns_plugin "$ACME_DNS")"
+    log "DNS-01 签发（provider=$ACME_DNS → ${dns_plugin}）：不占用 80/443，无需停服"
+  else
+    # 443/80 需要独占：先停掉可能占用端口的 Agent 与 Caddy，签发完由安装流程重新启动。
+    systemctl stop khc-agent.service 2>/dev/null || true
+    systemctl stop caddy 2>/dev/null || true
+  fi
 
   log "安装 acme.sh（需要出站 443）..."
   # acme.sh 安装器会注册续期 cron；干净 Debian 上缺 cron 会让安装器直接失败。
@@ -467,8 +589,8 @@ acme_issue() {
       fail "acme.sh 安装失败：请确认可出站访问 https://get.acme.sh（并安装 cron）"
     fi
   fi
-  # acme.sh 的 TLS-ALPN-01 依赖 socat；缺失时尽量自动装（白名单包）。
-  if ! command -v socat >/dev/null 2>&1; then
+  # acme.sh 的 TLS-ALPN-01 依赖 socat；DNS-01 不需要，跳过以免白装包。
+  if [ -z "$dns_plugin" ] && ! command -v socat >/dev/null 2>&1; then
     log "安装 socat（TLS-ALPN-01 需要）..."
     if command -v apt-get >/dev/null 2>&1; then
       (apt-get update -qq && apt-get install -y -qq socat) >/dev/null 2>&1 || true
@@ -487,11 +609,17 @@ acme_issue() {
   [ -x "$acme" ] || fail "acme.sh 未安装到预期路径（/root/.acme.sh/acme.sh）"
   "$acme" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
 
-  log "申请证书（TLS-ALPN-01，需要入站 443）: $domain"
-  if ! "$acme" --issue --alpn -d "$domain" --server letsencrypt; then
-    log "TLS-ALPN-01 失败，回退 HTTP-01（需要入站 80）: $domain"
-    "$acme" --issue --standalone -d "$domain" --server letsencrypt || fail \
-      "ACME 签发失败。请确认：① $domain 已 A/AAAA 解析到本机；② Cloudflare 代理为「仅 DNS」（橙云会拦截校验）；③ 入站 443（或回退时 80）可达；④ 出站 443 可用"
+  if [ -n "$dns_plugin" ]; then
+    log "申请证书（DNS-01 / ${ACME_DNS}，无需入站 80/443）: $domain"
+    "$acme" --issue --dns "$dns_plugin" -d "$domain" --server letsencrypt --keylength ec-256 \
+      || fail "ACME DNS-01 签发失败。请确认：① $domain 的 DNS 托管在 ${ACME_DNS}；② 凭据环境变量有效（${ACME_DNS_REQUIRED}）；③ 出站 443 可用；④ 手工执行 $acme --issue --dns $dns_plugin -d $domain 查看详细报错"
+  else
+    log "申请证书（TLS-ALPN-01，需要入站 443）: $domain"
+    if ! "$acme" --issue --alpn -d "$domain" --server letsencrypt; then
+      log "TLS-ALPN-01 失败，回退 HTTP-01（需要入站 80）: $domain"
+      "$acme" --issue --standalone -d "$domain" --server letsencrypt || fail \
+        "ACME 签发失败。请确认：① $domain 已 A/AAAA 解析到本机；② Cloudflare 代理为「仅 DNS」（橙云会拦截校验）；③ 入站 443（或回退时 80）可达；④ 出站 443 可用。入站 80/443 均不可达时改用 DNS-01：--acme-dns cloudflare"
+    fi
   fi
   install -d -m 0750 "$(dirname "$TLS_CERT_IN")"
   "$acme" --install-cert -d "$domain" \
@@ -501,6 +629,7 @@ acme_issue() {
     || fail "证书安装失败：$TLS_CERT_IN"
   chmod 0600 "$TLS_KEY_IN" 2>/dev/null || true
   log "证书已写入: $TLS_CERT_IN"
+  install_acme_renew_timer "$acme"
 }
 
 TRANSPORT_ERROR="$(transport_error)"

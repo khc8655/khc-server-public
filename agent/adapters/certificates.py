@@ -92,6 +92,11 @@ TLS_CERT_NAME = "fullchain.pem"
 TLS_KEY_NAME = "key.pem"
 MAX_KEY_BYTES = 64 * 1024
 
+#: 续期 timer（install.sh 的 --acme / --acme-dns 写入）。只读文件是否存在，不起子进程。
+RENEW_TIMER_PATH = "/etc/systemd/system/khc-acme-renew.timer"
+#: 控制通道证书剩余天数低于此值时上报「即将到期」（LE 有效期 90 天，留 30 天处置窗口）。
+EXPIRY_WARN_DAYS = 30
+
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _CA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/?=&%+~-]*$")
 _OPENSSL_ENDDATE_RE = re.compile(r"notAfter\s*=\s*(.+)")
@@ -147,6 +152,20 @@ def parse_openssl_enddate(text: Optional[str]) -> Optional[str]:
             moment = moment.replace(tzinfo=timezone.utc)
         return iso_utc(moment.timestamp())
     return None
+
+
+def days_until(not_after: Optional[str]) -> Optional[int]:
+    """把 ISO8601 到期时间换成剩余天数（向下取整；已过期返回负数；解析失败返回 None）。"""
+
+    if not not_after:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(not_after).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return int((moment - datetime.now(timezone.utc)).total_seconds() // 86400)
 
 
 def parse_subject_alt_names(text: Optional[str]) -> list[str]:
@@ -467,16 +486,56 @@ class Certificates(Adapter):
             openssl_ok = shutil.which(OPENSSL) is not None
             last = load_json(self._last_acme_path(ctx), default=None)
             last = last if isinstance(last, dict) else None
-            problems = self._problems(acme_ok=acme_ok, openssl_ok=openssl_ok, last=last)
+            tls = self._tls_state(ctx)
+            renewal = self._renewal_state()
+            problems = self._problems(
+                acme_ok=acme_ok, openssl_ok=openssl_ok, last=last, tls=tls, renewal=renewal
+            )
             return {
                 "installed": acme_ok,
                 "acme": {"installed": acme_ok},
                 "openssl": {"installed": openssl_ok},
                 "lastAcme": last,
+                "tls": tls,
+                "renewal": renewal,
                 "problems": problems,
             }
         except Exception as exc:  # noqa: BLE001 - 单个应用状态失败不能影响 /state
             return {"error": str(exc)}
+
+    def _tls_state(self, ctx: Ctx) -> dict[str, Any]:
+        """控制通道证书的落盘情况；只读文件 + openssl，不发网络探测。
+
+        面板只看得到证书库（D1）里的证书，`install.sh --acme` 直接写到本机路径的那张
+        从来不入库，于是没有任何地方会提醒它到期——这里补上。
+        """
+
+        enabled = bool(os.environ.get("KHC_TLS_CERT"))
+        cert_path = os.environ.get("KHC_TLS_CERT") or os.path.join(
+            ctx.config_dir, "tls", TLS_CERT_NAME
+        )
+        if not os.path.isfile(cert_path):
+            return {
+                "enabled": enabled,
+                "certPath": cert_path,
+                "present": False,
+                "notAfter": None,
+                "daysLeft": None,
+            }
+        not_after = self._cert_not_after(ctx, cert_path)
+        return {
+            "enabled": enabled,
+            "certPath": cert_path,
+            "present": True,
+            "notAfter": not_after,
+            "daysLeft": days_until(not_after),
+        }
+
+    @staticmethod
+    def _renewal_state() -> dict[str, Any]:
+        """续期载体是否存在。只看 timer 文件，不查 crontab（避免 /state 起子进程）。"""
+
+        return {"timer": RENEW_TIMER_PATH, "timerInstalled": os.path.isfile(RENEW_TIMER_PATH)}
 
     def _last_acme_path(self, ctx: Ctx) -> str:
         return os.path.join(ctx.data, "certificates", "last-acme.json")
@@ -501,6 +560,8 @@ class Certificates(Adapter):
         acme_ok: bool,
         openssl_ok: bool,
         last: Optional[Mapping[str, Any]],
+        tls: Optional[Mapping[str, Any]] = None,
+        renewal: Optional[Mapping[str, Any]] = None,
     ) -> list[dict[str, Any]]:
         problems: list[dict[str, Any]] = []
         if not acme_ok or not openssl_ok:
@@ -539,7 +600,57 @@ class Certificates(Adapter):
                         "evidence": {"reason": reason, "at": str(last.get("at") or "")},
                     }
                 )
+        problems.extend(self._expiry_problems(tls=tls, renewal=renewal))
         return problems
+
+    def _expiry_problems(
+        self,
+        *,
+        tls: Optional[Mapping[str, Any]],
+        renewal: Optional[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """控制通道证书的到期告警。
+
+        与 Worker 侧 `certificateProblems`（证书库）刻意分开：那条链路只看 D1 里的
+        证书，本机直写路径的证书它永远看不到，两者的码也不能混用，否则会重复计数。
+        """
+
+        if not isinstance(tls, Mapping) or not tls.get("present"):
+            return []
+        days = tls.get("daysLeft")
+        if not isinstance(days, int):
+            return []
+        if days > EXPIRY_WARN_DAYS:
+            return []
+        timer_ok = bool((renewal or {}).get("timerInstalled"))
+        cert_path = str(tls.get("certPath") or "")
+        expires = str(tls.get("notAfter") or "")
+        evidence = {"certPath": cert_path, "notAfter": expires, "daysLeft": days, "renewalTimer": timer_ok}
+        if days < 0:
+            return [
+                {
+                    "code": "tls_cert_expired",
+                    "severity": "error",
+                    "title": "控制通道证书已过期",
+                    "hint": (
+                        f"{cert_path} 已过期（{expires}）。控制面会拒绝该节点：请重新签发并"
+                        "install-cert 到同一路径，或执行 systemctl start khc-acme-renew.service 立即续期。"
+                    ),
+                    "evidence": dict(evidence, reason="expired"),
+                }
+            ]
+        hint = f"{cert_path} 将在 {days} 天后到期（{expires}），请确认续期成功。"
+        if not timer_ok:
+            hint += "未发现续期 timer（khc-acme-renew.timer），自动续期可能未生效。"
+        return [
+            {
+                "code": "tls_cert_expiring",
+                "severity": "warn",
+                "title": f"控制通道证书 {days} 天后到期",
+                "hint": hint,
+                "evidence": dict(evidence, reason="expiring"),
+            }
+        ]
 
     # ------------------------------------------------------------------
     # 自签实现
