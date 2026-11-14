@@ -25,7 +25,7 @@
 ### 1.1 一键复现
 
 ```bash
-cd <home>/Documents/alivm/khc-server
+cd <home>/Documents/khc-server
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/p0-verify-20261107.py
 # 可覆盖：--vm / --user <ssh-user> / --key <私钥路径> / --domain 203-0-113-10.sslip.io
 #        --le-crt / --le-key / --cloudflared / --skip-tunnel
