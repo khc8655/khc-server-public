@@ -62,6 +62,7 @@
 - `kind=proxy`：reverse_proxy（支持多上游/负载均衡/健康检查/路径路由）；`static`：root + file_server（browse/SPA/index）；`redirect`：redir。
 - `liveGateway=true`：站点内加 `handle /_live/* { reverse_proxy 127.0.0.1:8899 }`（6.4a 观测入口）。
 - TLS：`auto`（Caddy 自动 HTTPS，无 tls 指令）、`manual`（`tls cert key`）、`internal`（`tls internal`）、`off`（http:// 地址）。
+- `manual` 的证书文件写在 `<caddy 目录父级>/khc-certs/<域名>.crt|.key`，权限 0600；**属主跟随 Caddy 进程的实际运行用户**（先读 `/proc/<pid>`，再读 `systemctl show caddy.service -p User`，最后回退发行版常用的 `caddy` 用户）。取不到就保持 root——root 进程能读任意属主，回退不会引入新故障。Caddy 以非 root 运行时若不 chown，reload 会因私钥不可读直接失败。
 - HSTS/securityHeaders/compression/maxBodyBytes 生成对应 Caddy 指令；`headers` 原样注入（严格校验）。
 - 站点地址唯一性 `domain:port`；端口登记 enabled 站点的 tcp/<listenPort>。
 - BasicAuth 仅接受 bcrypt hash（`$2a/$2b/$2y`）；`hash_password` 动作保持不变。
@@ -96,7 +97,7 @@
 |---|---|---|
 | `caddy_service` | sync | 返回 Caddy version/unit active/config 路径/是否安装（只读） |
 | `caddy_validate` | sync | 返回 validate 结果与错误（只读） |
-| `caddy_reload` | sync/write | 重新 validate + reload；失败返回错误（不改文件） |
+| `caddy_reload` | sync/write | 重新 validate + reload；失败返回错误（不改文件）。reload 超时会把 unit 卡在 `reloading`，适配器此时主动 `restart` 复位并回传 `unitRestarted` |
 | `caddy_config` | sync | 返回主 Caddyfile + 托管片段（只读，用于诊断/导出） |
 | `caddy_import_scan` | sync | 扫描主 Caddyfile 中已存在但未托管的站点块（只读） |
 | `caddy_import_preview` | sync | 影子导入预览（只读）：将生成片段/摘除区间/import 追加/整树校验 |
