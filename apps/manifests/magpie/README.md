@@ -65,21 +65,14 @@ Caddy 反代由主人在面板里「发布本机端口」自行发布，脚本�
 
 证据见 `docs/verification/2026-11-15/magpie-app-manifest.md`。
 
-## 重新生成 manifest.json
+## 改了脚本之后
 
-改了 `install.sh` / `uninstall.sh` 后必须重算 sha256，否则节点侧校验会中止：
+`manifest.json` 里的 `scripts` 正文和 `sha256` 必须与磁盘脚本逐字节一致，节点侧才会执行；否则安装会中止。改完 `install.sh` / `uninstall.sh` 后跑：
 
 ```bash
-cd /Users/xk/Documents/khc-server
-python3 - <<'PY'
-import hashlib, json
-from pathlib import Path
-d = Path('apps/manifests/magpie')
-i = (d/'install.sh').read_text(); u = (d/'uninstall.sh').read_text()
-sha = lambda t: hashlib.sha256(t.encode()).hexdigest()
-p = json.loads((d/'manifest.json').read_text())
-p['manifest']['scripts'] = {'install': i, 'uninstall': u}
-p['manifest']['sha256'] = {'install': sha(i), 'uninstall': sha(u)}
-(d/'manifest.json').write_text(json.dumps(p, ensure_ascii=False, indent=2) + "\n")
-PY
+node scripts/verify-app-manifests.mjs --sync   # 按磁盘脚本回填 scripts + sha256
+node scripts/verify-app-manifests.mjs          # 复核，全绿再提交
 ```
+
+`--sync` 只改 `scripts` 和 `sha256` 两个字段，其余原样保留。这一步已接入 `verify.sh` 与 CI（`App manifests`），漏掉会直接红灯。
+

@@ -56,6 +56,11 @@ jobs:
       - name: D1 migrations (local)
         run: ./scripts/d1-migration-local-test.sh
 
+      # 应用脚本随安装请求下发到节点以应用用户身份执行：仓库里 review 的是 install.sh，
+      # 真正下发的是 manifest.json 里的内联正文，两者漂移就等于线上跑没 review 过的代码。
+      - name: App manifests
+        run: node scripts/verify-app-manifests.mjs
+
       # 走查卡点 1 防回归：Agent 代码改动必须 bump VERSION 并出包入库，杜绝"代码修了线上跑旧包"
       # 基线必须取本次 push 的起点（event.before）；用 origin/main 时它已等于 HEAD，
       # diff 恒为空，规则 1/2 从不触发。PR 用 base.sha，手动触发用上一提交。
