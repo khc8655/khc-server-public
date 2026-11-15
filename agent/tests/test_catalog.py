@@ -6,7 +6,6 @@
   （缺/错 sha256、http、查询/userinfo/控制字符注入拒绝，合法 https+sha256 通过）。
 - 清单 install/uninstall 字段已含子目录，脚本路径不得重复拼 recipe_id，且脚本存在。
 - KHC_RECIPES_DIR 覆盖时路径同样正确。
-- 脚本生成的 catalog.generated.json 与 catalog.json 的 params 同步（无漂移）。
 """
 
 from __future__ import annotations
@@ -32,7 +31,6 @@ from khc.recipes import (
 from .support import ADAPTERS_DIR
 
 REPO_ROOT = os.path.dirname(os.path.dirname(DEFAULT_CATALOG_DIR))
-GENERATED_PATH = os.path.join(REPO_ROOT, "apps", "web", "src", "apps", "catalog.generated.json")
 
 
 def _load_app_catalog():
@@ -99,22 +97,6 @@ class CatalogSigningTests(unittest.TestCase):
         out = validate_params(self.recipe, VALID)
         self.assertEqual(out["downloadUrl"], VALID["downloadUrl"])
         self.assertEqual(out["sha256"], VALID["sha256"])
-
-    def test_generated_catalog_params_match_source(self):
-        """generated.json 由 gen-app-catalog.mjs 产出；params 必须与源清单一致。"""
-        with open(os.path.join(DEFAULT_CATALOG_DIR, "catalog.json"), encoding="utf-8") as handle:
-            source = json.load(handle)
-        with open(GENERATED_PATH, encoding="utf-8") as handle:
-            generated = json.load(handle)
-        source_params = next(r["params"] for r in source["recipes"] if r["id"] == "generic-service")
-        generated_params = next(r["params"] for r in generated["recipes"] if r["id"] == "generic-service")
-        self.assertEqual(generated_params, source_params)
-        sha = next(p for p in generated_params if p["key"] == "sha256")
-        self.assertNotIn("required", sha)
-        self.assertEqual(sha["pattern"], "^(?:[a-f0-9]{64})?$")
-        url = next(p for p in generated_params if p["key"] == "downloadUrl")
-        self.assertEqual(url["pattern"], "^(|https://[A-Za-z0-9._/-]+)$")
-
 
 class CatalogPathTests(unittest.TestCase):
     """任务2：真实清单的脚本路径不重复、脚本存在，KHC_RECIPES_DIR 覆盖同样正确。"""

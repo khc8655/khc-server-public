@@ -38,6 +38,36 @@ function stubApi() {
       const url = String(input);
       requests.push(url);
       if (url === '/api/v1/nodes' && (!init || !init.method)) return json({ nodes: [node] });
+      if (url === '/api/v1/app-manifests' && (!init || !init.method)) {
+        return json({
+          appManifests: [
+            {
+              id: 'demo-echo',
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              manifest: {
+                name: '示例服务（假服务）',
+                version: '1.0.0',
+                runtime: { user: 'khc-app-demo', linger: true },
+                params: [
+                  {
+                    key: 'port',
+                    type: 'integer',
+                    label: '监听端口',
+                    default: 19090,
+                    min: 1024,
+                    max: 65535,
+                  },
+                ],
+                scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+                sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+                writes: [],
+              },
+            },
+          ],
+        });
+      }
       if (url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install') {
         return json({ ok: true, accepted: true, taskId: 'task-1', result: { taskId: 'task-1' } });
       }
@@ -90,7 +120,7 @@ function renderCatalog() {
   );
 }
 
-describe('P2 应用目录', () => {
+describe('应用目录（R1 运行时清单）', () => {
   beforeEach(stubApi);
   afterEach(() => {
     cleanup();

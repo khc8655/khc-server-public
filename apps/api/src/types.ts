@@ -2,6 +2,7 @@ import type { AuthUser } from '@khc/contracts';
 import type { AgentClient } from './lib/node-client';
 import type {
   AppConfigRepo,
+  AppManifestRepo,
   AuditRepo,
   CertificateRepo,
   NodeRepo,
@@ -55,6 +56,7 @@ export interface AppDeps {
   certs: CertificateRepo;
   settings: SettingsRepo;
   sshKeys: SshKeyRepo;
+  appManifests: AppManifestRepo;
   tunnels: TunnelRepo;
   agent: AgentClient;
   /** CF DNS 集成的可注入 fetch（测试 mock；生产缺省用全局 fetch，不触达真实 CF API） */

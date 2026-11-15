@@ -1390,3 +1390,130 @@ export const cfDnsRecordCreateForZoneRequestSchema = z.object({
 export type CfDnsRecordCreateForZoneRequest = z.infer<
   typeof cfDnsRecordCreateForZoneRequestSchema
 >;
+
+// ---------------------------------------------------------------------------
+// R1：应用清单（脚本正文存 D1，安装时由 Worker 随请求下发）
+// ---------------------------------------------------------------------------
+
+/** 脚本正文与哈希成对；哈希是脚本内容的 sha256，节点侧落盘前复核。 */
+export const appManifestScriptsSchema = z
+  .object({
+    install: z.string().min(1).max(64 * 1024),
+    uninstall: z.string().min(1).max(64 * 1024),
+  })
+  .strict();
+export type AppManifestScripts = z.infer<typeof appManifestScriptsSchema>;
+
+export const appManifestSha256Schema = z
+  .object({
+    install: agentSha256Schema,
+    uninstall: agentSha256Schema,
+  })
+  .strict();
+export type AppManifestSha256 = z.infer<typeof appManifestSha256Schema>;
+
+/** 运行身份：脚本与该用户起的进程都不是 root。 */
+export const appManifestRuntimeSchema = z
+  .object({
+    user: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^[a-z][a-z0-9_-]*$/, '运行用户必须是小写字母开头的 POSIX 用户名'),
+    linger: z.boolean().default(true),
+  })
+  .strict();
+export type AppManifestRuntime = z.infer<typeof appManifestRuntimeSchema>;
+
+export const appManifestParamSchema = z
+  .object({
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^[a-z][a-z0-9_]*$/, '参数名必须是小写字母开头'),
+    type: z.enum(['string', 'integer', 'boolean']),
+    label: z.string().trim().min(1).max(64).optional(),
+    default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    min: z.number().int().optional(),
+    max: z.number().int().optional(),
+    maxLength: z.number().int().positive().optional(),
+    pattern: z.string().max(256).optional(),
+    secret: z.boolean().optional(),
+  })
+  .strict();
+export type AppManifestParam = z.infer<typeof appManifestParamSchema>;
+
+/** 应用定义本体。未知字段一律拒绝，避免悄悄把可执行内容塞进库。 */
+export const appManifestDefinitionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(64),
+    version: z.string().trim().min(1).max(32),
+    runtime: appManifestRuntimeSchema,
+    params: z.array(appManifestParamSchema).max(32).default([]),
+    scripts: appManifestScriptsSchema,
+    sha256: appManifestSha256Schema,
+    writes: z.array(z.string().min(1).max(256)).max(32).default([]),
+  })
+  .strict();
+export type AppManifestDefinition = z.infer<typeof appManifestDefinitionSchema>;
+
+export const appManifestSchema = z.object({
+  id: z.string().min(1),
+  manifest: appManifestDefinitionSchema,
+  enabled: z.boolean(),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type AppManifest = z.infer<typeof appManifestSchema>;
+
+/** 写入请求：id 由前端给出（小写 slug），便于以后在面板里编辑同一条。 */
+export const createAppManifestRequestSchema = z
+  .object({
+    id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(48)
+      .regex(/^[a-z][a-z0-9-]*$/, '应用 id 必须是小写字母开头的 slug'),
+    manifest: appManifestDefinitionSchema,
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export type CreateAppManifestRequest = z.infer<typeof createAppManifestRequestSchema>;
+
+export const updateAppManifestRequestSchema = z
+  .object({
+    manifest: appManifestDefinitionSchema,
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+export type UpdateAppManifestRequest = z.infer<typeof updateAppManifestRequestSchema>;
+
+export const appManifestResponseSchema = z.object({ appManifest: appManifestSchema });
+export type AppManifestResponse = z.infer<typeof appManifestResponseSchema>;
+export const appManifestListResponseSchema = z.object({
+  appManifests: z.array(appManifestSchema),
+});
+export type AppManifestListResponse = z.infer<typeof appManifestListResponseSchema>;
+
+/**
+ * 安装动作的请求参数：只允许带 manifestId，由 Worker 从 D1 读出正文后注入
+ * params.manifest。浏览器直接传 manifest 正文会被拒绝（见 routes/apps.ts）。
+ */
+export const manifestActionParamsSchema = z
+  .object({
+    manifestId: z.string().trim().min(1).max(48),
+    values: z.record(z.string(), z.unknown()).default({}),
+    instance: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^[a-z][a-z0-9-]*$/, '实例名必须是小写 slug')
+      .optional(),
+  })
+  .passthrough();
+export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;

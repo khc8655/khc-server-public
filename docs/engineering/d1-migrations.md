@@ -1,16 +1,16 @@
 # D1 迁移 runbook
 
-> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：`docs/engineering/release.md`、ADR-0008
+> 状态：现行 ｜ 最后核验：2026-11-15 ｜ 关联：`docs/engineering/release.md`、ADR-0008
 > 范围：`migrations/` 到任意环境的执行顺序、命令与核对
 
 ## 原则
 
 - 迁移**只增不改**：新变更一律新增 `migrations/000N_*.sql`，不得修改已应用的文件。
-- 当前已应用的为 **0001–0012**（含生产）；新迁移从 0013 起。
+- 当前已应用的为 **0001–0012**（含生产）；0013 随本版本新增，新迁移从 0014 起。
 - 生产与"staging"是同一个 D1（`<d1-name>`，见 ADR-0008）——**对 remote 执行迁移就是直接改生产库**，执行前先备份/导出。
 - 根 `package.json` 的 `db:migrate:local/remote` 脚本只跑 `0001_init.sql`，**不能当作全量迁移命令**；0002 起按本手册逐个执行（修复脚本属代码改动，待主人拍板）。
 
-## 迁移清单（0001–0012）
+## 迁移清单（0001–0013）
 
 | # | 文件 | 内容 | 备注 |
 |---|---|---|---|
@@ -26,6 +26,7 @@
 | 0010 | `0010_node_access.sql` | `nodes` 加 `access_mode` / `tunnel_id` / `allow_insecure` 列；新增 `tunnels` 表 | 全局接入配置（域名/Tunnel/IP 直连）与隧道配置（Token 密文；2026-11-07 已对生产执行） |
 | 0011 | `0011_cert_acme_meta.sql` | `certificates` 加 `acme_provider` / `acme_credential_key` / `acme_ca` / `acme_key_type` 列 | 证书一键续期的 ACME 元数据（2026-11-07 新增；**生产已应用**，2026-11-10 用 `PRAGMA table_info(certificates)` 复核四列存在） |
 | 0012 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json` 列 | 明文摘要（只含模式与计数）供 `GET /nodes` 零解密派生；旧行 NULL 时回退解密，一次性回填后不再发生（2026-11-11 新增；**生产已应用**） |
+| 0013 | `0013_app_manifests.sql` | 新增 `app_manifests` 表 | 全局应用清单（脚本正文 + 元数据，只存配置；2026-11-15 新增） |
 
 ## 执行命令
 

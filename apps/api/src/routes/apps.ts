@@ -24,6 +24,7 @@ import { nodeToken, requireNode } from './helpers';
 import { resolveSecretRefs } from '../lib/secret-refs';
 import { assertSecureChannelForSecrets } from '../lib/secure-channel';
 import { redactAgentEnvelope } from '../lib/redact';
+import { resolveManifestParams } from '../lib/app-manifests';
 import { throwAgentError } from './nodes';
 
 /** 内置动作 + 适配器自定义动作（如 client_config / rotate_peer） */
@@ -207,6 +208,9 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
     // 含 $cert/$dnsCred 引用且存在明文候选通道时拒绝（HMAC 不提供保密性），不调用 Agent。
     assertSecureChannelForSecrets(c.env, node, record?.config, body.params);
     // 转发前解析 $cert / $dnsCred 占位符（只发生在内存；缺失即 400，不调用 Agent）
+    // R1：带 manifestId 的动作，从 D1 读出脚本正文附上；浏览器直传正文会被拒绝。
+    // 按字段做通用注入，路由不认识任何应用名。
+    const resolvedParams = (await resolveSecretRefs(deps, body.params)) as Record<string, unknown>;
     const payload = {
       config: (await resolveSecretRefs(deps, record?.config ?? {})) as Record<string, unknown>,
       expectRev: record?.rev ?? 0,
@@ -214,7 +218,7 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       // 清除 appliedRev 基线，让节点重建/恢复后的低 rev 重新下发不再 409。
       // 旧 Agent（0.1.12）忽略未知字段，不受影响。
       ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
-      params: (await resolveSecretRefs(deps, body.params)) as Record<string, unknown>,
+      params: await resolveManifestParams(deps, resolvedParams),
       idempotencyKey,
     };
 

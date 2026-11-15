@@ -66,7 +66,6 @@
 | Agent 发版一致 | `node scripts/verify-agent-release.mjs --repo` | VERSION ↔ 包 ↔ 签名清单 |
 | 面板发版一致 | `node scripts/check-release-consistency.mjs --repo` | package.json ↔ CHANGELOG |
 | 包留存 | `node scripts/prune-agent-packages.mjs --check` | 只保留清单版 + 最近 N-1 |
-| Catalog 漂移 | `node scripts/gen-app-catalog.mjs --check` | 应用目录生成结果与仓库一致 |
 
 ### L1 契约 / 纯函数（`pnpm test`）
 

@@ -22,6 +22,7 @@ import { backupRoutes } from './routes/backup';
 import { agentLifecycleRoutes } from './routes/agent_lifecycle';
 import { cfDnsRoutes } from './routes/cfDns';
 import { sshKeyRoutes } from './routes/sshKeys';
+import { appManifestRoutes } from './routes/appManifests';
 import { tunnelRoutes } from './routes/tunnels';
 import { readBuildInfo } from './lib/build-info';
 // 版本号唯一来源是仓库根 package.json（ADR-0013），这里不再硬编码。
@@ -163,6 +164,7 @@ export function createApp(deps: AppDeps): Hono<AppBindings> {
   app.route('/api/v1', certificateRoutes(deps));
   app.route('/api/v1', settingsRoutes(deps));
   app.route('/api/v1', sshKeyRoutes(deps));
+  app.route('/api/v1', appManifestRoutes(deps));
   app.route('/api/v1', tunnelRoutes(deps));
   app.route('/api/v1', liveRoutes(deps));
   app.route('/api/v1', snapshotRoutes(deps));

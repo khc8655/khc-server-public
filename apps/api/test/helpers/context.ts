@@ -4,6 +4,7 @@ import type { AgentCallOptions, AgentClient, AgentNode, AgentResponse } from '..
 import type { CfFetch } from '../../src/lib/cf-dns';
 import {
   MemoryAppConfigRepo,
+  MemoryAppManifestRepo,
   MemoryAuditRepo,
   MemoryCertificateRepo,
   MemoryNodeRepo,
@@ -58,6 +59,7 @@ export interface TestContext {
   certs: MemoryCertificateRepo;
   settings: MemorySettingsRepo;
   sshKeys: MemorySshKeyRepo;
+  appManifests: MemoryAppManifestRepo;
   tunnels: MemoryTunnelRepo;
   /** 默认的可编程假 Agent（现有测试通过 .handler / .requests 驱动） */
   agent: FakeAgentClient;
@@ -72,6 +74,7 @@ export function makeTestContext(cfFetch?: CfFetch, agentOverride?: AgentClient):
   const certs = new MemoryCertificateRepo();
   const settings = new MemorySettingsRepo();
   const sshKeys = new MemorySshKeyRepo();
+  const appManifests = new MemoryAppManifestRepo();
   const tunnels = new MemoryTunnelRepo();
   const agent = new FakeAgentClient();
   const agentClient = agentOverride ?? agent;
@@ -82,6 +85,7 @@ export function makeTestContext(cfFetch?: CfFetch, agentOverride?: AgentClient):
     certs,
     settings,
     sshKeys,
+    appManifests,
     tunnels,
     agent: agentClient,
     cfFetch,
@@ -94,7 +98,7 @@ export function makeTestContext(cfFetch?: CfFetch, agentOverride?: AgentClient):
     // 默认没有随部署发布的签名清单（404），走 secret 兜底；测试可按需替换。
     ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
   } as unknown as Env;
-  return { app, env, nodes, apps, audit, certs, settings, sshKeys, tunnels, agent, agentClient };
+  return { app, env, nodes, apps, audit, certs, settings, sshKeys, appManifests, tunnels, agent, agentClient };
 }
 
 /** 登录并返回 Cookie 头（含 name=value） */

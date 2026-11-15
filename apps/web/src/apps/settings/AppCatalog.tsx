@@ -1,14 +1,16 @@
 /**
- * 设置 → 应用目录（P2）。
+ * 设置 → 应用目录（R1 起运行时读取 D1 应用清单）。
  *
- * 数据来源：构建期生成的 catalog.generated.json（由 agent/recipes/catalog.json 派生）。
- * 安装：POST /nodes/<hubId>/apps/app-catalog/recipe_install → 后台任务 → 手动刷新进度（不轮询）。
+ * 数据来源：GET /api/v1/app-manifests（不再构建期生成），新增脚本不发版即可出现。
+ * 安装：POST /nodes/<hubId>/apps/app-catalog/recipe_install 带 manifestId，
+ * Worker 从 D1 读出正文附到请求里；后台任务 → 手动刷新进度（不轮询）。
  * access 卡片只存在于任务结果，不写 D1；密码字段以 password 输入，不进入日志。
  */
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { TaskResponse } from '@khc/contracts';
-import catalog from '../catalog.generated.json';
+import { appManifestsQueryOptions } from '../../data/appManifests';
+import type { AppManifest } from '@khc/contracts';
 import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import { hubsQueryOptions } from '../../data/queries';
 import { action } from '../../registry/actions';
@@ -72,7 +74,28 @@ interface InstalledEntry {
   accessCount?: number;
 }
 
-const recipes = (catalog as { recipes: CatalogRecipe[] }).recipes;
+function toCatalogRecipe(item: AppManifest): CatalogRecipe {
+  return {
+    id: item.id,
+    name: item.manifest.name,
+    version: item.manifest.version,
+    description: `运行用户 ${item.manifest.runtime.user}`,
+    requiresRoot: false,
+    params: item.manifest.params.map((param) => ({
+      key: param.key,
+      label: param.label,
+      type: param.type,
+      default: param.default,
+      required: param.default === undefined,
+      min: param.min,
+      max: param.max,
+      maxLength: param.maxLength,
+      pattern: param.pattern,
+      secret: param.secret,
+    })),
+    access: [],
+  };
+}
 
 function defaultValues(recipe: CatalogRecipe): Record<string, unknown> {
   const values: Record<string, unknown> = {};
@@ -157,6 +180,7 @@ function validateValues(
 
 export function AppCatalog() {
   const hubsQuery = useQuery(hubsQueryOptions());
+  const manifestsQuery = useQuery(appManifestsQueryOptions());
   const toast = useToast();
   const [target, setTarget] = useState<CatalogRecipe | null>(null);
   const [nodeId, setNodeId] = useState('');
@@ -166,6 +190,10 @@ export function AppCatalog() {
   const [task, setTask] = useState<TaskResponse | null>(null);
   const [uninstallTarget, setUninstallTarget] = useState<CatalogRecipe | null>(null);
   const [uninstallError, setUninstallError] = useState<string | null>(null);
+
+  const recipes = (manifestsQuery.data ?? [])
+    .filter((item) => item.enabled)
+    .map(toCatalogRecipe);
 
   const nodes = (hubsQuery.data ?? []).map((node) => ({
     value: node.id,
@@ -224,7 +252,7 @@ export function AppCatalog() {
     setError(null);
     try {
       const envelope = await runAppAction(nodeId, 'app-catalog', 'recipe_install', {
-        recipeId: target.id,
+        manifestId: target.id,
         values,
       });
       if (!envelope.ok) {
@@ -265,7 +293,7 @@ export function AppCatalog() {
     setUninstallError(null);
     try {
       const envelope = await runAppAction(nodeId, 'app-catalog', 'recipe_uninstall', {
-        recipeId: uninstallTarget.id,
+        manifestId: uninstallTarget.id,
         values: defaultValues(uninstallTarget),
       });
       if (!envelope.ok) {
@@ -380,7 +408,7 @@ export function AppCatalog() {
       </Card>
 
       <Table
-        rows={hubsQuery.isLoading ? undefined : recipes}
+        rows={hubsQuery.isLoading || manifestsQuery.isLoading ? undefined : recipes}
         columns={columns}
         rowKey={(recipe) => recipe.id}
         objectLabel={zh.catalog.colName}

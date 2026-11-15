@@ -1,5 +1,5 @@
-import type { AppConfigRecord, AppConfigSummaryRow, AppSummaryRow, AuditEntry, AuditRepo, NodeRepo, NewNode, NodePatch, StoredNode, AppConfigRepo, PutAppConfigInput, RevisionRecord, NewSshKey, SshKeyRepo, NewTunnel, TunnelPatch, TunnelRecord, TunnelRepo } from '../../src/domain/repos';
-import type { SshKey } from '@khc/contracts';
+import type { AppConfigRecord, AppConfigSummaryRow, AppSummaryRow, AuditEntry, AuditRepo, NodeRepo, NewNode, NodePatch, StoredNode, AppConfigRepo, PutAppConfigInput, RevisionRecord, NewSshKey, SshKeyRepo, NewTunnel, TunnelPatch, TunnelRecord, TunnelRepo, AppManifestRepo, NewAppManifest, AppManifestPatch } from '../../src/domain/repos';
+import type { AppManifest, SshKey } from '@khc/contracts';
 import { newEpoch } from '../../src/lib/ids';
 import { summarizeAppConfig } from '../../src/lib/node-summary';
 
@@ -338,6 +338,53 @@ export class MemorySshKeyRepo implements SshKeyRepo {
     const current = this.rows.get(id);
     if (!current) return null;
     const updated = { ...current, name, updatedAt: now() };
+    this.rows.set(id, updated);
+    return updated;
+  }
+
+  async remove(id: string): Promise<boolean> {
+    return this.rows.delete(id);
+  }
+}
+
+export class MemoryAppManifestRepo implements AppManifestRepo {
+  readonly rows = new Map<string, AppManifest>();
+
+  async list(): Promise<AppManifest[]> {
+    return [...this.rows.values()].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  async get(id: string): Promise<AppManifest | null> {
+    return this.rows.get(id) ?? null;
+  }
+
+  async create(
+    input: NewAppManifest,
+  ): Promise<AppManifest> {
+    const ts = now();
+    const record: AppManifest = {
+      id: input.id,
+      manifest: input.manifest,
+      enabled: input.enabled,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    this.rows.set(record.id, record);
+    return record;
+  }
+
+  async update(
+    id: string,
+    patch: AppManifestPatch,
+  ): Promise<AppManifest | null> {
+    const current = this.rows.get(id);
+    if (!current) return null;
+    const updated: AppManifest = {
+      ...current,
+      manifest: patch.manifest,
+      enabled: patch.enabled ?? current.enabled,
+      updatedAt: now(),
+    };
     this.rows.set(id, updated);
     return updated;
   }

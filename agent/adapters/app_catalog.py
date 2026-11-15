@@ -20,6 +20,7 @@ import os
 from typing import Any, Mapping
 
 from khc import Adapter, Ctx, action_params
+from khc.app_manifests import ManifestError, run_manifest
 from khc.pkg import ensure_packages
 from khc.recipes import RecipeError, catalog_for_display, find_recipe, read_installed, run_recipe
 
@@ -75,19 +76,35 @@ class AppCatalog(Adapter):
             "cards": [],
         }
 
-    def action_recipe_install(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+    def _run(self, ctx: Ctx, body: Mapping[str, Any], action: str) -> dict[str, Any]:
         params = action_params(body)
-        recipe_id = _recipe_id(params)
         values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
+
+        # R1：带 manifest 说明脚本由 Worker 从 D1 下发，走降权执行通道。
+        # 不带 manifest 的是随包发布的内置 recipe，旧路径原样保留（P-4）。
+        if "manifest" in params:
+            manifest_id = params.get("manifestId") or params.get("id")
+            if not isinstance(manifest_id, str) or not manifest_id.strip():
+                raise ManifestError("缺少 manifestId")
+            return run_manifest(
+                ctx,
+                manifest=params["manifest"],
+                manifest_id=manifest_id.strip(),
+                action=action,
+                values=dict(values),
+                instance=params.get("instance") if isinstance(params.get("instance"), str) else None,
+            )
+
+        recipe_id = _recipe_id(params)
         recipe = find_recipe(recipe_id, _catalog_dir())
-        packages = recipe.get("packages") or []
-        if packages:
-            ensure_packages(ctx, packages)
-        return run_recipe(ctx, recipe, "install", dict(values))
+        if action == "install":
+            packages = recipe.get("packages") or []
+            if packages:
+                ensure_packages(ctx, packages)
+        return run_recipe(ctx, recipe, action, dict(values))
+
+    def action_recipe_install(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._run(ctx, body, "install")
 
     def action_recipe_uninstall(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
-        params = action_params(body)
-        recipe_id = _recipe_id(params)
-        values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
-        recipe = find_recipe(recipe_id, _catalog_dir())
-        return run_recipe(ctx, recipe, "uninstall", dict(values))
+        return self._run(ctx, body, "uninstall")

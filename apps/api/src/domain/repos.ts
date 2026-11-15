@@ -264,3 +264,29 @@ export interface TunnelRepo {
   update(id: string, patch: TunnelPatch): Promise<TunnelRecord | null>;
   remove(id: string): Promise<boolean>;
 }
+
+// ---------------------------------------------------------------------------
+// R1：全局应用清单（脚本正文 + 元数据，只存配置）
+// ---------------------------------------------------------------------------
+
+export interface NewAppManifest {
+  id: string;
+  manifest: import('@khc/contracts').AppManifestDefinition;
+  enabled: boolean;
+}
+
+export interface AppManifestPatch {
+  manifest: import('@khc/contracts').AppManifestDefinition;
+  enabled?: boolean;
+}
+
+export interface AppManifestRepo {
+  list(): Promise<import('@khc/contracts').AppManifest[]>;
+  get(id: string): Promise<import('@khc/contracts').AppManifest | null>;
+  create(input: NewAppManifest): Promise<import('@khc/contracts').AppManifest>;
+  update(
+    id: string,
+    patch: AppManifestPatch,
+  ): Promise<import('@khc/contracts').AppManifest | null>;
+  remove(id: string): Promise<boolean>;
+}

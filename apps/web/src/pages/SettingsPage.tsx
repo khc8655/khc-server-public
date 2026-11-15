@@ -10,6 +10,7 @@ import CertificatesPage from '../apps/certificates/page';
 import { CfDnsAccounts } from '../apps/settings/CfDnsAccounts';
 import { Tunnels } from '../apps/settings/Tunnels';
 import { AppCatalog } from '../apps/settings/AppCatalog';
+import { AppManifests } from '../apps/settings/AppManifests';
 import { SshKeys } from '../apps/settings/SshKeys';
 import {
   Banner,
@@ -52,7 +53,14 @@ export default function SettingsPage() {
   const search = useSearch({ strict: false }) as { tab?: string; drawer?: string };
   const settingsQuery = useQuery(settingsQueryOptions());
 
-  type SettingsTab = 'certs' | 'domain' | 'tunnels' | 'catalog' | 'keys' | 'system';
+  type SettingsTab =
+    | 'certs'
+    | 'domain'
+    | 'tunnels'
+    | 'manifests'
+    | 'catalog'
+    | 'keys'
+    | 'system';
   const tabFromSearch = (tab: string | undefined): SettingsTab | null => {
     if (tab === 'cloudflare') return 'domain';
     if (
@@ -60,6 +68,7 @@ export default function SettingsPage() {
       tab === 'certs' ||
       tab === 'domain' ||
       tab === 'tunnels' ||
+      tab === 'manifests' ||
       tab === 'catalog' ||
       tab === 'keys'
     ) {
@@ -210,6 +219,7 @@ export default function SettingsPage() {
           { value: 'certs', label: '证书库' },
           { value: 'domain', label: zh.cfDns.tab },
           { value: 'tunnels', label: zh.tunnels.tab },
+          { value: 'manifests', label: '应用管理' },
           { value: 'catalog', label: zh.catalog.tab },
           { value: 'keys', label: zh.sshKeys.tab },
           { value: 'system', label: '系统变量' },
@@ -231,6 +241,8 @@ export default function SettingsPage() {
         <CfDnsAccounts createSignal={cfCreateSignal} />
       ) : activeTab === 'tunnels' ? (
         <Tunnels createSignal={tunnelCreateSignal} />
+      ) : activeTab === 'manifests' ? (
+        <AppManifests />
       ) : activeTab === 'catalog' ? (
         <AppCatalog />
       ) : activeTab === 'keys' ? (
