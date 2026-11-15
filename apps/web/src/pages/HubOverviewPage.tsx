@@ -14,6 +14,7 @@ import {
   type BackendKind,
 } from '../data/services';
 import { paths } from '../registry/routes';
+import { resolveCertStatus } from './hubCertStatus';
 import {
   Badge,
   Banner,
@@ -123,7 +124,13 @@ export default function HubOverviewPage() {
   const diskPct = ops?.disks?.[0]?.percent ?? null;
   const agentVersion = state?.state?.agent?.version ?? snapshot?.agent?.version;
 
-  // 域名证书状态：只认 Agent 实际探测结果；拿不到就明说未知，不做「看起来成功」的兜底。
+  // 域名证书状态：控制面实测 > Agent 站点探测 > 证书库。
+  //
+  // 「控制面实测」= GET /nodes/:id/state 附带的 tls 结论：Workers 对 https 请求做完整且
+  // 不可关闭的校验，探测通过就说明「该接入地址此刻出示的证书对本域名有效且受信」。
+  // 这是唯一能覆盖 TLS 由外部反代 / Caddy / Tunnel 终结的节点的证据源——那类节点上
+  // Agent 根本没有证书文件，按站点/证书库判定只会得出「未签发」的错误结论。
+  const tlsProbe = state?.tls ?? null;
   const caddyAdapter = (state?.state?.adapters ?? []).find((adapter) => adapter.name === 'caddy-site');
   const caddyStatus = caddyAdapter?.status as
     | { error?: string; installed?: boolean; running?: boolean; siteHealth?: { name?: string; domain?: string; state?: string; error?: string }[] }
@@ -131,25 +138,27 @@ export default function HubOverviewPage() {
   const domainHealth = node.domain
     ? caddyStatus?.siteHealth?.find((site) => (site.domain ?? site.name) === node.domain)
     : undefined;
-  const domainHasSite = node.domain ? sites.some((site) => site.domain === node.domain) : false;
-  let certStatus: string;
-  if (!node.domain) {
-    certStatus = zh.hub.certNoDomain;
-  } else if (!caddyStatus || caddyStatus.error) {
-    certStatus = zh.hub.certUnknown;
-  } else if (!domainHasSite && !domainHealth) {
-    certStatus = zh.hub.certNoSite;
-  } else if (!domainHealth) {
-    certStatus = zh.hub.certUnknown;
-  } else if (domainHealth.state === 'ok') {
-    certStatus = zh.hub.certOk;
-  } else if (domainHealth.state === 'warn') {
-    certStatus = fmt(zh.hub.certWarn, { error: domainHealth.error ?? 'HTTPS 校验未通过' });
-  } else if (domainHealth.state === 'down') {
-    certStatus = fmt(zh.hub.certDown, { error: domainHealth.error ?? '站点不可达' });
-  } else {
-    certStatus = zh.hub.certUnknown;
-  }
+  // 到期日：优先 Agent 自报的控制通道证书，其次证书库里本节点最近到期的一张；都没有就不编。
+  const certsAdapter = (state?.state?.adapters ?? []).find((adapter) => adapter.name === 'certificates');
+  const agentTlsCert = (
+    certsAdapter?.status as { tls?: { present?: boolean; notAfter?: string | null } } | undefined
+  )?.tls;
+  const knownNotAfter: string | null = (() => {
+    if (agentTlsCert?.present && agentTlsCert.notAfter) return agentTlsCert.notAfter.slice(0, 10);
+    const dated = nodeCerts.filter(
+      (cert): cert is (typeof nodeCerts)[number] & { notAfter: number } =>
+        typeof cert.notAfter === 'number',
+    );
+    if (dated.length === 0) return null;
+    const soonest = Math.min(...dated.map((cert) => cert.notAfter));
+    return new Date(soonest * 1000).toISOString().slice(0, 10);
+  })();
+  const certStatus = resolveCertStatus({
+    domain: node.domain ?? null,
+    tlsProbe,
+    siteHealth: domainHealth,
+    knownNotAfter,
+  });
 
   // 鉴权失败：Worker 已把 Agent 的 401/403 归一成 200 + error，这里单独识别，
   // 不再和「节点不可达」混在一起（那会让人误以为网络问题）。

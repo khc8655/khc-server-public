@@ -61,11 +61,16 @@ let withSummary = true;
 let wgInstalled = true;
 let caddyInstalled = true;
 let emptySites = false;
+// 证书状态相关：节点绑定域名 + 控制面实测结论（/state 的 tls 字段）
+let nodeDomain: string | null = null;
+let tlsProbeState: 'verified' | 'failed' | 'none' | 'unknown' | null = null;
 
 /** 详情响应：withSummary=false 时返回不带 summary 的节点（回归：WireGuard 行不得整块消失） */
 function detailNode() {
-  if (withSummary) return node;
-  return Object.fromEntries(Object.entries(node).filter(([key]) => key !== 'summary'));
+  const base = withSummary
+    ? node
+    : Object.fromEntries(Object.entries(node).filter(([key]) => key !== 'summary'));
+  return { ...base, domain: nodeDomain };
 }
 
 function stateBody() {
@@ -77,6 +82,16 @@ function stateBody() {
     route: 'direct',
     via: 'tcp',
     error: null,
+    ...(tlsProbeState
+      ? {
+          tls: {
+            state: tlsProbeState,
+            endpoint: 'https://203.0.113.20:8880',
+            detail: tlsProbeState === 'failed' ? '证书已过期' : null,
+            checkedAt: NOW,
+          },
+        }
+      : {}),
     state: {
       host: { hostname: 'hub-x86', os: 'Debian 12', kernel: '6.1.0', uptime: 86400 },
       agent: { version: '0.1.37', serverTime: NOW },
@@ -124,12 +139,14 @@ beforeEach(() => {
   wgInstalled = true;
   caddyInstalled = true;
   emptySites = false;
+  nodeDomain = null;
+  tlsProbeState = null;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
-      if (url === '/api/v1/nodes') return json({ nodes: [node] });
+      if (url === '/api/v1/nodes') return json({ nodes: [{ ...node, domain: nodeDomain }] });
       if (url === '/api/v1/nodes/x86-2') return json({ node: detailNode() });
       if (url === '/api/v1/nodes/x86-2/state') return json(stateBody());
       if (url === '/api/v1/certs') return json({ certificates: [] });
@@ -269,5 +286,45 @@ describe('节点概况页 · 对外服务摘要', () => {
     const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
     expect(facts[0]).toContain('0 个站点');
     expect(facts[0]).not.toContain('接管');
+  });
+});
+/**
+ * 回归：TLS 由外部反代 / Caddy / Tunnel 终结时，面板过去因为「没有托管站点」把证书
+ * 判成「未签发」，而那一刻域名 HTTPS 完全可用。现在以控制面实测（/state.tls）为准。
+ */
+describe('节点概况页 · 证书状态', () => {
+  it('控制面实测通过且没有托管站点：显示已签发，不再说未签发', async () => {
+    nodeDomain = 'hub.example.com';
+    tlsProbeState = 'verified';
+    const { container } = await renderOverview();
+
+    await waitFor(() => expect(container.textContent).toContain('已签发（控制面实测证书有效）'));
+    expect(container.textContent).not.toContain('未签发');
+    expect(container.textContent).not.toContain('Caddy 不会申请证书');
+  });
+
+  it('证书类失败：直接说校验失败并带原因', async () => {
+    nodeDomain = 'hub.example.com';
+    tlsProbeState = 'failed';
+    const { container } = await renderOverview();
+
+    await waitFor(() => expect(container.textContent).toContain('证书校验失败'));
+    expect(container.textContent).toContain('证书已过期');
+  });
+
+  it('接入地址非 https：说「未启用 TLS」，不说「未绑定域名」', async () => {
+    nodeDomain = 'hub.example.com';
+    tlsProbeState = 'none';
+    const { container } = await renderOverview();
+
+    await waitFor(() => expect(container.textContent).toContain('未启用 TLS'));
+    expect(container.textContent).not.toContain('未绑定域名');
+  });
+
+  it('未绑定域名：仍显示「未绑定域名」', async () => {
+    tlsProbeState = 'verified';
+    const { container } = await renderOverview();
+
+    await waitFor(() => expect(container.textContent).toContain('未绑定域名'));
   });
 });

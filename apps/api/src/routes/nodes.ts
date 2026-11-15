@@ -22,6 +22,7 @@ import { summarizeAppSummaries } from '../lib/node-summary';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError, formatRouteErrors } from '../lib/node-client';
+import { classifyTlsProbe } from '../lib/tls-probe';
 import { nodeToken, requireNode, toPublicNode } from './helpers';
 
 /**
@@ -371,6 +372,8 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     c.header('Cache-Control', 'no-store');
     const node = await requireNode(deps, c.req.param('id'));
     const token = await nodeToken(c.env, node);
+    // 本次实际会用的接入地址：tunnel 优先隧道地址，否则直连 endpoint。
+    const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
     try {
       const response = await deps.agent.call(
         node,
@@ -407,6 +410,8 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
             via: response.via,
             state: null,
             error,
+            // 拿到了响应 = TLS 握手已通过（https 时即证书有效）
+            tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
           }),
         );
       }
@@ -432,17 +437,21 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
           state: parsed.data,
           error: null,
           ...(epochStale ? { epochStale } : {}),
+          tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
         }),
       );
     } catch (error) {
       if (error instanceof HubUnreachableError) {
+        const detail = formatRouteErrors(error);
         return c.json(
           nodeStateResponseSchema.parse({
             reachable: false,
             route: null,
             via: null,
             state: null,
-            error: formatRouteErrors(error),
+            error: detail,
+            // 证书类失败能断言证书有问题，网络类只能说未知——不顺势报成证书故障
+            tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: false, error: detail }),
           }),
         );
       }
