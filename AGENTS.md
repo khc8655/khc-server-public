@@ -66,7 +66,8 @@
 
 ## 6. 核心冻结与扩展点
 
-- 新增应用：`agent/adapters/<app>.py` + `agent/tests/test_<app>.py` + `apps/web/src/apps/<app>/page.tsx`。`git diff --stat` 不应出现 `apps/api/`、`migrations/`、`packages/contracts/`、`agent/khc/`。
+- 应用分两类：**脚本式应用**只在面板「应用管理」里加/改 D1 中的定义（脚本正文 + 参数 + sha256 + 运行用户），不发版、不改核心；**深度集成应用**（caddy、wireguard 这类需要内核能力的）仍写 `agent/adapters/<app>.py` + `agent/tests/test_<app>.py` + `apps/web/src/apps/<app>/page.tsx`，其 `git diff --stat` 不应出现 `apps/api/`、`migrations/`、`packages/contracts/`、`agent/khc/`。
+- 应用清单的**通道**（不是某个应用）：D1 表 `app_manifests`、Worker CRUD 与下发注入在 `apps/api/`，执行器在 `agent/khc/app_manifests.py`。注入按 `params.manifestId` 字段做数据驱动，路由不得出现 `app === '<应用名>'` 判断。
 - 新增 API 或表：先改 `packages/contracts`，再改路由、仓库与测试；迁移只新增 `migrations/000N_*.sql`，不改已应用的迁移；同步更新 `docs/design-v3.md`。
 - 新增页面：归类页面类型并登记 `page-specs.md`；路由与动作登记到 `registry/routes.ts`、`registry/actions.ts`。
 - 编排层例外：`apps/api/src/lib/mode.ts`、`apps/api/src/lib/node-summary.ts` 可以引用应用名，只做纯派生（不连节点、不写库、不读 secrets）；路由里不得出现 `app === '<应用名>'` 判断。

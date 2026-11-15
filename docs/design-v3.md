@@ -210,6 +210,7 @@ Peers、反代站点、端口转发不再单独建表，都是各自应用 `conf
 | `0009_ssh_keys.sql` | 新增 `ssh_keys`（全局 SSH 公钥库，只存公钥） |
 | `0010_node_access.sql` | `nodes` 加 `access_mode` / `tunnel_id` / `allow_insecure`；新增 `tunnels`（全局隧道配置） |
 | `0011_cert_acme_meta.sql` | `certificates` 加 ACME 元数据列（provider / 凭据设置键 / CA / 密钥类型），供一键续期 |
+| `0013_app_manifests.sql` | 新增 `app_manifests`（全局应用清单：脚本正文 + 元数据，只存配置） |
 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json`（明文摘要，只含模式与计数），让 `GET /nodes` 摘要派生零解密；旧行 NULL 时读取路径回退解密，一次性回填后不再发生 |
 
 **rev 语义（冻结）**：`PUT` 配置时 Worker 将 `rev = max+1`；`apply` 必须带 `expectRev`，Agent 成功返回 `appliedRev`，不匹配返回 `409 conflict`；`rollback` = 用旧 config 生成**新 rev** 再 apply，不直接改 `applied_rev`。节点重建/恢复后 rev 从低重新计数时，由 `rev_epoch` 纪元判定旧纪元并自动重置 Agent 的 `appliedRev` 基线（§2.2），`409 conflict` 不再永久卡死恢复流程。
@@ -283,7 +284,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 
 ### 3.5 受控装包与 recipe 目录（P1）
 
-两个新增的**知识层**能力，仍然不改 Worker 路由/D1：
+两个**知识层**能力。第 2 项的面板下发通道自 0.13.0 起由 Worker 的通用注入点与 D1 表 `app_manifests` 承载（见 `docs/plans/app-manifests-2026-11-15.md`），内置 recipe 旧通道保留只读：
 
 1. **受控系统包安装**（`agent/khc/pkg.py`，仅 system profile / root）
    - 白名单固定：`caddy`、`wireguard-tools`、`socat`；其他包名一律拒绝。
@@ -293,7 +294,8 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
    - 适配器通过 `capabilities: {"pkgInstall": true}` 声明能力；面板只在看到该能力时展示「一键安装」，旧 Agent 不露按钮。
 
 2. **recipe 引擎**（`agent/khc/recipes.py` + `agent/adapters/app_catalog.py`）
-   - 清单 `agent/recipes/catalog.json` 随 Agent 包发布；面板只能选已发布 recipe id，不能上传任意 shell。
+   - 内置 recipe 清单 `agent/recipes/catalog.json` 随 Agent 包发布，旧通道只读保留；面板「应用管理」里的脚本定义存 D1，安装时由 Worker 按 `manifestId` 读出正文随请求下发，浏览器不能直传正文。
+   - 下发的脚本由 `agent/khc/app_manifests.py` 校验 sha256、`writes` 只允许 `~/` 家目录相对路径，并以定义里 `runtime.user` 指定的普通用户执行（`runuser -u`，非 root）；参数仍走 `KHC_PARAM_*` 环境变量。
    - 参数经 `KHC_PARAM_<KEY>` 环境变量传入；未知参数/类型/范围在 Agent 侧校验。
    - 脚本最后输出 `KHC_RESULT={"access":[...],"cards":[...]}`；结果写入 `<data>/recipes/results/<id>.<action>.json`，权限 0600，密码类参数不进任务日志。
    - 清单 `writes` 必须在白名单根（`/etc/khc-recipes`、`/opt/khc-recipes`、`/var/lib/khc-recipes`、`/etc/systemd/system/khc-*`）下，且目标/父级不能是符号链接。

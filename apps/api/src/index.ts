@@ -5,6 +5,7 @@ import { D1AuditRepo } from './db/d1/audit';
 import { D1CertificateRepo } from './db/d1/certs';
 import { D1SettingsRepo } from './db/d1/settings';
 import { D1SshKeyRepo } from './db/d1/sshKeys';
+import { D1AppManifestRepo } from './db/d1/appManifests';
 import { D1TunnelRepo } from './db/d1/tunnels';
 import { HttpAgentClient } from './lib/node-client';
 import type { FetchLike, TcpFetchLike } from './lib/node-client';
@@ -46,6 +47,7 @@ function buildRuntime(env: Env, options: WorkerRuntimeOptions): WorkerRuntime {
     certs: new D1CertificateRepo(env.DB, env.MASTER_ENC_KEY, encOptions),
     settings: new D1SettingsRepo(env.DB, env.MASTER_ENC_KEY, encOptions),
     sshKeys: new D1SshKeyRepo(env.DB),
+    appManifests: new D1AppManifestRepo(env.DB),
     tunnels: new D1TunnelRepo(env.DB),
     agent,
   });

@@ -64,10 +64,11 @@
 
 这是「不签名」得以成立的前提，**不是给 unit 加一行 `User=` 就算数**：
 
-1. **脚本执行**：Agent 以 `runuser -u <runtime.user> -- bash <script>`（或等价调用）执行，脚本进程本身不是 root。R1 必须实测 `ctx.run` 降权、`KHC_*` 环境变量是否完整传递。
-2. **应用进程**：由脚本自行创建的用户级 unit（`~/.config/systemd/user/`）以该用户运行。
-3. **无人登录仍运行**：`loginctl enable-linger <user>`。目标机实测 `Linger=no`，这是必做步骤。
-4. **Agent 沙箱要开口子**：现 unit 为 `ProtectHome=read-only` + `ProtectSystem=full`，`ALLOWED_WRITE_BASES` 全是系统根。需新增受控家目录根并同步扩大 `ReadWritePaths` —— **开口范围就是新攻击面，R1 要给最小集合并列成清单**。
+1. **运行身份二选一（主人 2026-11-15 21:24 定案）**：安装时做成配置项。选「不建用户」用默认用户 `nobody`（系统自带、非 root、零预建），不填任何凭据；选「新建应用用户」填用户名和密码，Agent 用 `systemd-run` 一次性单元跳出沙箱执行 `useradd` + `chpasswd` 建账号并设密码。密码不落 D1、不进审计/日志/命令行，只经 stdin 走一趟；账号已存在则幂等不重建。证据 `docs/verification/2026-11-15/app-manifests-runtime-mode.md`。
+2. **脚本执行**：Agent 以 `runuser -u <最终用户> -- bash <script>`（或等价调用）执行，脚本进程本身不是 root。R1 已实测 `ctx.run` 降权、`KHC_*` 环境变量完整传递。
+3. **应用进程**：由脚本自行创建的用户级 unit（`~/.config/systemd/user/`）以该用户运行。
+4. **无人登录仍运行**：`loginctl enable-linger <user>`。目标机实测 `Linger=no`，这是必做步骤。
+5. **Agent 沙箱要开口子**：现 unit 为 `ProtectHome=read-only` + `ProtectSystem=full`，`ALLOWED_WRITE_BASES` 全是系统根。需新增受控家目录根并同步扩大 `ReadWritePaths` —— **开口范围就是新攻击面，R1 要给最小集合并列成清单**。
 
 > 目标机已核实：systemd 255、`systemctl --user` running、`/run/user/1001` 存在、`loginctl` 可用、`Linger=no`。
 

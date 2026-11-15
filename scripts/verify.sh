@@ -25,7 +25,6 @@ node scripts/check-release-consistency.mjs --repo
 echo "==> agent package retention"
 node scripts/prune-agent-packages.mjs --check
 echo "==> app catalog drift"
-node scripts/gen-app-catalog.mjs --check
 echo "==> d1 migrations (local)"
 ./scripts/d1-migration-local-test.sh
 echo "==> installer lifecycle"

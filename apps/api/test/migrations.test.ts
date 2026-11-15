@@ -18,7 +18,7 @@ function freshDb(): RawDatabase {
 }
 
 describe('migrations: 顺序与幂等（批次 F）', () => {
-  it('0001→0012 按序执行成功，关键表与列齐备', () => {
+  it('0001→0013 按序执行成功，关键表与列齐备', () => {
     const files = listMigrationFiles();
     expect(files).toEqual([
       '0001_init.sql',
@@ -33,6 +33,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
       '0010_node_access.sql',
       '0011_cert_acme_meta.sql',
       '0012_app_configs_summary.sql',
+      '0013_app_manifests.sql',
     ]);
     const raw = openRawDatabase();
     const { applied, skipped } = applyMigrations(raw);
@@ -48,6 +49,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
       'settings',
       'rate_limit',
       'ssh_keys',
+      'app_manifests',
       'tunnels',
     ]) {
       expect(tableNames(raw)).toContain(table);
@@ -79,6 +81,17 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
     );
     // 0012：应用配置明文摘要列（只存模式与计数，GET /nodes 零解密）
     expect(columnNames(raw, 'app_configs')).toContain('summary_json');
+    // 0013：应用清单（脚本正文 + 元数据，只存配置）
+    expect(columnNames(raw, 'app_manifests')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'manifest_json',
+        'version',
+        'enabled',
+        'created_at',
+        'updated_at',
+      ]),
+    );
     // 0005 清空历史运行快照
     const lastState = raw
       .prepare('SELECT COUNT(*) AS n FROM nodes WHERE last_state_json IS NOT NULL')
