@@ -135,8 +135,10 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 | caddy-site | `config_failed` | error | validate 或 reload 失败合并；evidence `validateOk/lastReloadOk` |
 | caddy-site | `upstream_down` | error/warn | down=error，4xx/TLS=warn；只报一行 |
 | caddy-site | `port_conflict` | error | plan/apply 前读 `/proc/net/tcp{,6}` 识别真实监听者（含 Agent 自身），`details.occupiedBy` 指出占用进程；Caddy 自身监听不算冲突 |
-| certificates | `expiring` | info/warn/error | 最近到期证书；≤30 天 info、≤14 天 warn、≤3 天或过期 error |
+| certificates | `expiring` | info/warn/error | 最近到期证书；≤30 天 info、≤14 天 warn、≤3 天或过期 error（来源：证书库 D1，Worker 侧生成） |
 | certificates | `acme_failed` | error | 缺 acme.sh/openssl（reason=env_missing）或最近一次签发失败（reason=dns_credential/issue_failed） |
+| certificates | `tls_cert_expiring` | warn | **Agent 自己**的控制通道证书 ≤30 天到期（reason=expiring）；evidence `certPath/notAfter/daysLeft/renewalTimer` |
+| certificates | `tls_cert_expired` | error | 同上但已过期（reason=expired）；控制面会拒绝该节点 |
 | port-forward | `unit_failed` | error | 缺 socat（reason=socat_missing）或单元未运行；action `app.apply` |
 | host | `disk_full` | warn / error | 空间或 inode ≥ 85% / ≥ 95%；evidence `disk/path/metric/percent`；无 action |
 | host | `memory_low` | warn | 可用内存与 swap 组合判定；evidence `availablePercent/swapPercent/hasSwap`；无 action |

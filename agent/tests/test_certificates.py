@@ -893,5 +893,90 @@ class DiagnosticStatusTests(unittest.TestCase):
         with mock.patch("adapters.certificates.shutil.which", return_value="/usr/bin/tool"):
             self.assertEqual(self.adapter.status(self.ctx)["problems"], [])
 
+
+class ControlChannelExpiryTests(unittest.TestCase):
+    """`install.sh --acme` 直写本机的证书不入证书库，必须由 Agent 自己报到期。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="khc-cert-expiry-")
+        self.paths = make_paths(self._tmp.name)
+        self.adapter = Certificates()
+        self.ctx = Ctx(self.paths, command_runner=FakeRunner())
+        self.cert_path = os.path.join(self.paths.config_dir, "tls", "fullchain.pem")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _status(self, not_after: str, *, timer: str = "/nonexistent/khc-acme-renew.timer") -> dict:
+        write_file(self.cert_path, "cert", 0o600)
+        with mock.patch("adapters.certificates.shutil.which", return_value="/usr/bin/tool"), mock.patch.object(
+            Certificates, "_cert_not_after", return_value=not_after
+        ), mock.patch("adapters.certificates.RENEW_TIMER_PATH", timer):
+            return self.adapter.status(self.ctx)
+
+    @staticmethod
+    def _iso(days: int) -> str:
+        return iso_utc(time.time() + days * 86400)
+
+    def test_far_expiry_is_silent(self) -> None:
+        status = self._status(self._iso(80))
+        self.assertEqual(status["problems"], [])
+        self.assertTrue(status["tls"]["present"])
+        self.assertGreater(status["tls"]["daysLeft"], 70)
+
+    def test_expiring_within_window_warns_and_mentions_missing_timer(self) -> None:
+        status = self._status(self._iso(10))
+        self.assertEqual([item["code"] for item in status["problems"]], ["tls_cert_expiring"])
+        problem = status["problems"][0]
+        self.assertEqual(problem["severity"], "warn")
+        # days_until 向下取整（按最保守的到期天数告警），断言与实际取值一致
+        self.assertIn(str(status["tls"]["daysLeft"]), problem["title"])
+        self.assertIn("khc-acme-renew.timer", problem["hint"])
+        self.assertEqual(problem["evidence"]["renewalTimer"], False)
+        self.assertTrue(status["renewal"]["timerInstalled"] is False)
+
+    def test_expiring_with_timer_omits_timer_warning(self) -> None:
+        timer = os.path.join(self._tmp.name, "khc-acme-renew.timer")
+        write_file(timer, "[Unit]\n", 0o644)
+        status = self._status(self._iso(5), timer=timer)
+        problem = status["problems"][0]
+        self.assertNotIn("khc-acme-renew.timer", problem["hint"])
+        self.assertEqual(problem["evidence"]["renewalTimer"], True)
+        self.assertTrue(status["renewal"]["timerInstalled"])
+
+    def test_expired_is_error(self) -> None:
+        status = self._status(self._iso(-3))
+        self.assertEqual([item["code"] for item in status["problems"]], ["tls_cert_expired"])
+        problem = status["problems"][0]
+        self.assertEqual(problem["severity"], "error")
+        self.assertEqual(problem["evidence"]["reason"], "expired")
+        self.assertLess(status["tls"]["daysLeft"], 0)
+
+    def test_missing_cert_file_reports_absence_without_problem(self) -> None:
+        with mock.patch("adapters.certificates.shutil.which", return_value="/usr/bin/tool"):
+            status = self.adapter.status(self.ctx)
+        self.assertFalse(status["tls"]["present"])
+        self.assertEqual(status["problems"], [])
+
+
+class DaysUntilTests(unittest.TestCase):
+    def test_parses_iso_and_signs_correctly(self) -> None:
+        from adapters.certificates import days_until
+
+        self.assertGreaterEqual(days_until(iso_utc(time.time() + 40 * 86400)), 39)
+        self.assertLess(days_until(iso_utc(time.time() - 86400)), 0)
+
+    def test_unparsable_returns_none(self) -> None:
+        from adapters.certificates import days_until
+
+        for value in (None, "", "not-a-date", "2026-13-45T00:00:00Z"):
+            self.assertIsNone(days_until(value), value)
+
+    def test_naive_datetime_is_treated_as_utc(self) -> None:
+        from adapters.certificates import days_until
+
+        self.assertIsInstance(days_until("2027-02-12T00:00:00"), int)
+
+
 if __name__ == "__main__":
     unittest.main()

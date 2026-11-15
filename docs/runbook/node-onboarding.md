@@ -52,6 +52,39 @@ sudo ./install.sh --check
 因此只需保证：**入站 443、出站 443**；若要用 HTTP-01 回退再加 **入站 80**；Cloudflare 记录必须是
 **「仅 DNS」（灰云）**，橙云会拦截 ACME 校验。`--with-caddy` 仍只安装 Caddy 软件包，不参与证书。
 
+**入站 80/443 不可达的节点（境内未备案、只开非标端口）：加 `--acme-dns` 走 DNS-01。**
+DNS-01 只靠出站 443 + DNS 记录，不占用任何入站端口，因此也不需要停 Agent/Caddy、不需要 socat：
+
+```bash
+# provider 只有 cloudflare / route53；凭据只从环境变量读（不写盘、不进 acme.sh 配置以外的地方）
+sudo CF_Token='<Cloudflare API Token>' ./install.sh --system \
+  --acme agent.example.com --acme-dns cloudflare \
+  --tls-cert /etc/khc-agent/tls/fullchain.pem --tls-key /etc/khc-agent/tls/key.pem \
+  --host 0.0.0.0 --port 8443
+
+# route53：AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY（可选 AWS_SESSION_TOKEN）
+```
+
+凭据缺失或 provider 不在白名单时，`install.sh` 会在**改动系统之前**直接报错退出。
+provider 名称与证书适配器的 `_PROVIDER_DNS` 同源（`cloudflare → dns_cf`、`route53 → dns_aws`），
+面板里的 ACME 签发与安装脚本用的是同一套命名。
+
+**续期载体是 systemd timer，不是 crontab。** 无论用 `--acme` 还是 `--acme-dns`，`install.sh` 都会写入
+`khc-acme-renew.service` + `khc-acme-renew.timer`（`OnBootSec=15min`、`OnUnitActiveSec=1d`、
+`RandomizedDelaySec=30min`、`Persistent=true`），执行 `acme.sh --cron`——它只在到期窗口内真正续签，
+多跑是空转。这样即使镜像里装不上 cron 也能自动续期；没有 systemd 时脚本会 WARN 并给出手工命令。
+复核：
+
+```bash
+systemctl list-timers | grep acme                  # 下一次触发时间
+systemctl start khc-acme-renew.service             # 立即跑一次续期
+sudo ./install.sh --system --check ...             # 预检里会显示「ACME 走 DNS-01」或入站端口要求
+```
+
+Agent 也会把这些事实回报给面板诊断：`certificates.status()` 里的 `tls`（证书路径/到期日/剩余天数）与
+`renewal`（timer 是否安装），剩余 ≤30 天报 `tls_cert_expiring`、已过期报 `tls_cert_expired`——
+这条链路专补「用 `--acme` 直写本机、因而从不进入证书库」的那张证书。
+
 需要 DNS-01 或自定义 CA 时，仍可手动签发到同一路径：
 
 ```bash
@@ -74,7 +107,9 @@ sudo ./install.sh --system --check --tls-cert /etc/khc-agent/tls/fullchain.pem \
   --tls-key /etc/khc-agent/tls/key.pem --host 0.0.0.0 --port 443
 ```
 
-acme.sh 会安装续期任务；`--reloadcmd` 让证书续期后自动 reload Agent。user 模式（无 root，无法绑定 443）
+acme.sh 自带续期任务（依赖 cron，容器镜像里常装不上）；`--reloadcmd` 让证书续期后自动 reload Agent。
+走纯手工签发时，重跑一次带 `--acme <域名>` 的安装命令即可补上 systemd 续期 timer（证书已存在会跳过签发，
+只补 timer）。user 模式（无 root，无法绑定 443）
 不支持 `--acme`，仍需手动签发；路径换成 `~/.config/khc-agent/tls/`，去掉 `sudo`，
 `--reloadcmd` 改为 `systemctl --user reload khc-agent`。
 
