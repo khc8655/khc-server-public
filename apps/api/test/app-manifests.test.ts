@@ -7,11 +7,11 @@ const INSTALL = '#!/usr/bin/env bash\necho KHC_RESULT={}\n';
 const UNINSTALL = '#!/usr/bin/env bash\necho removed\n';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
-function definition(overrides: Record<string, unknown> = {}) {
+function definition(overrides: Record<string, unknown> = {}): import('@khc/contracts').AppManifestDefinition {
   return {
     name: '测试应用',
     version: '0.1.0',
-    runtime: { user: 'khc-app-test', linger: true },
+    runtime: { mode: 'shared', linger: true },
     params: [{ key: 'port', type: 'integer', default: 3425 }],
     scripts: { install: INSTALL, uninstall: UNINSTALL },
     sha256: { install: sha(INSTALL), uninstall: sha(UNINSTALL) },

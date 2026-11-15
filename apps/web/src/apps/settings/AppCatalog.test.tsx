@@ -49,7 +49,7 @@ function stubApi() {
               manifest: {
                 name: '示例服务（假服务）',
                 version: '1.0.0',
-                runtime: { user: 'khc-app-demo', linger: true },
+                runtime: { mode: 'shared', linger: true },
                 params: [
                   {
                     key: 'port',
@@ -185,6 +185,34 @@ describe('应用目录（R1 运行时清单）', () => {
       expect(requests.filter((url) => url === '/api/v1/nodes/tyo-1/tasks/task-2').length).toBe(1);
     });
     expect(await screen.findByText(/任务状态：running/)).toBeTruthy();
+  });
+
+  it('运行身份选「新建应用用户」时要求填用户名和密码，提交带上凭据', async () => {
+    renderCatalog();
+    const names = await screen.findAllByText(/示例服务/);
+    await userEvent.click(names.at(-1)!);
+    expect(await screen.findByLabelText('运行身份')).toBeTruthy();
+
+    await userEvent.selectOptions(screen.getByLabelText('运行身份'), 'create');
+    expect(await screen.findByLabelText('用户名')).toBeTruthy();
+    expect(screen.getByLabelText('密码')).toBeTruthy();
+
+    await userEvent.type(screen.getByLabelText('用户名'), 'khc-app-new');
+    await userEvent.type(screen.getByLabelText('密码'), 's3cret');
+    await userEvent.click(screen.getAllByRole('button', { name: '安装' }).at(-1)!);
+
+    await waitFor(() => {
+      expect(
+        requests.filter((url) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install').length,
+      ).toBe(1);
+    });
+    const sent = JSON.parse(
+      (vi.mocked(fetch).mock.calls as Array<[string, RequestInit | undefined]>)
+        .find(([url]) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install')?.[1]
+        ?.body as string,
+    );
+    expect(sent.params.runtimeUser).toBe('khc-app-new');
+    expect(sent.params.runtimePassword).toBe('s3cret');
   });
 
   it('旧 Agent 返回 recipe 清单错误时显示升级引导而不是原始报错', async () => {

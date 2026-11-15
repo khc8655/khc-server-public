@@ -10,7 +10,9 @@ from unittest import mock
 
 from khc.adapters import Ctx, RunResult
 from khc import app_manifests as mod
-from khc.app_manifests import APP_ROOT, ManifestError, run_manifest, validate_manifest
+from khc.app_manifests import (
+    APP_ROOT, DEFAULT_APP_USER, ManifestError, run_manifest, validate_manifest,
+)
 
 from .support import make_paths
 
@@ -26,7 +28,7 @@ def manifest(**overrides):
     data = {
         "name": "测试应用",
         "version": "0.1.0",
-        "runtime": {"user": "khc-app-test", "linger": True},
+        "runtime": {"mode": "shared", "linger": True},
         "params": [{"key": "port", "type": "integer", "default": 3425}],
         "scripts": {"install": INSTALL, "uninstall": UNINSTALL},
         "sha256": {"install": sha(INSTALL), "uninstall": sha(UNINSTALL)},
@@ -41,11 +43,13 @@ class RecordingRunner:
         self.stdout, self.rc, self.stderr = stdout, rc, stderr
         self.calls: list[list[str]] = []
         self.envs: list[dict | None] = []
+        self.inputs: list[str | None] = []
 
     def __call__(self, cmd, *, timeout=None, input=None, env=None, cwd=None):
         argv = [str(part) for part in cmd]
         self.calls.append(argv)
         self.envs.append(dict(env) if env else None)
+        self.inputs.append(input)
         return RunResult(cmd=argv, rc=self.rc, stdout=self.stdout, stderr=self.stderr)
 
 
@@ -80,19 +84,57 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(env["KHC_APP_HOME"].startswith(os.path.join(mod.APP_ROOT, "data")))
         self.assertNotIn("/home/", env["KHC_WRITES"])
 
-    def test_missing_runtime_user_rejected(self):
-        # 这一用例要真实解析账号，临时停掉单测的属主替身。
-        self.chown_patch.stop()
-        try:
-            with self.assertRaises(ManifestError):
-                run_manifest(
-                    self.ctx(RecordingRunner()),
-                    manifest=manifest(runtime={"user": "no-such-user-r1", "linger": True}),
-                    manifest_id="test-app",
-                    action="install",
-                )
-        finally:
-            self.chown_patch.start()
+    def test_shared_mode_rejects_credentials(self):
+        with self.assertRaises(ManifestError):
+            run_manifest(
+                self.ctx(RecordingRunner()), manifest=manifest(),
+                manifest_id="test-app", action="install",
+                runtime_user="khc-app-x", runtime_password="p",
+            )
+
+    def test_create_mode_requires_password(self):
+        with self.assertRaises(ManifestError):
+            run_manifest(
+                self.ctx(RecordingRunner()),
+                manifest=manifest(runtime={"mode": "create", "user": "khc-app-x"}),
+                manifest_id="test-app", action="install", runtime_user="khc-app-x",
+            )
+
+    def test_create_mode_builds_user_without_password_in_argv(self):
+        # _account 在单测机上查不到该账号，走「新建」分支；属主解析已被 patch。
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        with mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError):
+            out = run_manifest(
+                self.ctx(runner),
+                manifest=manifest(runtime={"mode": "create", "user": "khc-app-new"}),
+                manifest_id="test-app", action="install",
+                runtime_user="khc-app-new", runtime_password="s3cret-pass",
+            )
+        self.assertEqual(out["mode"], "create")
+        self.assertEqual(out["user"], "khc-app-new")
+        all_argv = [" ".join(call) for call in runner.calls]
+        useradd = next(a for a in all_argv if "useradd" in a)
+        chpasswd = next(a for a in all_argv if "chpasswd" in a)
+        self.assertIn("systemd-run", useradd)
+        self.assertIn("khc-app-new", useradd)
+        self.assertNotIn("s3cret-pass", useradd)
+        self.assertNotIn("s3cret-pass", chpasswd)
+        # 密码只经 stdin 传递
+        self.assertEqual(runner.inputs[runner.calls.index(
+            next(c for c in runner.calls if "chpasswd" in " ".join(c)))],
+            "khc-app-new:s3cret-pass\n")
+
+    def test_create_mode_reuses_existing_account(self):
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        with mock.patch.object(mod.pwd, "getpwnam", return_value=object()):
+            out = run_manifest(
+                self.ctx(runner),
+                manifest=manifest(runtime={"mode": "create", "user": "khc-app-new"}),
+                manifest_id="test-app", action="install",
+                runtime_user="khc-app-new", runtime_password="p",
+            )
+        self.assertEqual(out["user"], "khc-app-new")
+        self.assertFalse(any("useradd" in " ".join(c) for c in runner.calls))
 
     def test_sha256_mismatch_aborts_before_writing_or_running(self):
         runner = RecordingRunner()
@@ -139,7 +181,9 @@ class ManifestTests(unittest.TestCase):
 
     def test_bad_runtime_user_rejected(self):
         with self.assertRaises(ManifestError):
-            validate_manifest(manifest(runtime={"user": "root; rm -rf /"}))  # type: ignore[dict-item]
+            validate_manifest(
+                manifest(runtime={"mode": "create", "user": "root; rm -rf /"})  # type: ignore[dict-item]
+            )
 
     def test_executes_as_non_root_user_with_env_params(self):
         runner = RecordingRunner(stdout='KHC_RESULT={"access":[{"label":"p","value":"3425"}]}\n')
@@ -151,25 +195,26 @@ class ManifestTests(unittest.TestCase):
             values={"port": 3425},
             instance="a",
         )
-        self.assertEqual(result["user"], "khc-app-test")
+        self.assertEqual(result["user"], DEFAULT_APP_USER)
         self.assertEqual(result["instance"], "a")
         self.assertEqual(result["result"]["access"][0]["value"], "3425")
 
         cmd = runner.calls[0]
-        self.assertEqual(cmd[:3], ["runuser", "-u", "khc-app-test"])
+        self.assertEqual(cmd[:3], ["runuser", "-u", DEFAULT_APP_USER])
         self.assertIn("--", cmd)
         self.assertTrue(cmd[-1].endswith("install.sh"))
         env = runner.envs[0] or {}
         self.assertEqual(env["KHC_PARAM_PORT"], "3425")
-        self.assertEqual(env["KHC_APP_USER"], "khc-app-test")
+        self.assertEqual(env["KHC_APP_USER"], DEFAULT_APP_USER)
         self.assertEqual(env["KHC_INSTANCE"], "a")
         # 脚本正文落地且降权用户可读
         self.assertTrue(os.path.isfile(cmd[-1]))
         self.assertEqual(oct(os.stat(cmd[-1]).st_mode & 0o777), "0o755")
         # 目录与结果文件都交给应用用户（真机由 _chown_to_user 落实）
         self.assertGreaterEqual(self.chown.call_count, 3)
-        self.assertEqual(env["KHC_APP_HOME"], os.path.join(mod.APP_ROOT, "data", "khc-app-test", "a"))
+        self.assertEqual(env["KHC_APP_HOME"], os.path.join(mod.APP_ROOT, "data", DEFAULT_APP_USER, "a"))
         self.assertEqual(APP_ROOT, "/var/lib/khc-apps")
+        self.assertEqual(env["KHC_APP_USER"], DEFAULT_APP_USER)
 
     def test_secret_not_logged_or_echoed_on_failure(self):
         runner = RecordingRunner(rc=1, stdout="top secret here", stderr="top secret here")

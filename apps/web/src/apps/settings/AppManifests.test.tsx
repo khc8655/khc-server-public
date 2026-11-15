@@ -15,7 +15,7 @@ function json(body: unknown, status = 200): Response {
 const manifest = {
   name: '示例应用',
   version: '1.2.3',
-  runtime: { user: 'khc-app-demo', linger: true },
+  runtime: { mode: 'shared', linger: true },
   params: [],
   scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
   sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
@@ -63,7 +63,7 @@ describe('应用管理（R1 架子）', () => {
     renderPage();
     expect(await screen.findByText('demo-app')).toBeTruthy();
     expect(screen.getByText('1.2.3')).toBeTruthy();
-    expect(screen.getByText('khc-app-demo')).toBeTruthy();
+    expect(screen.getByText('默认用户')).toBeTruthy();
     expect(calls).toContain('/api/v1/app-manifests');
   });
 });

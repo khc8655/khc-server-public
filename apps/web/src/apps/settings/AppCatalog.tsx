@@ -58,6 +58,8 @@ interface CatalogRecipe {
   requiresRoot: boolean;
   params: RecipeParam[];
   access: unknown;
+  runtimeMode: 'shared' | 'create';
+  runtimeUser?: string;
 }
 
 interface AccessItem {
@@ -81,6 +83,8 @@ function toCatalogRecipe(item: AppManifest): CatalogRecipe {
     version: item.manifest.version,
     description: `运行用户 ${item.manifest.runtime.user}`,
     requiresRoot: false,
+    runtimeMode: item.manifest.runtime.mode,
+    runtimeUser: item.manifest.runtime.user,
     params: item.manifest.params.map((param) => ({
       key: param.key,
       label: param.label,
@@ -185,6 +189,9 @@ export function AppCatalog() {
   const [target, setTarget] = useState<CatalogRecipe | null>(null);
   const [nodeId, setNodeId] = useState('');
   const [values, setValues] = useState<Record<string, unknown>>({});
+  const [runtimeMode, setRuntimeMode] = useState<'shared' | 'create'>('shared');
+  const [runtimeUser, setRuntimeUser] = useState('');
+  const [runtimePassword, setRuntimePassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [task, setTask] = useState<TaskResponse | null>(null);
@@ -230,6 +237,9 @@ export function AppCatalog() {
   const openInstall = (recipe: CatalogRecipe) => {
     setTarget(recipe);
     setValues(defaultValues(recipe));
+    setRuntimeMode(recipe.runtimeMode);
+    setRuntimeUser(recipe.runtimeUser ?? '');
+    setRuntimePassword('');
     setNodeId((prev) => prev || nodes[0]?.value || '');
     setTask(null);
     setError(null);
@@ -254,6 +264,9 @@ export function AppCatalog() {
       const envelope = await runAppAction(nodeId, 'app-catalog', 'recipe_install', {
         manifestId: target.id,
         values,
+        ...(runtimeMode === 'create'
+          ? { runtimeUser: runtimeUser.trim(), runtimePassword }
+          : {}),
       });
       if (!envelope.ok) {
         throw new Error(friendlyAgentError(envelope.error?.message) ?? zh.catalog.installFailed);
@@ -438,9 +451,21 @@ export function AppCatalog() {
                   label={zh.catalog.install}
                   variant="primary"
                   loading={busy}
-                  disabled={!nodeId || hasParamErrors}
+                  disabled={
+                    !nodeId ||
+                    hasParamErrors ||
+                    (runtimeMode === 'create' && (!runtimeUser.trim() || !runtimePassword))
+                  }
                   disabledReason={
-                    !nodeId ? zh.catalog.nodeRequired : hasParamErrors ? zh.catalog.fixParams : undefined
+                    !nodeId
+                      ? zh.catalog.nodeRequired
+                      : hasParamErrors
+                        ? zh.catalog.fixParams
+                        : runtimeMode === 'create' && !runtimeUser.trim()
+                          ? zh.catalog.runtimeUserRequired
+                          : runtimeMode === 'create' && !runtimePassword
+                            ? zh.catalog.runtimePasswordRequired
+                            : undefined
                   }
                   onClick={() => void submit()}
                 />
@@ -459,6 +484,55 @@ export function AppCatalog() {
                 ariaLabel={zh.catalog.nodeLabel}
               />
             </Field>
+
+            <Field
+              id="catalog-runtime-mode"
+              label={zh.catalog.runtimeLabel}
+              help={
+                runtimeMode === 'create'
+                  ? zh.catalog.runtimeCreateHelp
+                  : zh.catalog.runtimeSharedHelp
+              }
+            >
+              <Select
+                id="catalog-runtime-mode"
+                value={runtimeMode}
+                options={[
+                  { value: 'shared', label: zh.catalog.runtimeShared },
+                  { value: 'create', label: zh.catalog.runtimeCreate },
+                ]}
+                onChange={(value) => setRuntimeMode(value as 'shared' | 'create')}
+                ariaLabel={zh.catalog.runtimeLabel}
+              />
+            </Field>
+
+            {runtimeMode === 'create' ? (
+              <>
+                <Field id="catalog-runtime-user" label={zh.catalog.runtimeUserLabel}>
+                  <TextInput
+                    id="catalog-runtime-user"
+                    value={runtimeUser}
+                    mono
+                    autoComplete="off"
+                    placeholder="khc-app-demo"
+                    onChange={setRuntimeUser}
+                  />
+                </Field>
+                <Field
+                  id="catalog-runtime-password"
+                  label={zh.catalog.runtimePasswordLabel}
+                  help={zh.catalog.secretHelp}
+                >
+                  <TextInput
+                    id="catalog-runtime-password"
+                    type="password"
+                    value={runtimePassword}
+                    autoComplete="new-password"
+                    onChange={setRuntimePassword}
+                  />
+                </Field>
+              </>
+            ) : null}
 
             {task ? (
               <Stack gap={3}>

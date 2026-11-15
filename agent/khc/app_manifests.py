@@ -5,6 +5,9 @@ Worker 安装时把 D1 里的应用定义随请求下发，本模块负责：
 - 校验脚本正文与 ``sha256`` 一致（节点侧第二道闸，Worker 已校过一次）；
 - 校验 ``runtime.user`` / ``writes`` / 参数，拒绝控制字符与路径逃逸；
 - 把脚本落到受控目录，权限 0755，供降权用户读取；
+- 运行身份由安装时配置决定：``shared`` 用默认用户 ``nobody``；``create``
+  用安装时给的用户名/密码自动建系统账号（systemd-run 跳出沙箱），
+  密码只经 chpasswd 的 stdin，不落 D1/日志/命令行；
 - 用 ``runuser -u <user> -- bash <script>`` 执行，脚本进程**不是 root**；
 - 参数经 ``KHC_PARAM_*`` 环境变量传入，不拼接命令行、不进日志；
 - 结果沿用 ``KHC_RESULT=`` 约定。
@@ -41,6 +44,11 @@ MAX_SCRIPT_BYTES = 64 * 1024
 #: 每个应用目录 chown 给 runtime.user。ProtectSystem=full 不拦 /var/lib
 #: 下自有目录，实测属主正确时无需额外 ReadWritePaths 即可写。
 APP_ROOT = "/var/lib/khc-apps"
+#: 不建用户时的默认运行身份：系统自带、非 root、零预建。
+DEFAULT_APP_USER = "nobody"
+#: 建账号要写 /etc/passwd，Agent unit 的 ProtectSystem=full 下 /etc 只读，
+#: 故照 khc.pkg 的做法用 systemd-run 一次性单元跳出沙箱。
+SYSTEMD_RUN_PREFIX = ["systemd-run", "--wait", "--pipe", "--collect"]
 USER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -71,9 +79,13 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
 
     raw = _require_mapping(manifest, "manifest")
     runtime = _require_mapping(raw.get("runtime"), "runtime")
-    user = _require_text(runtime.get("user"), "runtime.user", max_len=32)
-    if not USER_RE.match(user):
-        raise ManifestError("runtime.user 非法", details={"field": "runtime.user"})
+    mode = runtime.get("mode", "shared")
+    if mode not in ("shared", "create"):
+        raise ManifestError("runtime.mode 只支持 shared / create")
+    declared_user = runtime.get("user")
+    if mode == "create" and declared_user is not None:
+        if not isinstance(declared_user, str) or not USER_RE.match(declared_user):
+            raise ManifestError("runtime.user 非法", details={"field": "runtime.user"})
     if runtime.get("linger") not in (True, False, None):
         raise ManifestError("runtime.linger 必须是布尔值")
 
@@ -121,7 +133,8 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
     return {
         "name": name,
         "version": version,
-        "user": user,
+        "mode": mode,
+        "user": declared_user if isinstance(declared_user, str) else None,
         "linger": bool(runtime.get("linger", True)),
         "scripts": checked,
         "sha256": {k: hashes[k] for k in ("install", "uninstall")},
@@ -188,11 +201,89 @@ def _script_dir(manifest_id: str, instance: str) -> str:
 
 
 def _account(user: str):
-    """解析应用用户；不存在即中止（架子里不自动建系统账号）。"""
+    """解析应用用户；不存在即中止，绝不静默退回 root。"""
     try:
         return pwd.getpwnam(user)
     except KeyError:
         raise ManifestError(f"运行用户 {user} 不存在，请先在节点上创建")
+
+
+def resolve_runtime_user(
+    ctx: Ctx,
+    checked: Mapping[str, Any],
+    *,
+    runtime_user: Optional[str] = None,
+    runtime_password: Optional[str] = None,
+) -> str:
+    """按应用的运行身份策略决定最终用户，必要时建账号。
+
+    - shared：用 DEFAULT_APP_USER，忽略任何凭据；
+    - create：安装时给的用户名/密码，账号不存在则用一次性单元建出来并设密码。
+      密码只经 stdin 传给 chpasswd，不出现在命令行、日志、D1 或审计里。
+    """
+    if checked["mode"] == "shared":
+        if runtime_user or runtime_password:
+            raise ManifestError("该应用使用默认用户，不接受用户名和密码")
+        return DEFAULT_APP_USER
+
+    user = runtime_user or checked.get("user")
+    if not isinstance(user, str) or not USER_RE.match(user):
+        raise ManifestError("缺少或非法的应用用户名", details={"field": "runtimeUser"})
+    if not isinstance(runtime_password, str) or not runtime_password:
+        raise ManifestError("新建用户必须提供密码", details={"field": "runtimePassword"})
+    if CONTROL_CHARS_RE.search(runtime_password):
+        raise ManifestError("密码含控制字符")
+
+    try:
+        pwd.getpwnam(user)
+        # 账号已存在：不重复建、不改密码，沿用现有账号（幂等）。
+        if checked.get("linger"):
+            _enable_linger(ctx, user)
+        return user
+    except KeyError:
+        pass
+
+    # useradd 要写 /etc/passwd，必须在沙箱外执行。全程 argv 数组，不拼 shell。
+    create = SYSTEMD_RUN_PREFIX + [
+        "--unit=khc-app-useradd",
+        "--property=RuntimeMaxSec=60",
+        "/usr/sbin/useradd",
+        "--system",
+        "--no-create-home",
+        "--shell",
+        "/usr/sbin/nologin",
+        user,
+    ]
+    result = ctx.run(create, check=False, timeout=90)
+    if result.rc != 0:
+        raise ManifestError(
+            "创建应用用户失败",
+            details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
+        )
+    # 密码经 stdin 传给 chpasswd，不落命令行（ps 也看不到）。
+    chpasswd = SYSTEMD_RUN_PREFIX + [
+        "--unit=khc-app-chpasswd",
+        "--property=RuntimeMaxSec=60",
+        "/usr/sbin/chpasswd",
+    ]
+    result = ctx.run(chpasswd, check=False, timeout=90, input=f"{user}:{runtime_password}\n")
+    if result.rc != 0:
+        raise ManifestError(
+            "设置应用用户密码失败",
+            details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
+        )
+    if checked.get("linger"):
+        _enable_linger(ctx, user)
+    return user
+
+
+def _enable_linger(ctx: Ctx, user: str) -> None:
+    """无人登录时仍要能跑 user unit；失败不阻断安装，只记录。"""
+    result = ctx.run(
+        ["loginctl", "enable-linger", user], check=False, timeout=30
+    )
+    if result.rc != 0:
+        ctx.log(f"enable-linger {user} 未成功（rc={result.rc}），user unit 可能需手动启用")
 
 
 def _chown_to_user(path: str, user: str) -> None:
@@ -245,8 +336,10 @@ def run_manifest(
     action: str,
     values: Any = None,
     instance: Optional[str] = None,
+    runtime_user: Optional[str] = None,
+    runtime_password: Optional[str] = None,
 ) -> dict[str, Any]:
-    """校验 → 落盘 → 降权执行 → 回传结果。"""
+    """校验 → 定运行身份（必要时建账号）→ 落盘 → 降权执行 → 回传结果。"""
 
     if action not in ("install", "uninstall"):
         raise ManifestError("未知动作", details={"action": action})
@@ -259,18 +352,25 @@ def run_manifest(
     checked = validate_manifest(manifest)
     env_values = validate_values(checked["params"], values)
     secrets = _secret_values(checked["params"], values if isinstance(values, Mapping) else {})
+    # 密码也要从输出里抹掉，避免脚本 echo 出来时被回显。
+    if runtime_password:
+        secrets.append(runtime_password)
+
+    user = resolve_runtime_user(
+        ctx, checked, runtime_user=runtime_user, runtime_password=runtime_password
+    )
 
     directory = _script_dir(manifest_id, name)
-    _ensure_user_dir(directory, checked["user"])
-    app_home = os.path.join(APP_ROOT, "data", checked["user"], name)
-    _ensure_user_dir(app_home, checked["user"])
+    _ensure_user_dir(directory, user)
+    app_home = os.path.join(APP_ROOT, "data", user, name)
+    _ensure_user_dir(app_home, user)
     script_path = os.path.join(directory, f"{action}.sh")
     result_file = os.path.join(directory, f"{action}.result.json")
     # 脚本正文不含凭据；0755 让降权用户可读可执行。
     atomic_write(script_path, checked["scripts"][action], mode=0o755)
     # 结果文件由降权脚本写入，属主必须也是它，否则 0600 写不进去。
     atomic_write(result_file, "", mode=0o600)
-    _chown_to_user(result_file, checked["user"])
+    _chown_to_user(result_file, user)
 
     env: dict[str, str] = {
         "KHC_ACTION": action,
@@ -279,16 +379,16 @@ def run_manifest(
         "KHC_MANIFEST_VERSION": checked["version"],
         "KHC_ROOT": ctx.paths.root,
         "KHC_RESULT_FILE": result_file,
-        "KHC_APP_USER": checked["user"],
-        "KHC_APP_HOME": os.path.join(APP_ROOT, "data", checked["user"], name),
-        "KHC_WRITES": _write_paths(checked["user"], name, checked["writes"]),
+        "KHC_APP_USER": user,
+        "KHC_APP_HOME": app_home,
+        "KHC_WRITES": _write_paths(user, name, checked["writes"]),
     }
     env.update(env_values)
 
     # runuser 不带 -l，保留调用方环境，KHC_PARAM_* 因此能完整传到脚本。
     # 这样参数不出现在命令行里，也不会被 ctx.run 的日志记录。
-    cmd = ["runuser", "-u", checked["user"], "--", "bash", script_path]
-    ctx.log(f"manifest {manifest_id}/{name} {action} 开始（user={checked['user']}）")
+    cmd = ["runuser", "-u", user, "--", "bash", script_path]
+    ctx.log(f"manifest {manifest_id}/{name} {action} 开始（user={user}）")
     result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
     stdout = _redact(result.stdout or "", secrets)
     stderr = _redact(result.stderr or "", secrets)
@@ -307,5 +407,6 @@ def run_manifest(
         "manifestId": manifest_id,
         "instance": name,
         "action": action,
-        "user": checked["user"],
+        "user": user,
+        "mode": checked["mode"],
     }

@@ -93,6 +93,14 @@ class AppCatalog(Adapter):
                 action=action,
                 values=dict(values),
                 instance=params.get("instance") if isinstance(params.get("instance"), str) else None,
+                runtime_user=(
+                    params.get("runtimeUser") if isinstance(params.get("runtimeUser"), str) else None
+                ),
+                runtime_password=(
+                    params.get("runtimePassword")
+                    if isinstance(params.get("runtimePassword"), str)
+                    else None
+                ),
             )
 
         recipe_id = _recipe_id(params)

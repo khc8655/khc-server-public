@@ -44,7 +44,7 @@ interface ManifestForm {
 const EMPTY_DEFINITION = `{
   "name": "",
   "version": "0.1.0",
-  "runtime": { "user": "khc-app-demo", "linger": true },
+  "runtime": { "mode": "shared", "linger": true },
   "params": [],
   "scripts": { "install": "#!/usr/bin/env bash\\necho KHC_RESULT={}", "uninstall": "#!/usr/bin/env bash\\nexit 0" },
   "sha256": { "install": "", "uninstall": "" },
@@ -143,7 +143,10 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
       key: 'user',
       type: 'text',
       header: '运行用户',
-      value: (item) => item.manifest.runtime.user,
+      value: (item) =>
+        item.manifest.runtime.mode === 'create'
+          ? (item.manifest.runtime.user ?? '安装时填写')
+          : '默认用户',
     },
     {
       key: 'state',

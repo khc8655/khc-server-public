@@ -1413,14 +1413,22 @@ export const appManifestSha256Schema = z
 export type AppManifestSha256 = z.infer<typeof appManifestSha256Schema>;
 
 /** 运行身份：脚本与该用户起的进程都不是 root。 */
+/**
+ * 运行身份策略：
+ * - shared：用节点预置的默认用户（nobody），不建账号、不需要凭据；
+ * - create：安装时按填写的用户名/密码在节点上建系统账号，凭据只在安装请求里走一趟。
+ * manifest 只存策略，不存密码。
+ */
 export const appManifestRuntimeSchema = z
   .object({
+    mode: z.enum(['shared', 'create']).default('shared'),
     user: z
       .string()
       .trim()
       .min(1)
       .max(32)
-      .regex(/^[a-z][a-z0-9_-]*$/, '运行用户必须是小写字母开头的 POSIX 用户名'),
+      .regex(/^[a-z][a-z0-9_-]*$/, '运行用户必须是小写字母开头的 POSIX 用户名')
+      .optional(),
     linger: z.boolean().default(true),
   })
   .strict();
@@ -1514,6 +1522,15 @@ export const manifestActionParamsSchema = z
       .max(32)
       .regex(/^[a-z][a-z0-9-]*$/, '实例名必须是小写 slug')
       .optional(),
+    /** 仅 runtime.mode === 'create' 时填写；绝不落 D1、不进审计与日志。 */
+    runtimeUser: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^[a-z][a-z0-9_-]*$/, '用户名必须是小写字母开头')
+      .optional(),
+    runtimePassword: z.string().min(1).max(128).optional(),
   })
   .passthrough();
 export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;

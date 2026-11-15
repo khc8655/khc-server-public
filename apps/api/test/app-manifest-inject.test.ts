@@ -7,11 +7,11 @@ const INSTALL = '#!/usr/bin/env bash\necho KHC_RESULT={}\n';
 const UNINSTALL = '#!/usr/bin/env bash\necho removed\n';
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
-function definition() {
+function definition(): import('@khc/contracts').AppManifestDefinition {
   return {
     name: '测试应用',
     version: '0.2.0',
-    runtime: { user: 'khc-app-test', linger: true },
+    runtime: { mode: 'shared', linger: true },
     params: [],
     scripts: { install: INSTALL, uninstall: UNINSTALL },
     sha256: { install: sha(INSTALL), uninstall: sha(UNINSTALL) },
@@ -95,6 +95,76 @@ describe('应用清单下发：Worker 注入 manifest（R1）', () => {
         method: 'POST',
         headers: authHeaders(cookie),
         body: actionBody({ manifestId: 'disabled', values: {} }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(400);
+    expect(ctx.agent.requests).toHaveLength(0);
+  });
+
+  it('create 模式：凭据随请求下发，且不出现在审计里', async () => {
+    const { ctx, cookie, nodeId } = await setup();
+    await ctx.appManifests.create({
+      id: 'create-mode',
+      manifest: { ...definition(), runtime: { mode: 'create', linger: true } },
+      enabled: true,
+    });
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/recipe_install`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: actionBody({
+          manifestId: 'create-mode',
+          values: {},
+          runtimeUser: 'khc-app-new',
+          runtimePassword: 's3cret-pass',
+        }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const params = (ctx.agent.requests[0]?.body as { params: Record<string, unknown> }).params;
+    expect(params.runtimeUser).toBe('khc-app-new');
+    expect(params.runtimePassword).toBe('s3cret-pass');
+    const auditText = JSON.stringify(ctx.audit.entries);
+    expect(auditText).not.toContain('s3cret-pass');
+  });
+
+  it('shared 模式传凭据被拒绝', async () => {
+    const { ctx, cookie, nodeId } = await setup();
+    await ctx.appManifests.create({ id: 'shared-mode', manifest: definition(), enabled: true });
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/recipe_install`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: actionBody({
+          manifestId: 'shared-mode',
+          values: {},
+          runtimeUser: 'khc-app-x',
+          runtimePassword: 'p',
+        }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(400);
+    expect(ctx.agent.requests).toHaveLength(0);
+  });
+
+  it('create 模式只给用户名不给密码被拒绝', async () => {
+    const { ctx, cookie, nodeId } = await setup();
+    await ctx.appManifests.create({
+      id: 'create-partial',
+      manifest: { ...definition(), runtime: { mode: 'create', linger: true } },
+      enabled: true,
+    });
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/recipe_install`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: actionBody({ manifestId: 'create-partial', values: {}, runtimeUser: 'khc-app-x' }),
       },
       ctx.env,
     );

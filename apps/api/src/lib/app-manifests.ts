@@ -53,6 +53,18 @@ export async function resolveManifestParams(
   if (!record) throw notFound('应用不存在');
   if (!record.enabled) throw badRequest('该应用已停用，不能发起安装');
 
+  // 凭据只在「建用户」模式下允许，且必须成对。密码绝不写 D1、审计或日志，
+  // 这里只在内存里随请求转发给节点，用完即弃。
+  const needsUser = record.manifest.runtime.mode === 'create';
+  const hasUser = Boolean(parsed.data.runtimeUser);
+  const hasPassword = Boolean(parsed.data.runtimePassword);
+  if (!needsUser && (hasUser || hasPassword)) {
+    throw badRequest('该应用使用默认用户，不接受用户名和密码');
+  }
+  if (needsUser && hasUser !== hasPassword) {
+    throw badRequest('新建用户时用户名和密码必须同时填写');
+  }
+
   const { manifestId: _manifestId, ...rest } = params;
   return {
     ...rest,
