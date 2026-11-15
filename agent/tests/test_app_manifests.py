@@ -6,9 +6,11 @@ import hashlib
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from khc.adapters import Ctx, RunResult
-from khc.app_manifests import ManifestError, run_manifest, validate_manifest
+from khc import app_manifests as mod
+from khc.app_manifests import APP_ROOT, ManifestError, run_manifest, validate_manifest
 
 from .support import make_paths
 
@@ -52,9 +54,45 @@ class ManifestTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="khc-manifest-")
         self.paths = make_paths(self.tmp)
         self.logs: list[str] = []
+        # 单测机没有应用专属系统账号；属主处理在真机验证，这里只断言行径。
+        self.chown_patch = mock.patch.object(mod, "_chown_to_user")
+        self.chown = self.chown_patch.start()
+        self.root_patch = mock.patch.object(mod, "APP_ROOT", os.path.join(self.tmp, "khc-apps"))
+        self.root_patch.start()
+
+    def tearDown(self):
+        self.chown_patch.stop()
+        self.root_patch.stop()
 
     def ctx(self, runner):
         return Ctx(self.paths, command_runner=runner, log=self.logs.append)
+
+    def test_script_dir_is_app_owned_root_not_agent_data_dir(self):
+        # 真机实测：/var/lib/khc-agent 是 0750 root:root，降权用户读不到脚本。
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        run_manifest(
+            self.ctx(runner), manifest=manifest(), manifest_id="test-app", action="install"
+        )
+        script = runner.calls[0][-1]
+        self.assertTrue(script.startswith(os.path.join(mod.APP_ROOT, "test-app")))
+        self.assertNotIn("khc-agent/app-manifests", script)
+        env = runner.envs[0] or {}
+        self.assertTrue(env["KHC_APP_HOME"].startswith(os.path.join(mod.APP_ROOT, "data")))
+        self.assertNotIn("/home/", env["KHC_WRITES"])
+
+    def test_missing_runtime_user_rejected(self):
+        # 这一用例要真实解析账号，临时停掉单测的属主替身。
+        self.chown_patch.stop()
+        try:
+            with self.assertRaises(ManifestError):
+                run_manifest(
+                    self.ctx(RecordingRunner()),
+                    manifest=manifest(runtime={"user": "no-such-user-r1", "linger": True}),
+                    manifest_id="test-app",
+                    action="install",
+                )
+        finally:
+            self.chown_patch.start()
 
     def test_sha256_mismatch_aborts_before_writing_or_running(self):
         runner = RecordingRunner()
@@ -64,7 +102,7 @@ class ManifestTests(unittest.TestCase):
                 self.ctx(runner), manifest=bad, manifest_id="test-app", action="install"
             )
         self.assertEqual(runner.calls, [])
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, "app-manifests")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "khc-apps")))
 
     def test_path_traversal_in_writes_rejected(self):
         bad = manifest(writes=["~/../../etc/shadow"])
@@ -128,6 +166,10 @@ class ManifestTests(unittest.TestCase):
         # 脚本正文落地且降权用户可读
         self.assertTrue(os.path.isfile(cmd[-1]))
         self.assertEqual(oct(os.stat(cmd[-1]).st_mode & 0o777), "0o755")
+        # 目录与结果文件都交给应用用户（真机由 _chown_to_user 落实）
+        self.assertGreaterEqual(self.chown.call_count, 3)
+        self.assertEqual(env["KHC_APP_HOME"], os.path.join(mod.APP_ROOT, "data", "khc-app-test", "a"))
+        self.assertEqual(APP_ROOT, "/var/lib/khc-apps")
 
     def test_secret_not_logged_or_echoed_on_failure(self):
         runner = RecordingRunner(rc=1, stdout="top secret here", stderr="top secret here")

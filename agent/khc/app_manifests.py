@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pwd
 import re
 from typing import Any, Mapping, Optional
 
@@ -34,6 +35,12 @@ SCRIPT_TIMEOUT = 900.0
 RESULT_PREFIX = "KHC_RESULT="
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SCRIPT_BYTES = 64 * 1024
+#: 脚本与运行数据的受控根。实测（2026-11-15，oracle-x86-2）：
+#: Agent 数据目录 /var/lib/khc-agent 是 0750 root:root，降权用户读不到；
+#: 家目录在 unit 的 ProtectHome=read-only 下只读。故独立用这个根，
+#: 每个应用目录 chown 给 runtime.user。ProtectSystem=full 不拦 /var/lib
+#: 下自有目录，实测属主正确时无需额外 ReadWritePaths 即可写。
+APP_ROOT = "/var/lib/khc-apps"
 USER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -176,8 +183,33 @@ def _redact(text: str, secrets: list[str]) -> str:
     return text
 
 
-def _script_dir(ctx: Ctx, manifest_id: str, instance: str) -> str:
-    return os.path.join(ctx.paths.data_dir, "app-manifests", manifest_id, instance)
+def _script_dir(manifest_id: str, instance: str) -> str:
+    return os.path.join(APP_ROOT, manifest_id, instance)
+
+
+def _account(user: str):
+    """解析应用用户；不存在即中止（架子里不自动建系统账号）。"""
+    try:
+        return pwd.getpwnam(user)
+    except KeyError:
+        raise ManifestError(f"运行用户 {user} 不存在，请先在节点上创建")
+
+
+def _chown_to_user(path: str, user: str) -> None:
+    account = _account(user)
+    os.chown(path, account.pw_uid, account.pw_gid)
+
+
+def _ensure_user_dir(path: str, user: str) -> None:
+    """建目录并交给应用用户；目录必须可读可遍历，否则降权后读不到脚本。"""
+    ensure_dir(path, mode=0o755)
+    _chown_to_user(path, user)
+
+
+def _write_paths(user: str, instance: str, writes: list[str]) -> str:
+    """把 ~/ 声明展开到该应用自己的受控目录（家目录在沙箱下只读）。"""
+    base = os.path.join(APP_ROOT, "data", user, instance)
+    return "\n".join(os.path.join(base, item[2:]) for item in writes)
 
 
 def _parse_result(stdout: str, result_file: str, ctx: Ctx) -> dict[str, Any]:
@@ -228,13 +260,17 @@ def run_manifest(
     env_values = validate_values(checked["params"], values)
     secrets = _secret_values(checked["params"], values if isinstance(values, Mapping) else {})
 
-    directory = _script_dir(ctx, manifest_id, name)
-    ensure_dir(directory, mode=0o755)
+    directory = _script_dir(manifest_id, name)
+    _ensure_user_dir(directory, checked["user"])
+    app_home = os.path.join(APP_ROOT, "data", checked["user"], name)
+    _ensure_user_dir(app_home, checked["user"])
     script_path = os.path.join(directory, f"{action}.sh")
     result_file = os.path.join(directory, f"{action}.result.json")
-    # 脚本正文不含凭据；0755 让降权用户可读可执行，目录由 Agent 管理。
+    # 脚本正文不含凭据；0755 让降权用户可读可执行。
     atomic_write(script_path, checked["scripts"][action], mode=0o755)
+    # 结果文件由降权脚本写入，属主必须也是它，否则 0600 写不进去。
     atomic_write(result_file, "", mode=0o600)
+    _chown_to_user(result_file, checked["user"])
 
     env: dict[str, str] = {
         "KHC_ACTION": action,
@@ -244,9 +280,8 @@ def run_manifest(
         "KHC_ROOT": ctx.paths.root,
         "KHC_RESULT_FILE": result_file,
         "KHC_APP_USER": checked["user"],
-        "KHC_WRITES": "\n".join(
-            os.path.join("/home", checked["user"], item[2:]) for item in checked["writes"]
-        ),
+        "KHC_APP_HOME": os.path.join(APP_ROOT, "data", checked["user"], name),
+        "KHC_WRITES": _write_paths(checked["user"], name, checked["writes"]),
     }
     env.update(env_values)
 
