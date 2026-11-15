@@ -84,6 +84,34 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(env["KHC_APP_HOME"].startswith(os.path.join(mod.APP_ROOT, "data")))
         self.assertNotIn("/home/", env["KHC_WRITES"])
 
+    def test_access_and_cards_are_returned_at_top_level(self):
+        # 前端读 task.result.access，不能把 KHC_RESULT 埋在 result 里。
+        runner = RecordingRunner(
+            stdout='KHC_RESULT={"access":[{"label":"登录","value":"http://127.0.0.1:3430/?k=x","kind":"url","copy":true}],"cards":[]}\n'
+        )
+        out = run_manifest(
+            self.ctx(runner), manifest=manifest(), manifest_id="test-app", action="install"
+        )
+        self.assertEqual(out["access"][0]["label"], "登录")
+        self.assertIn("http://127.0.0.1:3430/?k=x", out["access"][0]["value"])
+        self.assertTrue(out["cards"])  # 无 cards 时自动从 access 派生
+
+    def test_create_mode_useradd_has_real_home_dir(self):
+        # systemd user manager 只搜 $HOME/.config/systemd/user，家目录必须真实存在。
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        with mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError):
+            run_manifest(
+                self.ctx(runner),
+                manifest=manifest(runtime={"mode": "create", "user": "khc-app-new"}),
+                manifest_id="test-app", action="install",
+                runtime_user="khc-app-new", runtime_password="p",
+            )
+        useradd = next(" ".join(c) for c in runner.calls if "useradd" in " ".join(c))
+        self.assertIn("--create-home", useradd)
+        self.assertIn("--home-dir", useradd)
+        self.assertIn(os.path.join(mod.APP_ROOT, "home", "khc-app-new"), useradd)
+        self.assertNotIn("--no-create-home", useradd)
+
     def test_shared_mode_rejects_credentials(self):
         with self.assertRaises(ManifestError):
             run_manifest(

@@ -244,12 +244,18 @@ def resolve_runtime_user(
         pass
 
     # useradd 要写 /etc/passwd，必须在沙箱外执行。全程 argv 数组，不拼 shell。
+    # 家目录必须真实存在且可写：systemd user manager 只搜 $HOME/.config/systemd/user，
+    # 这个路径由 user@.service 启动时固定，脚本里临时改 XDG_CONFIG_HOME 无效。
+    # 放到受控根下，既避开 unit 的 ProtectHome=read-only，也不碰系统 /home。
+    home = os.path.join(APP_ROOT, "home", user)
     create = SYSTEMD_RUN_PREFIX + [
         "--unit=khc-app-useradd",
         "--property=RuntimeMaxSec=60",
         "/usr/sbin/useradd",
         "--system",
-        "--no-create-home",
+        "--create-home",
+        "--home-dir",
+        home,
         "--shell",
         "/usr/sbin/nologin",
         user,
@@ -402,11 +408,31 @@ def run_manifest(
     if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESULT_BYTES:
         raise ManifestError("KHC_RESULT 超过 64KB")
     save_json(result_file, {"manifestId": manifest_id, "instance": name, "action": action}, mode=0o600)
-    return {
-        "result": payload,
+    # access / cards 必须放在返回顶层：后台任务的 result 会原样透传给面板，
+    # 前端读的是 task.result.access（见 AppCatalog.tsx 的 taskAccess）。
+    # 脚本里写 KHC_RESULT={"access":[...]} 就靠这里显示成可点击的链接。
+    result: dict[str, Any] = {
         "manifestId": manifest_id,
         "instance": name,
         "action": action,
         "user": user,
         "mode": checked["mode"],
+        "result": payload,
+        "cards": [],
+        "access": [],
     }
+    if isinstance(payload.get("access"), list):
+        result["access"] = payload["access"]
+    if isinstance(payload.get("cards"), list):
+        result["cards"] = payload["cards"]
+    if not result["cards"] and result["access"]:
+        result["cards"] = [
+            {
+                "title": str(item.get("label", ""))[:120],
+                "value": str(item.get("value", ""))[:2000],
+                "copy": bool(item.get("copy", True)),
+            }
+            for item in result["access"][:8]
+            if isinstance(item, Mapping)
+        ]
+    return result
