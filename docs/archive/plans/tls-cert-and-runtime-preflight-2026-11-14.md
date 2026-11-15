@@ -1,8 +1,9 @@
 # TLS 证书落地与运行时前置检查（提案）
 
-> 状态：**已拍板并全部分批实施**（2026-11-14）｜ 最后核验：2026-11-14 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/live-observation.md`、ADR-0010
+> 状态：历史（已实施并归档，2026-11-14） ｜ 最后核验：2026-11-14 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/live-observation.md`、ADR-0010
 >
-> 四个批次的 PR：批次 1 #45、批次 4 #46、批次 3 #47、批次 2 #48。
+> 四个批次的 PR：批次 1 #45、批次 4 #46、批次 3 #47、批次 2 #48，均已合并；对应 issue #49–#52 已关闭。
+> 本文仅作决策与验证证据留档，不作为开发依据；现行做法见 `docs/runbook/node-onboarding.md` §4.1 与 `docs/live-observation.md`。
 
 ## 1. 背景
 
@@ -166,7 +167,9 @@ A 的代价是每次 `/state` 多一次 TLS 握手；可用与 `/state` 相同�
 
 **联通云 `unicom-cn-1`（手工签发那张证书）**：原本既无 crontab 也无 timer，等于到期即失效。已补装同一套 `khc-acme-renew.{service,timer}`（`ExecStart=/root/.acme.sh/acme.sh --cron --home /root/.acme.sh`），`--cron` 空转到 `2027-01-12`；`Le_ReloadCmd` 仍是 `systemctl reload caddy`，续期后自动换证。该节点 Agent 仍是 **0.1.48**，所以面板的 `renewal.timerInstalled` 要等 Agent 升级到 0.1.51 才会显示。
 
-### 仍未闭环
+### 归档时的遗留项
+
+除下列三项外均已闭环：批次 1/3/4 随 Agent 0.1.51、批次 2 随面板 0.12.10 进入 main，`Closes` 已关闭 #49–#52。
 
 - **UI 截图**（浅色/深色/390 宽）由主人在面板上实拍确认，不在代码评审范围。
 - **`hk-nat` 已删除**：`wireguard` 应用 `rev 5 / appliedRev 5`，节点 `wg0` 只剩 `e2e-unicom-peer`（10.99.0.2）与 `sg-nat`（10.99.0.4）；删后复测 `http://106.74.24.207:2083/` = 200、`https://unicom-hub.khc66.top:8443/health` = 200。**香港 NAT 那台机器本身已下线（202.73.4.182:56686 不可达）**，无需再清理。
