@@ -1789,6 +1789,26 @@ class AdapterOnboardTests(AdapterTestBase):
         assert command.startswith("sudo bash -c '") and command.endswith("'"), command[:40]
         return command[len("sudo bash -c '") : -1]
 
+    def test_install_command_preflights_python3(self) -> None:
+        """接入命令必须在投递脚本前检查 python3。
+
+        khc-host 是 Python 脚本；缺 python3 时命令会“成功”装完，之后每次
+        ssh 调用都失败在 `env: 'python3': No such file`，且被误判成脚本缺失。
+        """
+
+        result = self.onboard(self.config("a"), {"peerId": "a"})
+        self.assertTrue(result["ok"], result)
+        body = self._inner_script(result["installCommand"])
+        self.assertIn("command -v python3", body)
+        # 必须在投递脚本之前拦下，避免留下一份永远跑不起来的 khc-host
+        self.assertLess(body.index("command -v python3"), body.index("KHC_SCRIPT"))
+        # 拦下时要给出可执行的自救指引，且非 0 退出
+        guard = body.split("command -v python3", 1)[1].split("install -d", 1)[0]
+        self.assertIn("apt-get install", guard)
+        self.assertIn("exit 90", guard)
+        syntax = subprocess.run(["bash", "-n"], input=body, capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
     def test_install_command_records_original_shell(self) -> None:
         """onboard 脚本：改 shell 前把原值记到 /etc/khc-host/original-shell。"""
 
@@ -1967,6 +1987,15 @@ class AdapterCallTests(AdapterTestBase):
             (RunResult(cmd=["ssh"], rc=255, stdout="", stderr="Permission denied (publickey)."), "E_SSH_DENIED"),
             (RunResult(cmd=["ssh"], rc=255, stdout="", stderr="connect: Connection refused"), "E_SSH_TIMEOUT"),
             (RunResult(cmd=["ssh"], rc=127, stdout="", stderr=""), "E_SCRIPT_MISSING"),
+            (
+                RunResult(
+                    cmd=["ssh"],
+                    rc=127,
+                    stdout="",
+                    stderr="/usr/bin/env: 'python3': No such file or directory",
+                ),
+                "E_RUNTIME_MISSING",
+            ),
             (RunResult(cmd=["ssh"], rc=0, stdout="not json", stderr=""), "E_BAD_REQUEST"),
         )
         for result_obj, code in cases:
