@@ -742,3 +742,55 @@ describe('Peer 运维（内网穿透页，不受本次重组影响）', () => {
     expect(screen.getByRole('button', { name: '进程' })).toBeTruthy();
   });
 });
+
+/* ---------------------------------------------------------------------------
+ * 防火墙段的并发加载（2026-11-16 U6）
+ *
+ * version 与 fw.show 互不依赖，必须并行发出。串行时总耗时是两者之和，
+ * 而 Peer 目标走 SSH 那一跳要几百毫秒，串起来的代价很明显。
+ * ------------------------------------------------------------------------- */
+
+describe('防火墙加载的并发', () => {
+  function verbOf(init: RequestInit | undefined): string {
+    try {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      return String(body?.params?.verb ?? '');
+    } catch {
+      return '';
+    }
+  }
+
+  it('version 未返回前就已经发出 fw.show（串行实现会失败）', async () => {
+    mockApi();
+
+    // 关键：让 version 挂起一段真实时间。串行实现必须等它 resolve 才会发 fw.show，
+    // 并行实现则会在它还没返回时就发出 fw.show。
+    // 不注入延迟的话，mock 同步返回，串行与并行在请求序上无法区分（踩过这个坑）。
+    const realFetch = globalThis.fetch;
+    let versionResolved = false;
+    let showSentBeforeVersionResolved: boolean | null = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const verb = verbOf(init);
+        if (verb === 'version') {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          versionResolved = true;
+          return (realFetch as typeof fetch)(input, init);
+        }
+        if (verb === 'fw.show') {
+          showSentBeforeVersionResolved = !versionResolved;
+          return (realFetch as typeof fetch)(input, init);
+        }
+        return (realFetch as typeof fetch)(input, init);
+      }),
+    );
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '防火墙' }));
+    await screen.findByText('web');
+
+    expect(versionResolved).toBe(true);
+    expect(showSentBeforeVersionResolved).toBe(true);
+  });
+});

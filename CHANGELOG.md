@@ -1,6 +1,10 @@
 # Changelog
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
+## [0.17.1] - 2026-11-16
+### Changed
+- 防火墙段与 SSH 公钥面板的加载提速：原本「先取版本号、再取数据」要串两次，现在同时发。对 Peer 目标收益更明显（那一跳走 SSH，串行会把两段网络往返相加）。
+
 ## [0.17.0] - 2026-11-16
 ### Changed
 - 主机运维整体提速：本机调用不再每次都启动一个 Python 进程重跑运维脚本，改为在 Agent 内直接执行。实测 `version` 从 129–190ms 降到 2ms，`svc.list` 从 132–191ms 降到 8ms，打开主机运维页明显更快（需 Agent 0.5.0）。
@@ -382,19 +386,3 @@
   原地改为可选前缀 `-path`（其余条目与沙箱强度逐字符不变、不新增放宽项），修复 0.1.36
   只对全新安装生效、已升级节点仍保留硬路径的覆盖缺口。`/etc/wireguard` 被误删时服务
   照常启动，WireGuard 适配器以 `wireguard_dir_missing` 上报不可用。
-
-## [0.7.13] - 2026-11-10
-
-- 发布 Agent 0.1.36（预发复测 13 项缺陷按 R1–R7 成批修复）：
-  - 动作参数统一走 `action_params(body)` 唯一访问器，修复 CaddyFile 接管/恢复（C-05）与
-    备份恢复时「参数读错层级」导致的失败；适配器内置 AST 守卫阻止再次直读顶层键。
-  - cron 校验收敛为 Agent 单一权威：拒绝 `@reboot` 等快捷表达式、shell 分隔符注入
-    （`;` / `&&` / `||` / `|` / `$()` / 反引号）、段数不足与越界时间字段；面板侧只保留格式提示。
-  - `status` 新增 `orphan_unit`（残留 `wg-quick@*`）与 `wireguard_dir_missing`（`/etc/wireguard`
-    缺失降级，不再拖垮 Agent 启动）；站点 plan/apply 读 `/proc/net/tcp{,6}` 做真实端口预检。
-  - 过载拒绝语义明确：明文池满返回 503 + `Retry-After`，TLS 握手前只能断连（见
-    `docs/security-boundaries.md` §4.1）。
-- 备份默认剥离 basicauth 密码哈希并在 manifest 记录 `stripped`/`encKeyId`，导入时保留目标
-  节点旧值；新增 `scripts/verify-backup.mjs` 与灾难恢复「回放前自检」。
-- 面板文案：直连观测不可用时明确「不回退控制面快照」；未知状态改为「未读取」。
-- Agent unit 的 `/etc/wireguard` 白名单改为可选前缀，目录被误删时 Agent 仍可启动。

@@ -81,8 +81,12 @@ export function FirewallDrawer({
     setLoading(true);
     setError(null);
     try {
-      const versionResult = await callHostOps(hubId, target, 'version');
-      const showResult = await callHostOps(hubId, target, 'fw.show', {});
+      // 两个调用互不依赖（version 只更新版本号，fw.show 单独决定 error），并行发出去。
+      // 串行时总耗时是两者之和；Peer 目标走 SSH 那一跳要几百毫秒，串起来的代价更明显。
+      const [versionResult, showResult] = await Promise.all([
+        callHostOps(hubId, target, 'version'),
+        callHostOps(hubId, target, 'fw.show', {}),
+      ]);
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));
       if (!showResult.ok) {
         setError(showResult.error);

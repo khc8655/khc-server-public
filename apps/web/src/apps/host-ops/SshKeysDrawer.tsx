@@ -67,8 +67,12 @@ export function SshKeysDrawer({
     setLoading(true);
     setError(null);
     try {
-      const versionResult = await callHostOps(hubId, target, 'version');
-      const keysResult = await callHostOps(hubId, target, 'keys.list', {});
+      // 两个调用互不依赖，并行发出去。target 是 Peer 时这一跳走 SSH，
+      // 串行会把两段几百毫秒的网络往返相加。
+      const [versionResult, keysResult] = await Promise.all([
+        callHostOps(hubId, target, 'version'),
+        callHostOps(hubId, target, 'keys.list', {}),
+      ]);
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));
       if (!keysResult.ok) setError(keysResult.error);
       else setKeys(normalizeKeys(keysResult.data));

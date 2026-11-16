@@ -788,8 +788,11 @@ export function KeysSegment({
     setLoading(true);
     setError(null);
     try {
-      const versionResult = await callHostOps(hubId, 'self', 'version');
-      const keysResult = await callHostOps(hubId, 'self', 'keys.list', {});
+      // 两个调用互不依赖，并行发出去（串行时总耗时是两者之和）。
+      const [versionResult, keysResult] = await Promise.all([
+        callHostOps(hubId, 'self', 'version'),
+        callHostOps(hubId, 'self', 'keys.list', {}),
+      ]);
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));
       if (!keysResult.ok) setError(keysResult.error);
       else setKeys(normalizeKeys(keysResult.data));
