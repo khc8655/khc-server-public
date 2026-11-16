@@ -1257,6 +1257,23 @@ class AdapterRunner(FakeRunner):
     def last_input(self):
         return self.inputs[-1] if self.inputs else None
 
+    def run_in_process(self, verb: str, payload: str, state_dir: str) -> RunResult:
+        """模拟进程内执行 khc-host（U4）：返回与子进程路径同形的 RunResult。
+
+        真实实现调用模块的 main()，这里复用与子进程分支相同的注入值，
+        保证「改不改进程内」对测试结果没有影响。
+        """
+
+        self.calls.append(["khc-host-inproc", verb])
+        self.inputs.append(payload)
+        if self.self_result is not None:
+            return RunResult(cmd=["khc-host", verb], rc=0, stdout=json.dumps(self.self_result))
+        return RunResult(
+            cmd=["khc-host", verb],
+            rc=0,
+            stdout=json.dumps({"ok": True, "v": self.script_version, "data": {"verb": verb}}),
+        )
+
     def _write_keypair(self, key_path: str) -> None:
         os.makedirs(os.path.dirname(key_path), exist_ok=True)
         with open(key_path, "w", encoding="utf-8") as handle:
@@ -1305,10 +1322,14 @@ class AdapterTestBase(unittest.TestCase):
         self.runner = AdapterRunner()
         self.adapter = HostOps()
         self.ctx = Ctx(self.paths, command_runner=self.runner)
+        # U4：self 路径改进程内执行，测试用 runner 接管这一层（不真的起解释器）
+        self._inproc = ADAPTER_MODULE._INPROC_EXECUTOR
+        ADAPTER_MODULE._INPROC_EXECUTOR = self.runner.run_in_process
 
     def tearDown(self) -> None:
         # call_task 在后台线程里跑：终态先可见、落盘后完成，清理前先 join。
         join_kernel_tasks()
+        ADAPTER_MODULE._INPROC_EXECUTOR = self._inproc
         self._tmp.cleanup()
 
     @staticmethod
@@ -1929,16 +1950,71 @@ class AdapterCallTests(AdapterTestBase):
         return self.adapter.action_call(self.ctx, {"config": self.config_data, "params": params})
 
     def test_call_self_runs_local_script(self) -> None:
+        """self 走进程内执行（U4）：结果与子进程一致，但不再起解释器。
+
+        每次 `python3 khc-host` 要 83-185ms，进程内只要 0.035ms。
+        这里验证「不起子进程」且「参数照旧经 stdin 传」。
+        """
+
         self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {"hostname": "hub"}}
         result = self.call({"target": "self", "verb": "status", "params": {}})
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["data"], {"hostname": "hub"})
         self.assertEqual(result["v"], HOST_SCRIPT.SCRIPT_VERSION)
         self.assertFalse(result["updateRequired"])
-        argv = self.runner.calls[-1]
-        self.assertEqual(argv[1], self.adapter.script_path(self.ctx))
-        self.assertEqual(argv[2], "status")
+        # 进程内执行：不应出现起 python3 子进程的调用
+        self.assertEqual(self.runner.commands("python3"), [])
+        self.assertEqual(self.runner.calls[-1], ["khc-host-inproc", "status"])
         self.assertEqual(json.loads(self.runner.last_input()), {})
+
+    def test_call_self_falls_back_to_subprocess_on_environment_error(self) -> None:
+        """进程内执行撞上环境限制（如沙箱只读）时，回退子进程再试一次。
+
+        只对环境类错误回退；业务错误（参数非法、受保护单元）不回退，
+        否则会把耗时翻倍、审计里还多一条记录。
+        """
+
+        calls: list[str] = []
+
+        def inproc(verb, payload, state_dir):
+            calls.append(verb)
+            return RunResult(
+                cmd=["khc-host", verb],
+                rc=0,
+                stdout=json.dumps({
+                    "ok": False,
+                    "v": HOST_SCRIPT.SCRIPT_VERSION,
+                    "error": {"code": "E_NO_PRIV", "message": "需要 root"},
+                }),
+            )
+
+        ADAPTER_MODULE._INPROC_EXECUTOR = inproc
+        self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {"via": "subprocess"}}
+        result = self.call({"target": "self", "verb": "status", "params": {}})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["data"], {"via": "subprocess"})
+        self.assertEqual(calls, ["status"])  # 进程内试过一次
+        self.assertTrue(self.runner.commands("python3"))  # 然后回退到子进程
+
+    def test_call_self_does_not_fall_back_on_business_error(self) -> None:
+        """业务错误不回退：子进程会给一样的答案，重跑只是白费时间。"""
+
+        def inproc(verb, payload, state_dir):
+            return RunResult(
+                cmd=["khc-host", verb],
+                rc=0,
+                stdout=json.dumps({
+                    "ok": False,
+                    "v": HOST_SCRIPT.SCRIPT_VERSION,
+                    "error": {"code": "E_PROTECTED", "message": "服务受保护"},
+                }),
+            )
+
+        ADAPTER_MODULE._INPROC_EXECUTOR = inproc
+        result = self.call({"target": "self", "verb": "status", "params": {}})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "E_PROTECTED")
+        self.assertEqual(self.runner.commands("python3"), [])  # 没有回退
 
     def test_call_self_generates_missing_script(self) -> None:
         self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {}}
@@ -2614,8 +2690,14 @@ class HttpContractTests(unittest.TestCase):
         self.adapter = HostOps()
         self.kernel = make_kernel(self.paths, [self.adapter], runner=self.runner)
         self.harness = HttpHarness(self.kernel, TEST_TOKEN).start()
+        self._inproc = ADAPTER_MODULE._INPROC_EXECUTOR
+        ADAPTER_MODULE._INPROC_EXECUTOR = self.runner.run_in_process
         self.addCleanup(self.harness.stop)
+        self.addCleanup(self._restore_inproc)
         self.addCleanup(self._tmp.cleanup)
+
+    def _restore_inproc(self) -> None:
+        ADAPTER_MODULE._INPROC_EXECUTOR = self._inproc
 
     def test_action_error_is_http_200(self) -> None:
         # FakeRunner 不会真的写 key：hub_pubkey 返回 E_SCRIPT_MISSING，但 HTTP 仍是 200

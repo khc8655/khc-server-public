@@ -31,13 +31,13 @@ try:  # pragma: no cover - 非 Unix 平台没有 fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 # 版本协商（ADR-0013 / docs/engineering/release.md §1.1 兼容矩阵）：
 # 本 Agent 要求控制面面板最低版本。面板在每个 HMAC 请求里带 X-Khc-Panel-Version，
 # Agent 在鉴权通过后校验；低于此版本返回 426 panel_too_old，而不是让调用方
 # 收到莫名其妙的字段缺失/协议错配。改这个值 = 协议不兼容，需要同步更新矩阵文档。
-MIN_PANEL_VERSION = "0.4.1"
+MIN_PANEL_VERSION = "0.5.0"
 
 LOG = logging.getLogger("khc")
 
