@@ -1,6 +1,12 @@
 # Changelog
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
+## [0.16.1] - 2026-11-16
+### Changed
+- 主机运维「进程」列表打开更快：采集窗口从 500ms 缩到 100ms，且与页面概况的 CPU 采集共用同一段时间，不再连着等两次。实测单次采样的等待从 498ms 降到 100ms（需 Agent 0.4.1）。
+### Fixed
+- 进程 CPU 占用率在采集窗口被系统拖延时不再偏高：分母改用真实经过时间，而不是写死的窗口长度。
+
 ## [0.16.0] - 2026-11-16
 ### Added
 - Peer 新增「网络」设置：可达范围（仅 Hub / Hub + 指定 Peer / Hub + 所有 Peer）与出网方式（仅内网流量走 Hub / 全部流量走 Hub）。由服务端防火墙强制执行，不只是客户端配置（需 Agent 0.4.0）。
@@ -386,11 +392,3 @@
   节点旧值；新增 `scripts/verify-backup.mjs` 与灾难恢复「回放前自检」。
 - 面板文案：直连观测不可用时明确「不回退控制面快照」；未知状态改为「未读取」。
 - Agent unit 的 `/etc/wireguard` 白名单改为可选前缀，目录被误删时 Agent 仍可启动。
-
-## [0.7.12] - 2026-11-10
-
-- 面板节点「Agent」卡新增升级纪律提示：同一节点两次升级间隔需 ≥60 秒，升级失败先看
-  节点上的 `/var/lib/khc-agent/upgrade.json` 再决定是否重试（看门狗重叠回滚属已知缺陷，单独立项）。
-- 新增外部 uptime 探测脚本 `scripts/uptime-check.mjs`：检查 `/api/v1/health`、
-  `/api/v1/version` 的 commit 与 TLS 证书到期；告警 webhook 未配置时显式提示「未配置」，
-  不静默通过（告警地址待提供后接线）。

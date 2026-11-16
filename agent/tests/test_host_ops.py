@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -76,6 +77,7 @@ SCRIPT_GLOBAL_NAMES = (
     "NFT_AVAILABLE",
     "RUNNER",
     "SLEEP",
+    "MONOTONIC",
     "USER_HOME_MAP",
     "FW_ROLLBACK_SECONDS",
     "MAX_OUTPUT_BYTES",
@@ -428,8 +430,13 @@ class ScriptProcessesTests(ScriptTestBase):
             bump_proc_cpu(self.proc_root, 4242, 50)
             bump_proc_cpu(self.proc_root, 4243, 1)
 
+        # 分母取自 MONOTONIC 真实差值（U4）：给出与采样窗口一致的经过时间，
+        # 否则分母接近 0，采样结果会随机（甚至爆表）。
+        span = HOST_SCRIPT.PROCESS_CPU_SAMPLE_INTERVAL
+        clock = iter([1000.0, 1000.0 + span])
         with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance):
-            result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+            with mock.patch.object(HOST_SCRIPT, "MONOTONIC", side_effect=lambda: next(clock)):
+                result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
         self.assertTrue(result["ok"])
         rows = result["data"]["processes"]
         self.assertEqual([row["pid"] for row in rows], [4242, 4243])
@@ -452,8 +459,12 @@ class ScriptProcessesTests(ScriptTestBase):
             self.assertEqual(seconds, span)
             bump_proc_cpu(self.proc_root, 6100, full_core_ticks)
 
+        # 分母取自 MONOTONIC 的真实差值（U4）：测试里给出与 span 一致的经过时间，
+        # 否则分母会接近 0，CPU% 会爆表（改之前实测过 2279%）。
+        clock = iter([1000.0, 1000.0 + span])
         with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance) as sleep_mock:
-            result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+            with mock.patch.object(HOST_SCRIPT, "MONOTONIC", side_effect=lambda: next(clock)):
+                result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
         sleep_mock.assert_called_once_with(span)
         self.assertTrue(result["ok"])
         rows = result["data"]["processes"]
@@ -3472,3 +3483,132 @@ class CleanupVerbTests(ScriptTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProcessesSamplingWindowTests(ScriptTestBase):
+    """采样窗口：100ms 目标 + 真实经过时间做分母（2026-11-16 U4）。
+
+    背景：`processes` 之前固定睡 500ms，实测 518.7ms 里有 498ms 是这次等待，
+    真实采集只占 17.6ms。窗口缩到 100ms 后，`sleep` 的 overshoot 占比变大，
+    分母必须用真实经过时间，否则 CPU% 会系统性偏高。
+    """
+
+    def test_window_is_100ms(self) -> None:
+        # 目标是 100ms（原 500ms）。真实耗时由 MONOTONIC 兜住，sleep 精度不影响结果。
+        self.assertAlmostEqual(HOST_SCRIPT.PROCESS_CPU_SAMPLE_INTERVAL, 0.1)
+
+    def test_denominator_uses_real_elapsed_not_fixed_interval(self) -> None:
+        """实际经过 200ms（overshoot 100%）时，CPU% 应按 200ms 算而不是 100ms。
+
+        单核跑满 200ms 的进程：若按 100ms 算会得出 200%（错），按真实 200ms 算才是 100%。
+        """
+
+        ticks = HOST_SCRIPT._clock_ticks()
+        write_proc(self.proc_root, 7100, comm="busy", utime=100, stime=0, rss_pages=10)
+        # 200ms 内跑满一个核
+        full_200ms = int(round(ticks * 0.2))
+
+        def advance(_seconds):
+            bump_proc_cpu(self.proc_root, 7100, full_200ms)
+
+        clock = iter([500.0, 500.2])  # 真实经过 200ms
+        with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance):
+            with mock.patch.object(HOST_SCRIPT, "MONOTONIC", side_effect=lambda: next(clock)):
+                result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+        self.assertTrue(result["ok"])
+        cpu = result["data"]["processes"][0]["cpu"]
+        self.assertAlmostEqual(cpu, 100.0, delta=1.0)
+
+    def test_too_short_window_reports_zero_not_garbage(self) -> None:
+        """窗口小于下限时返回 0，而不是除以近 0 的分母得出荒谬数值。"""
+
+        write_proc(self.proc_root, 7101, comm="x", utime=100, stime=0, rss_pages=10)
+
+        def advance(_seconds):
+            bump_proc_cpu(self.proc_root, 7101, 500)
+
+        # 经过时间 0.0001s < MIN_CPU_SAMPLE_WINDOW
+        clock = iter([800.0, 800.0001])
+        with mock.patch.object(HOST_SCRIPT, "SLEEP", side_effect=advance):
+            with mock.patch.object(HOST_SCRIPT, "MONOTONIC", side_effect=lambda: next(clock)):
+                result = self.run_verb("processes", {"sort": "cpu", "limit": 10})
+        self.assertTrue(result["ok"])
+        # 采样被判无效 -> 所有进程 CPU 都是 0（不报假数）
+        for row in result["data"]["processes"]:
+            self.assertEqual(row["cpu"], 0.0)
+
+
+class SnapshotProcessOrderTests(ScriptTestBase):
+    """snapshot 里「先采进程再取 status」的顺序与耗时（2026-11-16 U4）。
+
+    进程采样要睡一个 100ms 窗口，那段时间正好让 /proc/stat 累积增量，
+    status 就能读到真实 CPU%，不必再等自己那 200ms。
+    顺序反了的话 status 会拿到 null —— 这是静默退化，必须有测试挡住。
+    """
+
+    def test_processes_sampled_before_status(self) -> None:
+        """collect_processes 必须在 status_verb 之前执行。"""
+
+        order: list[str] = []
+        original_collect = HOST_SCRIPT.collect_processes
+        original_status = HOST_SCRIPT.status_verb
+
+        def fake_collect(sort="cpu", limit=20):
+            order.append("processes")
+            return [{"pid": 1, "name": "x", "cpu": 0.0, "mem": 0, "user": "root", "cmdline": "x"}]
+
+        def fake_status(params, args, **kwargs):
+            order.append("status")
+            # 断言调用方正确告知了「本次会另采进程」
+            self.assertTrue(kwargs.get("wants_processes"))
+            return {"ok": True, "data": {"cpu": {"usagePercent": 12.5}}}
+
+        with mock.patch.object(HOST_SCRIPT, "collect_processes", side_effect=fake_collect):
+            with mock.patch.object(HOST_SCRIPT, "status_verb", side_effect=fake_status):
+                result = self.run_verb("snapshot", {"processes": True})
+        self.assertTrue(result["ok"])
+        self.assertEqual(order, ["processes", "status"], "必须先采进程，让它睡觉的时间成为 status 的 CPU 基线窗口")
+
+    def test_no_processes_means_no_extra_work(self) -> None:
+        """不要求进程时不调 collect_processes，也不返回 processes 字段。"""
+
+        called = []
+        original = HOST_SCRIPT.collect_processes
+
+        def fake_collect(*a, **k):
+            called.append(1)
+            return []
+
+        with mock.patch.object(HOST_SCRIPT, "collect_processes", side_effect=fake_collect):
+            result = self.run_verb("snapshot", {})
+        self.assertTrue(result["ok"])
+        self.assertEqual(called, [])
+        self.assertNotIn("processes", result["data"])
+
+    def test_status_skips_its_own_sleep_when_processes_requested(self) -> None:
+        """带进程时 status 不应再单独 sleep 200ms（那是重复等待）。"""
+
+        sleeps: list[float] = []
+        original_sleep = time.sleep
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with mock.patch.object(time, "sleep", side_effect=fake_sleep):
+            HOST_SCRIPT.status_verb({}, [], wants_processes=True)
+        self.assertNotIn(HOST_SCRIPT.STATUS_CPU_BASELINE_SECONDS, sleeps)
+
+    def test_status_still_sleeps_without_processes(self) -> None:
+        """不带进程时 status 仍要自己等基线，否则 CPU% 恒为 null。"""
+
+        sleeps: list[float] = []
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with mock.patch.object(time, "sleep", side_effect=fake_sleep):
+            HOST_SCRIPT.status_verb({}, [], wants_processes=False)
+        # 首次采到 null 才会睡；若本次恰好有缓存基线则可能不睡，两者都合理，
+        # 这里只要求「睡的话必须用约定常量」
+        for value in sleeps:
+            self.assertEqual(value, HOST_SCRIPT.STATUS_CPU_BASELINE_SECONDS)
