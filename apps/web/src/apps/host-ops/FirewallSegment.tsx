@@ -64,8 +64,11 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
     setLoading(true);
     setError(null);
     try {
-      const versionResult = await callHostOps(hubId, 'self', 'version');
-      const showResult = await callHostOps(hubId, 'self', 'fw.show', {});
+      // 两个调用互不依赖，并行发出去（串行时总耗时是两者之和）。
+      const [versionResult, showResult] = await Promise.all([
+        callHostOps(hubId, 'self', 'version'),
+        callHostOps(hubId, 'self', 'fw.show', {}),
+      ]);
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));
       if (!showResult.ok) {
         setError(showResult.error);
