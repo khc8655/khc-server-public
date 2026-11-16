@@ -33,6 +33,7 @@ import { zh, fmt } from '../i18n/zh';
 import { TodoChips, type TodoChip } from '../patterns/TodoChips';
 import { formatAbsoluteTime, formatBytes } from '../i18n/format';
 import { splitFailedUnits } from '../data/managedUnits';
+import { pickFailedUnits } from '../data/failedUnits';
 import { CopyButton } from '../ui/secret';
 import {
   forwardRows,
@@ -252,11 +253,15 @@ export default function HubOverviewPage() {
   const pfStatus = pfAdapter?.status as
     | { installed?: boolean; running?: boolean; count?: number }
     | undefined;
-  // 10s 轻量快照只带 CPU/内存/磁盘/负载，不含服务清单与失败单元；
-  // 这两项取一次性 /state 的 ops（与主机运维页同一口径），否则卡片永远是空的。
+  // 服务清单只在 /state（快照不含）；失败单元两边都有，快照优先（2026-11-16 U2）：
+  // 快照每 10 秒刷新，/state 只在打开页面时拉一次 —— 只用 /state 会让计数冻住。
   const serviceOps = state?.state?.ops?.services;
   const services = serviceOps?.services ?? ops?.services?.services ?? [];
-  const failedUnits = serviceOps?.failedUnits ?? ops?.services?.failedUnits ?? [];
+  // 失败单元取「快照优先」（U2）。null = 读不到（旧 Agent 且 /state 也没给），
+  // 与空数组「确实没有」是两个不同文案，不能合并。
+  const failedUnitsOrNull = pickFailedUnits(ops, serviceOps);
+  const failedUnitsKnown = failedUnitsOrNull !== null;
+  const failedUnits = failedUnitsOrNull ?? [];
   const runningServices = services.filter(
     (service) => service.state === 'active' || service.state === 'running',
   ).length;
@@ -431,11 +436,14 @@ export default function HubOverviewPage() {
         <Row justify="between" gap={3} wrap>
           <span className="ui-muted">{zh.hub.servicesTitle}</span>
           <span>
-            {managedFailedUnits.length > 0
-              ? fmt(zh.hub.servicesFailedCount, { count: managedFailedUnits.length })
-              : services.length > 0
-                ? `${runningServices} / ${services.length}`
-                : '—'}
+            {!failedUnitsKnown
+              ? // 读不到 ≠ 没有失败：旧 Agent 且 /state 也没给时才到这里，宁可不猜。
+                zh.hub.servicesUnknown
+              : managedFailedUnits.length > 0
+                ? fmt(zh.hub.servicesFailedCount, { count: managedFailedUnits.length })
+                : services.length > 0
+                  ? `${runningServices} / ${services.length}`
+                  : '—'}
           </span>
         </Row>
         {/* 系统单元失败只在卡片里给一行灰色入口（P-3 A）：面板管不了，不进「需要处理」。 */}

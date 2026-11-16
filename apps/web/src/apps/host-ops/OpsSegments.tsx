@@ -67,6 +67,8 @@ export function ServicesSegment({
   const [error, setError] = useState<HostOpsError | null>(null);
   const [loading, setLoading] = useState(false);
   const [restartTarget, setRestartTarget] = useState<HostOpsService | null>(null);
+  // 清除失败状态的目标（U2）。与重启分开：两个确认框文案和后果完全不同。
+  const [resetTarget, setResetTarget] = useState<HostOpsService | null>(null);
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -97,6 +99,24 @@ export function ServicesSegment({
     setRestartTarget(null);
     toast.show({ message: fmt(zh.hostOps.svc.restarted, { unit: service.unit }) });
     // 写成功后两处一起刷新：服务清单 + /state（状态带与概况页的失败计数来源）。
+    await refreshAfterWrite(queryClient, hubId);
+    await load();
+  };
+
+  const resetFailed = async (service: HostOpsService) => {
+    const result = await callHostOps(hubId, 'self', 'svc.reset-failed', { unit: service.unit });
+    if (!result.ok) {
+      if (result.error) setError(result.error);
+      throw new Error(hostOpsErrorTitle(result.error));
+    }
+    setResetTarget(null);
+    const stillFailed = (result.data as { stillFailed?: boolean } | undefined)?.stillFailed === true;
+    // 单元仍在失败循环时要说清楚：清了标记不等于修好了，别让用户以为万事大吉。
+    toast.show({
+      message: stillFailed
+        ? fmt(zh.hostOps.svc.resetFailedStill, { unit: service.unit })
+        : fmt(zh.hostOps.svc.resetFailedDone, { unit: service.unit }),
+    });
     await refreshAfterWrite(queryClient, hubId);
     await load();
   };
@@ -144,14 +164,23 @@ export function ServicesSegment({
         columns={columns}
         rowKey={(service) => service.unit}
         objectLabel={zh.hostOps.services}
-        rowActions={() => [action('hostOps.svcLogs'), action('hostOps.svcRestart')]}
-        rowActionDisabled={(_ref, service) => {
+        rowActions={() => [
+          action('hostOps.svcLogs'),
+          action('hostOps.svcRestart'),
+          action('hostOps.svcResetFailed'),
+        ]}
+        rowActionDisabled={(ref, service) => {
           if (disabled) return zh.channels.controlFailed;
           if (validateServiceUnit(service.unit) === 'protected') return zh.hostOps.svc.protectedUnit;
+          // 清除失败状态只对「当前确实 failed」的单元有意义；对 active 单元点了什么也不会发生。
+          if (ref.id === 'hostOps.svcResetFailed' && service.active !== 'failed') {
+            return zh.hostOps.svc.resetFailedNotFailed;
+          }
           return undefined;
         }}
         onRowAction={(ref, service) => {
           if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit);
+          else if (ref.id === 'hostOps.svcResetFailed') setResetTarget(service);
           else setRestartTarget(service);
         }}
         empty={{
@@ -186,6 +215,19 @@ export function ServicesSegment({
           targetName={restartTarget.unit}
           onCancel={() => setRestartTarget(null)}
           onConfirm={() => restart(restartTarget)}
+        />
+      ) : null}
+
+      {resetTarget ? (
+        <ConfirmAction
+          open
+          action={action('hostOps.svcResetFailed')}
+          title={fmt(zh.hostOps.svc.resetFailedTitle, { unit: resetTarget.unit })}
+          body={fmt(zh.hostOps.svc.resetFailedBody, { unit: resetTarget.unit })}
+          confirmLabel={zh.hostOps.svc.resetFailedConfirm}
+          targetName={resetTarget.unit}
+          onCancel={() => setResetTarget(null)}
+          onConfirm={() => resetFailed(resetTarget)}
         />
       ) : null}
     </Stack>

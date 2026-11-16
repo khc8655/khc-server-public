@@ -82,6 +82,83 @@ class SnapshotCollectTests(unittest.TestCase):
         self.assertEqual(data["cpu"]["usagePercent"], 50.0)
 
 
+class SnapshotFailedUnitsTests(unittest.TestCase):
+    """快照必须带 failedUnits（2026-11-16 U2）。
+
+    回归目标：失败单元过去只在 /state 采集，而 /state 不是轮询入口 ——
+    页面打开后计数就冻住，用户重启修好服务，状态带还显示旧数字
+    （真机复现见 docs/verification/2026-11-16/ui-polish-u1.md）。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="khc-snap-failed-")
+        self.proc = self._tmp.name
+        _write(os.path.join(self.proc, "cpuinfo"), "processor: 0\nmodel name : Test CPU\n")
+        _write(os.path.join(self.proc, "meminfo"), "MemTotal: 1000 kB\nMemAvailable: 600 kB\n")
+        _write(os.path.join(self.proc, "uptime"), "12345.67 100.00\n")
+        _write(os.path.join(self.proc, "stat"), _cpu_stat(100, 900))
+        self.addCleanup(self._tmp.cleanup)
+        ops.reset_snapshot_sampler()
+        self._original_runner = ops._runner
+        self._original_sleeper = ops._sleeper
+        # 双采样会 sleep 1 秒：测试里直接跳过
+        ops._sleeper = lambda _s: None
+
+    def tearDown(self) -> None:
+        ops._runner = self._original_runner
+        ops._sleeper = self._original_sleeper
+
+    def _runner_with(self, failed_lines: list[str] | None):
+        """伪造 systemctl：list-units 返回给定失败单元，其余返回空。"""
+        from types import SimpleNamespace
+
+        def runner(cmd, **kwargs):
+            if "list-units" in cmd:
+                if failed_lines is None:
+                    raise OSError("systemctl missing")
+                return SimpleNamespace(stdout="\n".join(failed_lines) + "\n", returncode=0)
+            return SimpleNamespace(stdout="", returncode=0)
+
+        return runner
+
+    def test_snapshot_includes_failed_units(self) -> None:
+        ops._runner = self._runner_with([
+            "khc-r3-driver.service loaded failed failed KHC driver",
+            "u1probe.service loaded failed failed probe",
+        ])
+        data = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
+        self.assertEqual(data["failedUnits"], ["khc-r3-driver.service", "u1probe.service"])
+
+    def test_snapshot_failed_units_empty_list_when_none_failed(self) -> None:
+        """没有失败单元时必须是空列表（页面据此显示「没有失败」），不是缺字段。"""
+        ops._runner = self._runner_with([])
+        data = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
+        self.assertEqual(data["failedUnits"], [])
+
+    def test_snapshot_omits_failed_units_when_systemctl_unavailable(self) -> None:
+        """systemctl 跑不起来 → 字段缺省，不返回空列表冒充「没有失败」。"""
+        ops._runner = self._runner_with(None)
+        data = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
+        self.assertNotIn("failedUnits", data)
+        # 指标仍必须正常，失败单元不能拖垮快照
+        self.assertIn("cpu", data)
+        self.assertIn("mem", data)
+
+    def test_failed_units_capped_at_limit(self) -> None:
+        """上限与 /state 一致（10 条），否则两处计数对不上。"""
+        lines = [f"u{i}.service loaded failed failed x" for i in range(15)]
+        ops._runner = self._runner_with(lines)
+        data = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
+        self.assertEqual(len(data["failedUnits"]), ops.FAILED_UNITS_LIMIT)
+
+    def test_state_and_snapshot_share_the_same_source(self) -> None:
+        """/state 与 /snapshot 必须给同一份结果，避免两处逻辑漂移。"""
+        ops._runner = self._runner_with(["a.service loaded failed failed x"])
+        snap = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
+        state = ops._systemd()
+        self.assertEqual(snap["failedUnits"], state["failedUnits"])
+
+
 class SnapshotHttpTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="khc-snap-http-")

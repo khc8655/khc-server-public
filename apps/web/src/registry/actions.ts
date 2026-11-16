@@ -888,6 +888,20 @@ export const actions = {
     audit: 'hostops.svc_restarted',
     icon: 'refresh',
   },
+  // 清除失败状态（2026-11-16 U2）：与重启同级 L2 —— 它不改服务运行状态，
+  // 但会让「需要处理」里的条目消失，属于需要确认的写操作。
+  // 只对 Hub 自身开放（N-2）：Peer 脚本更新不了，行内按钮对 Peer 目标禁用。
+  'hostOps.svcResetFailed': {
+    object: 'hostOps',
+    kind: 'run',
+    scope: 'hub',
+    parent: 'hub',
+    label: 'hostOps.svcResetFailed',
+    level: 'L2',
+    form: 'confirm',
+    audit: 'hostops.svc_reset_failed',
+    icon: 'check',
+  },
   'hostOps.fwApply': {
     object: 'firewall',
     kind: 'update',

@@ -93,6 +93,7 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `svc.list` | 读 | — | 只返回 failed 单元 + 面板受管单元（`caddy` / `khc-*` / `wg-quick@*`），不再枚举整机 running 服务 |
 | `svc.logs` | 读 | `{ unit, lines≤200 }` | `journalctl` 尾读，默认 100、上限 200 行 |
 | `svc.restart` | 写 | `{ unit }` | 受保护单元拒绝；重启后回读 `is-active` |
+| `svc.reset-failed` | 写 | `{ unit }` | `systemctl reset-failed`：只清失败标记，不启动也不改配置；受保护单元同一套拒绝规则；回读 `is-failed` 并返回 `stillFailed`（单元仍在失败循环时如实回报）。**仅 Hub 自身可用**（Peer 脚本更新不了），不在 `PEER_SAFE_WRITE_VERBS` |
 | `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；一次 OOM 只算一条（附 ≤ 5 行上下文），返回时间、级别、脱敏后文本与条数；Peer 可读 |
 | `fw.show` | 读 | — | 只返回本系统管理的规则与 `table inet khc_fw` 状态；不再读取其他 nft 表或 iptables |
 | `fw.apply` | 写 | `{ rules, baseRev }` | 见 §5 |

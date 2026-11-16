@@ -35,6 +35,7 @@ export type HostOpsVerb =
   | 'svc.list'
   | 'svc.logs'
   | 'svc.restart'
+  | 'svc.reset-failed'
   | 'logs.errors'
   | 'cron.list'
   | 'cron.set'

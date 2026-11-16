@@ -147,13 +147,20 @@ https://hub.example.com {
   "ops": {
     "cpu": { "cores": 2, "model": "...", "usagePercent": 52.0, "load": [...] },
     "mem": { "total": ..., "available": ..., "used": ..., "percent": 45.1 },
-    "swap": {...}, "disks": [...], "uptime": ..., "collectedAt": 1793792008
+    "swap": {...}, "disks": [...], "uptime": ..., "collectedAt": 1793792008,
+    "failedUnits": ["khc-r3-driver.service", "..."]
   },
   "agent": { "version": "0.1.14", "serverTime": ... }
 }
 ```
 
-- 只读 `/proc` + `statvfs`，**不跑 systemctl/ps 等子进程**，不含适配器/端口/服务/进程；
+- 只读 `/proc` + `statvfs`；**含一次 `systemctl list-units --state=failed`（2026-11-16 U2 起）**，
+  实测 5–8 ms；除此不含适配器/端口/服务/进程；
+  - **这是对 ADR-0010「不跑子进程」的明确偏离**：失败单元过去只在 `/state` 采集，
+    而 `/state` 不是轮询入口，导致页面打开后失败计数就冻住（真机证据见
+    `docs/verification/2026-11-16/ui-polish-u1.md`）；
+  - 采集失败时**只让 `failedUnits` 缺省**，指标照常返回；缺省 ≠ 空数组：
+    空数组是「确实没有失败」，缺省是「不知道」，前端应退回读 `/state`；
 - CPU 用 `/proc/stat` 计数器差分；首次或距上次 >30s（或 <0.2s）时在请求内双采样 1 秒；
 - 无常驻线程/定时器；失败降级为 `ops.error`，不影响控制 API。
 
