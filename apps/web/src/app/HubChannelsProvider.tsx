@@ -8,6 +8,7 @@ import { setHubWriteGuard } from '../data/writeGuard';
 import { Banner, Button, Row } from '../ui';
 import { zh, fmt } from '../i18n/zh';
 import { formatStamp } from '../i18n/format';
+import { channelRows, connectionState } from '../apps/host-ops/connectionState';
 
 interface HubChannelsContextValue {
   hubId: string;
@@ -55,6 +56,19 @@ export function useHubChannelsContext(): HubChannelsContextValue {
   const value = useContext(HubChannelsContext);
   if (!value) throw new Error('useHubChannelsContext 必须在 HubChannelsProvider 内使用');
   return value;
+}
+
+/**
+ * 节点栏的统一连接指示数据（P-4 A）：三态 + 每类数据走哪条通道。
+ * 放在 Provider 里是因为只有它能同时读到 channels 与 live。
+ */
+export function useConnectionIndicator(): {
+  state: { label: string; tone: 'ok' | 'warn' | 'neutral' | 'danger' };
+  rows: ReadonlyArray<{ name: string; channel: string }>;
+} {
+  const { channels, live } = useHubChannelsContext();
+  const state = connectionState(channels, live);
+  return { state: { label: state.label, tone: state.tone }, rows: channelRows(live) };
 }
 
 /**

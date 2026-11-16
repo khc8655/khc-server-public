@@ -3,7 +3,7 @@ import { Badge, Icon } from '../ui';
 export interface TodoChip {
   id: string;
   tone: 'warn' | 'danger';
-  /** 徽标文案（问题类别，如「证书」「服务异常」） */
+  /** 徽标文案（问题类别，如「证书」「服务失败」） */
   badge: string;
   /** 对象名（证书名 / 服务名 / Peer 名） */
   name: string;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { AgentOps, SshKey } from '@khc/contracts';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
 import { fetchSshKeys } from '../../data/sshKeys';
@@ -45,6 +46,7 @@ import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatBytes, formatPercent } from '../../i18n/format';
 import { businessProcesses, countSystemProcesses } from './processFilter';
 import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
+import { refreshAfterWrite } from './refreshAfterWrite';
 
 /* ------------------------------------------------------------------ 服务段 */
 
@@ -66,6 +68,7 @@ export function ServicesSegment({
   const [loading, setLoading] = useState(false);
   const [restartTarget, setRestartTarget] = useState<HostOpsService | null>(null);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const load = async () => {
     if (disabled) return;
@@ -93,6 +96,8 @@ export function ServicesSegment({
     }
     setRestartTarget(null);
     toast.show({ message: fmt(zh.hostOps.svc.restarted, { unit: service.unit }) });
+    // 写成功后两处一起刷新：服务清单 + /state（状态带与概况页的失败计数来源）。
+    await refreshAfterWrite(queryClient, hubId);
     await load();
   };
 
@@ -1006,7 +1011,7 @@ export function KeyAddForm({
   );
 }
 
-/* -------------------------------------------------------- 系统错误折叠区 */
+/* -------------------------------------------------------- 日志错误折叠区 */
 
 const LOG_LEVEL_LABELS: Record<string, string> = {
   '0': zh.hostOps.logsErrors.levelEmergency,
@@ -1021,7 +1026,7 @@ function logLevelLabel(entry: HostOpsLogEntry): string {
 }
 
 /**
- * 系统错误折叠区（§3.5）：挂在服务分段内，由 AdvancedSection 按需挂载，
+ * 日志错误折叠区（§3.5）：挂在服务分段内，由 AdvancedSection 按需挂载，
  * 只有用户展开时才调用只读动词 logs.errors，不自动轮询。
  * 四态沿用 ServicesSegment；错误日志与 OOM 合并成一张对象表，不新增详情入口。
  */

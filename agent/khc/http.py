@@ -247,7 +247,10 @@ class ApiApp:
                 }
             if name == "state":
                 self._require_method(method, "GET", path)
-                state = build_state(self.kernel)
+                # ?force=1 跳过 ops 的 5 秒缓存：写操作成功后前端要立刻看到真值
+                # （否则「重启成功但失败计数还是旧的」，见 2026-11-16 U1 真机验证）。
+                force = (parse_qs(urlsplit(raw_path).query).get("force") or [""])[0] in ("1", "true", "yes")
+                state = build_state(self.kernel, force=force)
                 # 控制通道证书（到期预警用）；Agent 自己读取，内核不认识任何应用。
                 agent = state.get("agent")
                 if isinstance(agent, dict):

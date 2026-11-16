@@ -6,6 +6,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from khc import Adapter, File
 from khc.state import agent_info, build_snapshot, build_state, host_info, tasks_summary
@@ -106,6 +107,22 @@ class StateTests(unittest.TestCase):
         entry = next(item for item in state["adapters"] if item["name"] == "statusapp")
         self.assertIsNone(entry["appliedRev"])
         self.assertEqual(state["ports"], [])
+
+    def test_build_state_force_bypasses_ops_cache(self) -> None:
+        """``force=True`` 必须把 force 透传给 collect_ops 的 5 秒缓存。
+
+        真机背景（2026-11-16 U1）：写操作成功后前端立刻重拉 /state 想把失败计数刷新，
+        但落到 ops 缓存窗口里会读到旧值 —— 表现为「重启成功了，计数还是旧的」。
+        这条用例锁住 state.py → ops.py 的 force 传递，别在重构时丢掉。
+        """
+
+        with mock.patch("khc.state.collect_ops", return_value={"collectedAt": 1}) as patched:
+            build_state(self.kernel, force=True)
+            self.assertIs(patched.call_args.kwargs.get("force"), True)
+
+            patched.reset_mock()
+            build_state(self.kernel)
+            self.assertIs(patched.call_args.kwargs.get("force"), False)
 
     def test_agent_info_d7_version_and_server_time(self) -> None:
         before = int(time.time())

@@ -27,10 +27,93 @@ import {
   Skeleton,
   Stack,
   Stat,
+  StatusDot,
 } from '../ui';
 import { zh, fmt } from '../i18n/zh';
 import { TodoChips, type TodoChip } from '../patterns/TodoChips';
 import { formatAbsoluteTime, formatBytes } from '../i18n/format';
+import { splitFailedUnits } from '../data/managedUnits';
+import { CopyButton } from '../ui/secret';
+import {
+  forwardRows,
+  peerRows,
+  siteRows,
+  type ServiceRowGroup,
+} from './hubServiceRows';
+
+/** 地址去掉协议前缀，只留主机名（P-1：标题下只显示主机名，不显示 https://）。 */
+export function endpointHost(endpoint: string | null | undefined): string {
+  const raw = (endpoint ?? '').trim();
+  if (!raw) return '';
+  return raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
+}
+
+/**
+ * 节点地址行（2026-11-16 P-1）：概况页标题下唯一一处地址。
+ * 灰色纯文本，悬停/聚焦时才出现复制按钮，不占常态视觉。
+ */
+function NodeEndpointLine({ endpoint }: { endpoint: string | null | undefined }) {
+  const host = endpointHost(endpoint);
+  if (!host) return null;
+  return (
+    <span className="ui-endpoint-line">
+      <span className="ui-endpoint-host">{host}</span>
+      <span className="ui-endpoint-copy">
+        <CopyButton value={host} label={zh.hub.copyEndpoint} />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * 一组「对外服务」列表（P-2）：每组最多 5 行，超出给「全部 N 个 ›」。
+ * 整行可点（不是蓝色链接），悬停出现灰色 ›。
+ */
+function ServiceRowsView({ group, onOpen }: { group: ServiceRowGroup; onOpen: () => void }) {
+  if (!group.installed) {
+    return (
+      <div className="ui-service-group">
+        <div className="ui-service-group-title">{group.title}</div>
+        <p className="ui-muted ui-service-empty">未安装</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ui-service-group">
+      <div className="ui-service-group-title">{group.title}</div>
+      {group.items.length === 0 ? (
+        <p className="ui-muted ui-service-empty">暂无</p>
+      ) : (
+        <div className="ui-service-list">
+          {group.items.map((item) => (
+            <button
+              type="button"
+              className="ui-service-row"
+              key={item.key}
+              onClick={onOpen}
+              title={`${item.name} → ${item.detail}`}
+            >
+              <StatusDot tone={item.tone} />
+              <span className="ui-service-name">{item.name}</span>
+              <span className="ui-service-detail ui-muted">{item.detail}</span>
+              <span className="ui-service-chevron" aria-hidden="true">
+                ›
+              </span>
+            </button>
+          ))}
+          {group.truncated ? (
+            <button type="button" className="ui-service-row is-more" onClick={onOpen}>
+              <span className="ui-service-name">全部 {group.total} 个</span>
+              <span className="ui-service-chevron" aria-hidden="true">
+                ›
+              </span>
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function HubOverviewPage() {
   const { hubId } = useParams({ from: '/hubs/$hubId' });
@@ -189,19 +272,8 @@ export default function HubOverviewPage() {
     return `${minutes} 分钟`;
   };
 
-  // 单徽标口径：待生效（配置未应用）> 运行中 / 未运行 > 未读取；不叠「已安装 + 运行中」。
-  // 未安装（installed === false）显示中性「未安装」；只有拿不到状态才是「未读取」。
-  const appBadge = (dirty: boolean, status?: { installed?: boolean | null; running?: boolean | null }) =>
-    status?.installed === false
-      ? { tone: 'neutral' as const, label: zh.hub.appNotInstalled }
-      : dirty
-        ? { tone: 'warn' as const, label: zh.hub.appPending }
-        : status?.running === true
-          ? { tone: 'ok' as const, label: zh.hub.appRunning }
-          : status?.running === false
-            ? { tone: 'warn' as const, label: zh.hub.appStopped }
-            : { tone: 'neutral' as const, label: zh.hub.appUnknown };
-
+  // 应用可见性与「未安装」一律只看 D1 期望配置（离线可见，首屏不闪）；
+  // 「未安装」由 serviceGroups 的 installed 表达，不再用独立徽标（2026-11-16 P-2）。
   const sitesDirty = (sitesQuery.data?.rev ?? 0) > (sitesQuery.data?.appliedRev ?? 0);
   const forwardDirty = (forwardQuery.data?.rev ?? 0) > (forwardQuery.data?.appliedRev ?? 0);
   const wgInterface = wgQuery.data?.config.interface;
@@ -274,51 +346,24 @@ export default function HubOverviewPage() {
   );
   const disabledForwards = forwards.filter((forward) => !forward.enabled).length;
 
-  // 左卡只列 D1 已配置的对外服务；未配置不渲染占位，避免首屏依赖在线探测。
-  const serviceRows: Array<{
-    key: string;
-    name: string;
-    badge: { tone: 'ok' | 'warn' | 'neutral'; label: string };
-    facts: string;
-  }> = [
-    ...(caddyConfigured
-      ? [
-          {
-            key: 'web',
-            name: zh.hub.servicesWeb,
-            badge: appBadge(sitesDirty, caddyStatus),
-            facts: [
-              `${sites.length} 个站点`,
-              backendSummary(siteBackends),
-              disabledSites > 0 ? `${disabledSites} 停用` : null,
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          },
-        ]
-      : []),
-    ...(pfConfigured
-      ? [
-          {
-            key: 'remote',
-            name: zh.hub.servicesRemote,
-            badge: appBadge(forwardDirty, pfStatus),
-            facts: [
-              `${forwards.length} 条规则`,
-              backendSummary(forwardBackends),
-              disabledForwards > 0 ? `${disabledForwards} 停用` : null,
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          },
-        ]
-      : []),
+  // 对外服务三组列表（P-2）：计数只留上方指标卡，这里只列名字。
+  // 已配置但空（0 站点 / 无 Peer）的组仍要出现并显示「暂无」；Agent 明确报未安装的
+  // 组显示「未安装」——否则「配了却什么都没生效」这件事在页面上看不出来。
+  const nowSec = Math.floor(Date.now() / 1000);
+  const caddyInstalled = caddyStatus?.installed !== false;
+  const pfInstalled = pfStatus?.installed !== false;
+  const serviceGroups: ServiceRowGroup[] = [
+    ...(caddyConfigured ? [siteRows(sites, caddyInstalled)] : []),
+    ...(pfConfigured ? [forwardRows(forwards, pfInstalled)] : []),
+    peerRows(peers, runtimePeers, nowSec, wgReady),
   ];
 
-  // 「需要处理」聚合：服务异常 + 临期证书 + 长期离线 Peer（ui-redesign ③）
-  const nowSec = Math.floor(Date.now() / 1000);
+  // 「需要处理」只放面板能处理的单元（P-3 A）：系统单元放进去就永远清不掉。
+  const { managed: managedFailedUnits, system: systemFailedUnits } = splitFailedUnits(failedUnits);
+
+  // 「需要处理」聚合：受管失败单元 + 临期证书 + 长期离线 Peer（ui-redesign ③）
   const todos: TodoChip[] = [];
-  for (const unit of failedUnits) {
+  for (const unit of managedFailedUnits) {
     todos.push({
       id: `unit:${unit}`,
       tone: 'danger',
@@ -386,21 +431,38 @@ export default function HubOverviewPage() {
         <Row justify="between" gap={3} wrap>
           <span className="ui-muted">{zh.hub.servicesTitle}</span>
           <span>
-            {failedUnits.length > 0
-              ? `${failedUnits.length} 个异常`
+            {managedFailedUnits.length > 0
+              ? fmt(zh.hub.servicesFailedCount, { count: managedFailedUnits.length })
               : services.length > 0
                 ? `${runningServices} / ${services.length}`
                 : '—'}
           </span>
         </Row>
+        {/* 系统单元失败只在卡片里给一行灰色入口（P-3 A）：面板管不了，不进「需要处理」。 */}
+        {systemFailedUnits.length > 0 ? (
+          <button
+            type="button"
+            className="ui-service-row is-more"
+            onClick={() => void navigate({ href: paths.hubSection(hubId, 'ops') })}
+          >
+            <span className="ui-service-name ui-muted">
+              {fmt(zh.hub.systemUnitsFailed, { count: systemFailedUnits.length })}
+            </span>
+            <span className="ui-service-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+        ) : null}
         {services.length > 0 ? (
-          <Row gap={1} wrap>
+          // 列表用圆点 + 名字（§8.1）：徽标只给状态列用，服务名不是状态。
+          <Row gap={3} wrap>
             {services.slice(0, 8).map((service) => (
-              <Badge
-                key={service.name}
-                tone={service.state === 'active' || service.state === 'running' ? 'ok' : 'warn'}
-                label={service.name}
-              />
+              <span className="ui-service-chip" key={service.name}>
+                <StatusDot
+                  tone={service.state === 'active' || service.state === 'running' ? 'ok' : 'neutral'}
+                />
+                {service.name}
+              </span>
             ))}
             {services.length > 8 ? (
               <span className="ui-muted">等 {services.length} 个</span>
@@ -421,6 +483,8 @@ export default function HubOverviewPage() {
           offlineHint: zh.hub.offlineBanner,
         }}
       >
+        {/* 地址只在概况页标题下出现一次（2026-11-16 P-1）：灰色纯文本，悬停出现复制。 */}
+        <NodeEndpointLine endpoint={node.endpoint} />
         {summaryMode ? (
           <Row gap={2} wrap>
             <Badge tone="neutral" label={summaryMode === 'wg' ? zh.mode.badgeWg : zh.mode.badgeCaddy} />
@@ -469,16 +533,9 @@ export default function HubOverviewPage() {
                   ? zh.status.offline
                   : '—'
           }
-          unit={
-            state?.route
-              ? state.route === 'direct'
-                ? zh.hubs.routeDirect
-                : zh.hubs.routeTunnel
-              : node.preferredRoute === 'direct'
-                ? zh.hubs.routeDirect
-                : zh.hubs.routeTunnel
-          }
-          hint={agentVersion ? `${node.endpoint} · Agent v${agentVersion}` : node.endpoint}
+          /* 不再在这里挂「直连 / 隧道」标签（P-4 A）：它只说明指标走哪条通道，
+             却被读成「整页直连」。通道说明收进节点栏的统一连接指示。 */
+          hint={agentVersion ? `Agent v${agentVersion}` : undefined}
           icon="activity"
         />
         <Stat
@@ -505,36 +562,34 @@ export default function HubOverviewPage() {
         />
       </Grid>
 
-      {/* 需要处理：服务异常 + 临期证书 + 长期离线 Peer，chip 直达对应页 */}
+      {/* 需要处理：服务失败 + 临期证书 + 长期离线 Peer，chip 直达对应页 */}
       <TodoChips items={todos} onOpen={(to) => void navigate({ href: to })} />
 
-      {serviceRows.length > 0 ? (
+      {serviceGroups.length > 0 ? (
         <Grid cols={2}>
           <Card
             title={zh.hub.servicesCardTitle}
             action={<Link to={paths.hubSection(hubId, 'services')} label={zh.hub.appEnter} />}
           >
-            <Stack gap={3}>
-              {serviceRows.map((row) => (
-                <div className="ui-app-row" key={row.key}>
-                  <Row justify="between" gap={3} wrap>
-                    <strong>{row.name}</strong>
-                    <Badge tone={row.badge.tone} label={row.badge.label} dot />
-                  </Row>
-                  <div className="ui-app-facts ui-muted">{row.facts}</div>
-                </div>
+            <Stack gap={4}>
+              {serviceGroups.map((group) => (
+                <ServiceRowsView
+                  key={group.title}
+                  group={group}
+                  onOpen={() => void navigate({ href: paths.hubSection(hubId, 'services') })}
+                />
               ))}
-              {wgReady && peerText ? <p className="ui-muted">{peerText}</p> : null}
             </Stack>
           </Card>
           {hostCard}
         </Grid>
       ) : hostCard}
 
+      {/* 页脚不再重复地址（P-1）：地址只在标题下出现一次。 */}
       <p className="ui-muted">
-        {node.endpoint}
-        {agentVersion ? ` · Agent v${agentVersion}` : ''} · {zh.hub.certLabel}：{certStatus} ·{' '}
-        {zh.fields.lastSeen} {formatAbsoluteTime(node.lastSeenAt)}
+        {agentVersion ? `Agent v${agentVersion} · ` : ''}
+        {zh.hub.certLabel}：{certStatus} · {zh.fields.lastSeen}{' '}
+        {formatAbsoluteTime(node.lastSeenAt)}
       </p>
     </Stack>
   );

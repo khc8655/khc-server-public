@@ -584,13 +584,13 @@ describe('主机运维页（ui-redesign §4：状态带 + 分段对象表 + 唯�
   });
 });
 
-const LOGS_SECTION_TITLE = '系统错误（近 24 小时）';
+const LOGS_SECTION_TITLE = '近 24 小时日志错误';
 
 function expectFiveSegments() {
   const group = screen.getByRole('group', { name: '主机运维' });
   expect(within(group).getAllByRole('button')).toHaveLength(5);
-  expect(within(group).queryByRole('button', { name: '系统错误' })).toBeNull();
-  expect(screen.queryByRole('button', { name: '系统错误' })).toBeNull();
+  expect(within(group).queryByRole('button', { name: '日志错误' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '日志错误' })).toBeNull();
 }
 
 describe('服务分段内的系统错误折叠区（批次 2 修正：5 个分段不变、展开才调用、四态、390）', () => {
@@ -629,7 +629,7 @@ describe('服务分段内的系统错误折叠区（批次 2 修正：5 个分�
     logsErrorsMode = 'empty';
     await renderRoute('/hubs/tyo-1/ops');
     await userEvent.click(await screen.findByRole('button', { name: LOGS_SECTION_TITLE }));
-    expect(await screen.findByText('还没有系统错误')).toBeTruthy();
+    expect(await screen.findByText('近 24 小时没有日志错误')).toBeTruthy();
     expect(screen.getByText(/最近 24 小时 · 0 条错误 · 0 条 OOM/)).toBeTruthy();
   });
 

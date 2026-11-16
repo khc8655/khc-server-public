@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from khc.adapters import Ctx
 from khc.auth import Auth
@@ -146,6 +147,28 @@ class HealthAndAuthTests(HttpTestBase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
+
+    def test_state_force_query_bypasses_ops_cache(self) -> None:
+        """``GET /state?force=1`` 要把 force 传到 collect_ops（跳过 5 秒缓存）。
+
+        真机背景（2026-11-16 U1）：写操作成功后前端带 force 重拉，否则会读到
+        缓存里的旧失败计数，出现「重启成功但计数还是旧的」。
+        """
+
+        with mock.patch("khc.state.collect_ops", return_value={"collectedAt": 1}) as patched:
+            # query 不参与签名（与 test_query_not_signed 一致）：按 "/state" 签名即可。
+            headers = signed_headers(TEST_TOKEN, "GET", "/state")
+            status, payload, _ = self.harness.request(
+                "GET", "/state?force=1", headers=headers, signed=False
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["ok"])
+            self.assertIs(patched.call_args.kwargs.get("force"), True)
+
+        with mock.patch("khc.state.collect_ops", return_value={"collectedAt": 1}) as patched:
+            headers = signed_headers(TEST_TOKEN, "GET", "/state")
+            self.harness.request("GET", "/state", headers=headers, signed=False)
+            self.assertIs(patched.call_args.kwargs.get("force"), False)
 
     def test_trailing_slash_ok(self) -> None:
         status, payload, _ = self.harness.request("GET", "/adapters/")

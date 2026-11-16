@@ -140,15 +140,20 @@ def tasks_summary(kernel: Any) -> dict[str, Any]:
         return {"items": [], "total": 0, "truncated": False}
 
 
-def build_state(kernel: Any) -> dict[str, Any]:
-    """由 Kernel 组装 /state 响应。"""
+def build_state(kernel: Any, *, force: bool = False) -> dict[str, Any]:
+    """由 Kernel 组装 /state 响应。
+
+    ``force=True`` 跳过 ops 的 5 秒进程内缓存（``CACHE_TTL``）。写操作成功后前端
+    会立刻重拉 /state 想把失败计数刷新，若落到缓存窗口里就会读到旧值 ——
+    表现为「重启成功了，计数还是旧的」。
+    """
 
     return {
         "ok": True,
         "host": host_info(kernel.paths),
         "adapters": kernel.adapter_state_entries(),
         "ports": kernel.ports.entries(),
-        "ops": collect_ops(kernel.paths),
+        "ops": collect_ops(kernel.paths, force=force),
         "agent": agent_info(kernel),
         "tasks": tasks_summary(kernel),
     }

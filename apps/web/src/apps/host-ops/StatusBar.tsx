@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 /**
- * 主机运维状态带（ui-redesign §4.3）：纯 CSS 横条，异常才变色、可下钻；
+ * 主机运维状态带（ui-redesign §4.3）：纯 CSS 横条，失败才变色、可下钻；
  * 右侧 action 槽位放诊断入口。
  */
 export interface StatusTile {
