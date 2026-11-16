@@ -223,6 +223,11 @@ export interface ConfirmDialogProps {
   nameLabel?: string;
   /** 确认框内的额外选项（如“强制结束”勾选）；由调用方提供受控组件 */
   children?: ReactNode;
+  /**
+   * 确认按钮是否禁用。用于「必须勾选某项才能继续」的场景 ——
+   * 光有一个确定按钮不够，用户会习惯性点过去（2026-11-16 U3）。
+   */
+  confirmDisabled?: boolean;
   onConfirm: () => Promise<void>;
   onCancel: () => void;
 }
@@ -238,6 +243,7 @@ export function ConfirmDialog({
   confirmName,
   nameLabel,
   children,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -267,7 +273,7 @@ export function ConfirmDialog({
           <Button
             label={confirmLabel}
             variant={confirmTone}
-            disabled={!matched || pending}
+            disabled={!matched || pending || confirmDisabled}
             disabledReason={level === 'L3' ? (nameLabel ?? undefined) : undefined}
             loading={pending}
             onClick={async () => {

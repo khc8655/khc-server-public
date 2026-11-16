@@ -36,9 +36,17 @@ import {
   type WgConfig,
   type WgInterface,
   type WgPeer,
+  type WgPeerEgress,
+  type WgPeerReach,
   type WgPeerRuntime,
   type WgRotation,
 } from '../../data/wireguard';
+import {
+  DEFAULT_NEW_PEER_POLICY,
+  egressLabel,
+  reachLabel,
+  resolvePeerPolicy,
+} from '../../data/peerNetwork';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
 import {
@@ -113,6 +121,10 @@ interface PeerFormState {
   keepalive: number | null;
   publicKey: string;
   enabled: boolean;
+  /** 网络策略（2026-11-16 U3）：可达范围与出网方式。 */
+  reach: WgPeerReach;
+  reachPeers: string[];
+  egress: WgPeerEgress;
   initial: string;
 }
 
@@ -166,7 +178,16 @@ type ApplyConfirm =
   | { kind: 'page' };
 
 function peerSignature(form: PeerFormState): string {
-  return JSON.stringify([form.name, form.allowedIps, form.keepalive, form.publicKey, form.enabled]);
+  return JSON.stringify([
+    form.name,
+    form.allowedIps,
+    form.keepalive,
+    form.publicKey,
+    form.enabled,
+    form.reach,
+    form.reachPeers,
+    form.egress,
+  ]);
 }
 
 function createPeerForm(config: WgConfig): PeerFormState {
@@ -177,6 +198,10 @@ function createPeerForm(config: WgConfig): PeerFormState {
     keepalive: 25,
     publicKey: '',
     enabled: true,
+    // 新建 Peer 的默认策略：只与 Hub 通、出网保持原状（N-6 只对存量放宽）
+    reach: DEFAULT_NEW_PEER_POLICY.reach,
+    reachPeers: [...DEFAULT_NEW_PEER_POLICY.reachPeers],
+    egress: DEFAULT_NEW_PEER_POLICY.egress,
     initial: '',
   };
   return { ...form, initial: peerSignature(form) };
@@ -191,6 +216,10 @@ function editPeerForm(peer: WgPeer): PeerFormState {
     keepalive: peer.keepalive,
     publicKey: peer.publicKey,
     enabled: peer.enabled,
+    // 存量 Peer 缺字段时解析成 all（保持原有连通性），不能当成仅 Hub
+    reach: resolvePeerPolicy(peer).reach,
+    reachPeers: [...resolvePeerPolicy(peer).reachPeers],
+    egress: resolvePeerPolicy(peer).egress,
     initial: '',
   };
   return { ...form, initial: peerSignature(form) };
@@ -224,6 +253,10 @@ function derivePeerFromForm(form: PeerFormState, existing: WgPeer | undefined): 
     keepalive: form.keepalive ?? 25,
     endpoint: existing?.endpoint ?? null,
     enabled: form.enabled,
+    reach: form.reach,
+    // reach 不是 peers 时清空，避免切换范围后脏数据还在配置里
+    reachPeers: form.reach === 'peers' ? form.reachPeers : [],
+    egress: form.egress,
   };
 }
 
@@ -1426,6 +1459,10 @@ export default function WireGuardPage() {
                   (item.state === 'pending' || item.state === 'cutover'),
               ),
           )}
+          peerOptions={(config?.peers ?? [])
+            .filter((item) => item.name !== peerForm.name)
+            .map((item) => ({ value: item.name, label: item.name }))}
+          customPostUp={Boolean(config?.interface.postUp?.trim())}
           onChange={(next) => setPeerForm({ ...peerForm, ...next })}
           onClose={closePeerDrawer}
           onSave={(apply) => void savePeer(apply)}
@@ -1639,6 +1676,8 @@ function PeerDrawer({
   hubId,
   peer,
   rotationActive,
+  peerOptions,
+  customPostUp,
   onChange,
   onClose,
   onSave,
@@ -1654,6 +1693,10 @@ function PeerDrawer({
   hubId: string;
   peer: WgPeer | null;
   rotationActive: boolean;
+  /** 可选为互通对象的其它 Peer（排除自己）。 */
+  peerOptions: { value: string; label: string }[];
+  /** 接口是否设置了自定义 PostUp（N-5）：为真时网络策略不生效。 */
+  customPostUp: boolean;
   onChange: (patch: Partial<PeerFormState>) => void;
   onClose: () => void;
   onSave: (apply: boolean) => void;
@@ -1661,6 +1704,9 @@ function PeerDrawer({
   onMigrate: (peer: WgPeer) => void;
 }) {
   const [tab, setTab] = useState<'config' | 'ops'>('config');
+  // 「全部流量走 Hub」的风险确认（U3）：唯一会让 VM 当场失联的选项，必须二次确认。
+  const [egressWarning, setEgressWarning] = useState(false);
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   useEffect(() => {
     if (form.mode === 'create' || !peer) setTab('config');
   }, [form.mode, peer]);
@@ -1743,6 +1789,82 @@ function PeerDrawer({
                 onChange={(checked) => onChange({ enabled: checked })}
               />
             </Field>
+
+            {/*
+              网络策略（2026-11-16 U3）。两项都是服务端强制执行（渲染 wg0→wg0 的 FORWARD
+              规则），不完全依赖客户端 AllowedIPs —— 后者用户随时能改。
+            */}
+            {customPostUp ? <Banner tone="warn" title={zh.wireguard.network.customPostUpWarn} /> : null}
+            <Field
+              id="peer-reach"
+              label={zh.wireguard.network.reach}
+              help={zh.wireguard.network.reachHelp}
+            >
+              <Select
+                id="peer-reach"
+                value={form.reach}
+                options={[
+                  { value: 'hub', label: zh.wireguard.network.reachHub },
+                  { value: 'peers', label: zh.wireguard.network.reachPeers },
+                  { value: 'all', label: zh.wireguard.network.reachAll },
+                ]}
+                onChange={(value) => onChange({ reach: value as WgPeerReach })}
+              />
+            </Field>
+            {form.reach === 'peers' ? (
+              <Field
+                id="peer-reach-peers"
+                label={zh.wireguard.network.reachPeersLabel}
+                help={zh.wireguard.network.reachPeersHelp}
+                error={errors.allowedIps}
+              >
+                <div className="ui-check-list" id="peer-reach-peers">
+                  {peerOptions.length === 0 ? (
+                    <p className="ui-field-help">{zh.wireguard.network.noOtherPeers}</p>
+                  ) : (
+                    peerOptions.map((option) => (
+                      <label key={option.value} className="ui-check-item">
+                        <input
+                          type="checkbox"
+                          checked={form.reachPeers.includes(option.value)}
+                          onChange={(event) => {
+                            const next = event.target.checked
+                              ? [...form.reachPeers, option.value]
+                              : form.reachPeers.filter((item) => item !== option.value);
+                            onChange({ reachPeers: next });
+                          }}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </Field>
+            ) : null}
+            <Field
+              id="peer-egress"
+              label={zh.wireguard.network.egress}
+              help={zh.wireguard.network.egressHelp}
+            >
+              <Select
+                id="peer-egress"
+                value={form.egress}
+                options={[
+                  { value: 'internal', label: zh.wireguard.network.egressInternal },
+                  { value: 'all', label: zh.wireguard.network.egressAll },
+                ]}
+                onChange={(value) => {
+                  const next = value as WgPeerEgress;
+                  onChange({ egress: next });
+                  // 选「全部流量走 Hub」必须二次确认：这是唯一会导致 VM 当场失联的选项。
+                  if (next === 'all') setEgressWarning(true);
+                }}
+              />
+            </Field>
+            {form.egress === 'all' ? (
+              <Banner tone="danger" title={zh.wireguard.network.egressAllBanner} />
+            ) : null}
+
             <AdvancedSection title={zh.common.advancedSection}>
               <Stack gap={4}>
                 <Field
@@ -1799,6 +1921,49 @@ function PeerDrawer({
           </>
         )}
       </Stack>
+
+      {/*
+        「全部流量走 Hub」的二次确认（U3）。这是唯一会让 VM 当场失联的选项，
+        所以必须勾选才能继续 —— 单纯一个「确定」按钮不够，用户会习惯性点过去。
+        风险文案用确定语气（实测确认「会断开」，不是「可能」）。
+      */}
+      {egressWarning ? (
+        <ConfirmAction
+          open
+          action={action('wg.apply')}
+          title={zh.wireguard.network.egressWarnTitle}
+          body={[
+            zh.wireguard.network.egressWarnBody1,
+            zh.wireguard.network.egressWarnBody2,
+            zh.wireguard.network.egressWarnBody3,
+            zh.wireguard.network.egressWarnBody4,
+          ].join('\n')}
+          confirmLabel={zh.wireguard.network.egressWarnConfirm}
+          confirmDisabled={!riskAcknowledged}
+          targetName={form.name}
+          onCancel={() => {
+            // 取消就退回安全值，避免用户点了确认框外又留着危险配置
+            onChange({ egress: 'internal' });
+            setEgressWarning(false);
+            setRiskAcknowledged(false);
+          }}
+          onConfirm={async () => {
+            if (!riskAcknowledged) return;
+            setEgressWarning(false);
+            setRiskAcknowledged(false);
+          }}
+        >
+          {/* 勾选确认：没勾就点不动「仍然保存」，逼用户真的读一遍风险 */}
+          <label className="ui-check-item">
+            <input
+              type="checkbox"
+              checked={riskAcknowledged}
+              onChange={(event) => setRiskAcknowledged(event.target.checked)}
+            />
+            <span>{zh.wireguard.network.egressWarnAck}</span>
+          </label>
+        </ConfirmAction>
+      ) : null}
     </Drawer>
   );
 }

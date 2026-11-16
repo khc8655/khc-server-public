@@ -161,14 +161,210 @@ def default_post_down(ext_iface: str, networks: Iterable[str]) -> str:
     return "; ".join(rules)
 
 
+# ---------------------------------------------------------------------------
+# Peer 网络策略（2026-11-16 U3）
+#
+# 目标：新 Peer 默认只能与 Hub 通；可选与指定/所有 Peer 互通；可选「全部流量走 Hub」。
+#
+# **服务端强制执行**，不只依赖客户端 AllowedIPs —— 客户端配置用户随时能改，
+# 只靠它等于没有策略。
+#
+# 兼容底线（N-6）：**存量 Peer 缺策略字段时一律按「Hub + 所有 Peer / 仅内网出网」**，
+# 升级瞬间不能把任何既有连通性掐掉。新建 Peer 才显式写 ``reach=hub``。
+# ---------------------------------------------------------------------------
+
+PEER_REACH_VALUES = ("hub", "peers", "all")
+PEER_EGRESS_VALUES = ("internal", "all")
+# 缺省语义：reach=all（老 Peer 本来全体互通）、egress=internal（老 Peer 出网不走 Hub）
+LEGACY_PEER_REACH = "all"
+LEGACY_PEER_EGRESS = "internal"
+
+# 精细策略使用的独立链名。用独立链的原因：可以整链 -F/-X 幂等重建，
+# 不会因为重复 apply 让规则越叠越多，也不会误删用户自己的 FORWARD 规则。
+WG_POLICY_CHAIN = "KHC_WG"
+
+
+def resolve_peer_policy(peer: Mapping[str, Any]) -> dict[str, Any]:
+    """把 Peer 配置折成确定的策略（与前端 ``peerNetwork.ts`` 同语义）。"""
+
+    reach = peer.get("reach")
+    if reach not in PEER_REACH_VALUES:
+        reach = LEGACY_PEER_REACH
+    egress = peer.get("egress")
+    if egress not in PEER_EGRESS_VALUES:
+        egress = LEGACY_PEER_EGRESS
+    raw_peers = peer.get("reachPeers")
+    reach_peers = (
+        [str(item).strip() for item in raw_peers if str(item).strip()]
+        if isinstance(raw_peers, (list, tuple))
+        else []
+    )
+    return {
+        "reach": reach,
+        # reach 不是 peers 时清空，避免切了模式之后脏数据还在生效
+        "reachPeers": reach_peers if reach == "peers" else [],
+        "egress": egress,
+    }
+
+
+def peers_may_communicate(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    """两个 Peer 之间是否允许互通（与前端同语义）。
+
+    单侧「仅 Hub」即断（隔离是单向就生效的）；指定互通要求互相点名，
+    否则会出现「用户以为隔离了、实际还能被对端连进来」的安全假象。
+    """
+
+    name_a = str(a.get("name") or "")
+    name_b = str(b.get("name") or "")
+    if not name_a or not name_b or name_a == name_b:
+        return False
+    pa = resolve_peer_policy(a)
+    pb = resolve_peer_policy(b)
+    if pa["reach"] == "hub" or pb["reach"] == "hub":
+        return False
+    if pa["reach"] == "all" or pb["reach"] == "all":
+        return True
+    return name_b in pa["reachPeers"] and name_a in pb["reachPeers"]
+
+
+def _peer_address_cidr(peer: Mapping[str, Any]) -> str:
+    """Peer 自己的地址（取其 allowedIps 的第一项）。"""
+
+    allowed = peer.get("allowedIps") or []
+    if isinstance(allowed, (list, tuple)) and allowed:
+        return str(allowed[0])
+    return ""
+
+
+def build_policy_rules(peers: Iterable[Mapping[str, Any]], wg_network: str = "") -> tuple[str, str]:
+    """渲染 ``wg0→wg0`` 的转发策略链，返回 ``(postUp 片段, postDown 片段)``。
+
+    渲染出来的 iptables 规则（``%i`` 由 wg-quick 替换为接口名）：
+
+    - 建链 ``KHC_WG``，清空后按 Peer 对双向放行；
+    - 其余 ``%i→%i`` 默认 DROP（Peer 间默认隔离）；
+    - 链尾 RETURN，**不影响** wg→外网、外网→wg 等非 wg→wg 流量；
+    - 只有选了 ``egress=all`` 的 Peer 才单独放行到非 wg 出接口。
+
+    为什么用独立链 + 插到 FORWARD 第 1 位：现有 ``default_post_up`` 用的是
+    ``-A FORWARD -i %i -j ACCEPT``（追加），而节点的 FORWARD 里可能已有
+    ``-j REJECT``。追加会排到 REJECT 后面成为死规则（S0 §④ 实测过这个坑）。
+    """
+
+    items = [peer for peer in peers if bool(peer.get("enabled", True))]
+    up: list[str] = [
+        f"iptables -N {WG_POLICY_CHAIN} 2>/dev/null || true",
+        f"iptables -F {WG_POLICY_CHAIN}",
+        # 插到最前，确保先于既有 REJECT 与粗放 ACCEPT 生效
+        f"iptables -C FORWARD -j {WG_POLICY_CHAIN} 2>/dev/null || iptables -I FORWARD 1 -j {WG_POLICY_CHAIN}",
+    ]
+    down: list[str] = [
+        f"iptables -D FORWARD -j {WG_POLICY_CHAIN} 2>/dev/null || true",
+        f"iptables -F {WG_POLICY_CHAIN} 2>/dev/null || true",
+        f"iptables -X {WG_POLICY_CHAIN} 2>/dev/null || true",
+    ]
+
+    allowed_pairs: list[tuple[str, str]] = []
+    for index, peer in enumerate(items):
+        for other in items[index + 1 :]:
+            if peers_may_communicate(peer, other):
+                allowed_pairs.append((_peer_address_cidr(peer), _peer_address_cidr(other)))
+
+    for src, dst in allowed_pairs:
+        if not src or not dst:
+            continue
+        up.append(f"iptables -A {WG_POLICY_CHAIN} -i %i -o %i -s {src} -d {dst} -j ACCEPT")
+        up.append(f"iptables -A {WG_POLICY_CHAIN} -i %i -o %i -s {dst} -d {src} -j ACCEPT")
+
+    # Peer 之间默认隔离
+    up.append(f"iptables -A {WG_POLICY_CHAIN} -i %i -o %i -j DROP")
+    # 非 wg→wg 一律放过，不改变站点/端口转发的既有行为
+    up.append(f"iptables -A {WG_POLICY_CHAIN} -j RETURN")
+
+    # 出网：只有 egress=all 的 Peer 才允许从 wg 转发到外部网卡
+    for peer in items:
+        if resolve_peer_policy(peer)["egress"] != "all":
+            continue
+        cidr = _peer_address_cidr(peer)
+        if not cidr:
+            continue
+        up.append(f"iptables -A {WG_POLICY_CHAIN} ! -o %i -s {cidr} -j ACCEPT")
+        down.append(f"iptables -D {WG_POLICY_CHAIN} ! -o %i -s {cidr} -j ACCEPT 2>/dev/null || true")
+
+    return "; ".join(up), "; ".join(down)
+
+
+def needs_managed_policy(peers: Iterable[Mapping[str, Any]]) -> bool:
+    """是否需要用精细策略接管转发。
+
+    只有**显式**出现过策略字段时才接管。全是存量配置（无 reach/egress）时返回 False，
+    行为与升级前完全一致 —— 这是 N-6 的落地方式，也是最保守的选择。
+    """
+
+    for peer in peers:
+        if "reach" in peer or "egress" in peer:
+            return True
+    return False
+
+
+def policy_post_up(ext_iface: str, networks: Iterable[str], peers: Iterable[Mapping[str, Any]]) -> str:
+    """完整 PostUp：精细策略 + 保留原有的 MASQUERADE（出网 NAT 仍然需要）。
+
+    精细策略替换掉原来的两条粗放 ``FORWARD ACCEPT``，但 **MASQUERADE 保留** ——
+    否则 egress=all 的 Peer 即使被放行也回不来（源地址没做 NAT）。
+    """
+
+    peer_list = [peer for peer in peers if bool(peer.get("enabled", True))]
+    policy_up, _ = build_policy_rules(peer_list)
+    parts = [policy_up] if policy_up else []
+    if ext_iface:
+        for network in networks:
+            parts.append(f"iptables -t nat -A POSTROUTING -s {network} -o {ext_iface} -j MASQUERADE")
+    return "; ".join(parts)
+
+
+def policy_post_down(ext_iface: str, networks: Iterable[str], peers: Iterable[Mapping[str, Any]]) -> str:
+    peer_list = [peer for peer in peers if bool(peer.get("enabled", True))]
+    _, policy_down = build_policy_rules(peer_list)
+    parts = [policy_down] if policy_down else []
+    if ext_iface:
+        for network in networks:
+            parts.append(f"iptables -t nat -D POSTROUTING -s {network} -o {ext_iface} -j MASQUERADE")
+    return "; ".join(parts)
+
+
 def build_conf(interface: Mapping[str, Any], peers: Iterable[Mapping[str, Any]]) -> str:
     """渲染 wg-quick 服务端配置（纯函数）。只写 enabled peer，且永不写 peer 私钥。"""
 
     address = _text(interface.get("address"))
     networks = _ipv4_networks(address)
     ext_iface = _text(interface.get("extIface"))
-    post_up = _text(interface.get("postUp")) or default_post_up(ext_iface, networks)
-    post_down = _text(interface.get("postDown")) or default_post_down(ext_iface, networks)
+    peer_list = list(peers)
+    # PostUp/PostDown 的来源有三处，优先级必须一致（否则 normalize 与 build_conf 会给出
+    # 不同结果，测试和线上行为就会脱节）：
+    #   1. 调用方已算好的（`_normalize_config` 会把结果写回 interface）——直接用，不再重复算；
+    #   2. 用户自定义 —— 尊重用户，不接管策略（N-5）；
+    #   3. 都没有 —— 有策略字段就按策略渲染，否则用升级前的默认值（N-6）。
+    provided_up = _text(interface.get("postUp"))
+    provided_down = _text(interface.get("postDown"))
+    managed = needs_managed_policy(peer_list)
+    # 用户自定义了 PostUp 就完全退出策略接管（N-5）：连 PostDown 的清理也不加，
+    # 否则会去删用户根本没建过的链。
+    user_owns_hooks = bool(provided_up)
+    if provided_up:
+        custom_up = provided_up
+    elif managed:
+        custom_up = policy_post_up(ext_iface, networks, peer_list)
+    else:
+        custom_up = default_post_up(ext_iface, networks)
+    if provided_down:
+        custom_down = provided_down
+    elif managed and not user_owns_hooks:
+        custom_down = policy_post_down(ext_iface, networks, peer_list)
+    else:
+        custom_down = default_post_down(ext_iface, networks)
+    post_up = custom_up
+    post_down = custom_down
 
     lines = [
         "# Generated by khc-agent (wireguard adapter). Do not edit.",
@@ -210,10 +406,84 @@ def build_conf(interface: Mapping[str, Any], peers: Iterable[Mapping[str, Any]])
     return "\n".join(lines) + "\n"
 
 
+def _policy_allowed_ips(
+    interface: Mapping[str, Any],
+    peer: Mapping[str, Any],
+    all_peers: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> list[str]:
+    """按 Peer 网络策略推导客户端 ``AllowedIPs``（2026-11-16 U3）。
+
+    规则（与前端 ``peerNetwork.ts`` 的 ``clientAllowedIps`` 同语义）：
+
+    - ``egress=all``  -> ``0.0.0.0/0, ::/0``（全部流量走 Hub）
+    - ``reach=hub``   -> 只要 Hub 地址
+    - ``reach=peers`` -> Hub 地址 + 指定 Peer 的地址
+    - ``reach=all``   -> Hub 地址 + 整个 WireGuard 网段
+
+    **注意 ``egress=all`` 的情形**：真实客户端配置还需要一条到 Hub endpoint 的 /32 直连路由，
+    否则封装包会被默认路由投回隧道自己（自环），隧道当场失效 —— 见
+    ``docs/verification/2026-11-16/ui-polish-u3-rollback.md`` §1.4 的实测。
+    这里返回的是路由范围，endpoint /32 由客户端的 ``wg-quick`` 自动处理；
+    若走 `wg set` + 手写路由的路径，必须自己先加那条 /32。
+    """
+
+    policy = resolve_peer_policy(peer)
+    if policy["egress"] == "all":
+        return ["0.0.0.0/0", "::/0"]
+
+    networks = _ipv4_networks(interface.get("address"))
+    if not networks:
+        return []
+
+    # reach=all 直接给整个网段 —— 它本来就包含 Hub 的地址。
+    # **不要**再额外写 Hub 的 /32：存量 Peer 解析后就是 all，
+    # 多写一条会让老客户端的 AllowedIPs 从「10.99.0.0/24」变成
+    # 「10.99.0.1/32, 10.99.0.0/24」，违反 N-6「存量行为不变」。
+    if policy["reach"] == "all":
+        return [networks[0]]
+
+    hub_network = ipaddress.ip_network(networks[0], strict=False)
+    hub_cidr = f"{hub_network.network_address + 1}/{hub_network.max_prefixlen}"
+    result = [hub_cidr]
+
+    if policy["reach"] == "peers":
+        wanted = set(policy["reachPeers"])
+        own_name = str(peer.get("name") or "")
+        for other in all_peers or []:
+            other_name = str(other.get("name") or "")
+            if other_name and other_name != own_name and other_name in wanted:
+                for cidr in _peer_own_cidrs(other):
+                    if cidr not in result:
+                        result.append(cidr)
+        return result
+
+    return result
+
+
+def _peer_own_cidrs(peer: Mapping[str, Any]) -> list[str]:
+    """Peer 自己的地址（allowedIps 里非网段的那一项）。"""
+
+    result: list[str] = []
+    for item in peer.get("allowedIps") or []:
+        text = _text(item)
+        if not text:
+            continue
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            continue
+        # Peer 自己的地址是 /32（或 /128），整网段的那条是 Peer 之间共享的
+        if network.max_prefixlen - network.prefixlen == network.max_prefixlen or network.prefixlen >= 32:
+            if text not in result:
+                result.append(text)
+    return result
+
+
 def build_client_conf(
     interface: Mapping[str, Any],
     peer: Mapping[str, Any],
     allowed_ips: Any = None,
+    all_peers: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> str:
     """渲染客户端配置（纯函数）：Address 只给 peer 自己的地址，服务端不写 DNS。"""
 
@@ -244,7 +514,10 @@ def build_client_conf(
     address = peer_allowed[0]
 
     if allowed_ips is None or (isinstance(allowed_ips, str) and not allowed_ips.strip()):
-        routed = _ipv4_networks(interface.get("address"))
+        # 没显式指定时，按 Peer 的网络策略推导（2026-11-16 U3）。
+        # 存量 Peer（无策略字段）走 resolve 后是 reach=all，得到「Hub /32 + 整个网段」，
+        # 与升级前「整个网段」等效 —— 老客户端配置不会因此变化。
+        routed = _policy_allowed_ips(interface, peer, all_peers)
         routed_text = ", ".join(routed) if routed else DEFAULT_ROUTE
     elif isinstance(allowed_ips, (list, tuple)):
         routed_text = ", ".join(_text(item) for item in allowed_ips if _text(item))
@@ -1141,12 +1414,8 @@ class WireGuard(Adapter):
             interface["publicKey"] = _require_key(public_key, "interface.publicKey")
 
         networks = _ipv4_networks(interface["address"])
-        post_up = _single_line(interface.get("postUp"), "interface.postUp") or default_post_up(ext_iface, networks)
-        post_down = _single_line(interface.get("postDown"), "interface.postDown") or default_post_down(
-            ext_iface, networks
-        )
-        interface["postUp"] = post_up
-        interface["postDown"] = post_down
+        # PostUp/PostDown 在 peers 校验之后渲染（见下方）：精细策略需要知道 Peer 之间的
+        # 互通关系，而那时 peers 还没解析完。
 
         peers: list[dict[str, Any]] = []
         peer_names: set[str] = set()
@@ -1203,6 +1472,73 @@ class WireGuard(Adapter):
                         )
                     allocated[network] = peer_name
             peers.append(peer)
+
+        # 网络策略字段校验（2026-11-16 U3）。放在 peers 循环之后，因为
+        # `reach=peers` 的 `reachPeers` 要引用其它 Peer 的名字，得先收集全。
+        peer_names = {str(peer.get("name") or "") for peer in peers}
+        for peer in peers:
+            name = str(peer.get("name") or "")
+            if "reach" in peer:
+                if peer["reach"] not in PEER_REACH_VALUES:
+                    raise ValidationFailed(
+                        f"Peer {name} 的可达范围非法: {peer.get('reach')!r}",
+                        details={"field": "peers[].reach", "allowed": list(PEER_REACH_VALUES)},
+                    )
+            if "egress" in peer:
+                if peer["egress"] not in PEER_EGRESS_VALUES:
+                    raise ValidationFailed(
+                        f"Peer {name} 的出网方式非法: {peer.get('egress')!r}",
+                        details={"field": "peers[].egress", "allowed": list(PEER_EGRESS_VALUES)},
+                    )
+            policy = resolve_peer_policy(peer)
+            # 注意：resolve 会把非 peers 模式的 reachPeers 清空，所以这里要看**原始值**
+            # 才能发现「选了仅 Hub 却还带着互通名单」这种自相矛盾的配置。
+            raw_reach_peers = peer.get("reachPeers")
+            has_raw_peers = isinstance(raw_reach_peers, (list, tuple)) and any(
+                str(item).strip() for item in raw_reach_peers
+            )
+            if policy["reach"] == "peers":
+                unknown = [item for item in policy["reachPeers"] if item not in peer_names]
+                if unknown:
+                    raise ValidationFailed(
+                        f"Peer {name} 指定的互通对象不存在: {', '.join(unknown)}",
+                        details={"field": "peers[].reachPeers", "unknown": unknown},
+                    )
+                if name in policy["reachPeers"]:
+                    raise ValidationFailed(
+                        f"Peer {name} 不能指定自己为互通对象",
+                        details={"field": "peers[].reachPeers"},
+                    )
+            if policy["reach"] != "peers" and has_raw_peers:
+                raise ValidationFailed(
+                    f"Peer {name} 的可达范围不是「指定 Peer」，不应同时指定互通对象",
+                    details={"field": "peers[].reachPeers"},
+                )
+
+        # PostUp/PostDown 必须在 peers 之后渲染：精细策略要知道每一对 Peer 是否互通。
+        # N-5：用户自定义 PostUp 时**完全不接管**转发策略（会和用户规则打架），
+        # 连 PostDown 的清理也不能加 —— 否则会去删用户没建过的链。
+        # 页面需提示「自定义 PostUp 时网络策略不生效」。
+        custom_post_up = _single_line(interface.get("postUp"), "interface.postUp")
+        custom_post_down = _single_line(interface.get("postDown"), "interface.postDown")
+        if custom_post_up:
+            post_up = custom_post_up
+            post_down = custom_post_down or default_post_down(ext_iface, networks)
+        elif custom_post_down:
+            post_up = policy_post_up(ext_iface, networks, peers) if needs_managed_policy(peers) else default_post_up(
+                ext_iface, networks
+            )
+            post_down = custom_post_down
+        else:
+            managed = needs_managed_policy(peers)
+            post_up = policy_post_up(ext_iface, networks, peers) if managed else default_post_up(ext_iface, networks)
+            post_down = (
+                policy_post_down(ext_iface, networks, peers)
+                if managed
+                else default_post_down(ext_iface, networks)
+            )
+        interface["postUp"] = post_up
+        interface["postDown"] = post_down
         return interface, peers
 
     # ------------------------------------------------------------------
@@ -2177,7 +2513,9 @@ class WireGuard(Adapter):
             return _action_error("peer_not_found", f"peer 不存在: {peer_name}", {"peer": peer_name})
         allowed_ips = params.get("allowedIps", params.get("allowed_ips"))
         try:
-            text = build_client_conf(interface, peer, allowed_ips=allowed_ips)
+            text = build_client_conf(
+                interface, peer, allowed_ips=allowed_ips, all_peers=effective.get("peers") or []
+            )
         except KhcError as exc:
             return _action_error("client_config_failed", exc.message, exc.details)
         return {
@@ -2206,7 +2544,12 @@ class WireGuard(Adapter):
         if not hub_ip:
             return _action_error("invalid_config", "interface.address 为空，无法生成回连验证目标")
         try:
-            conf_text = build_client_conf(interface, peer, allowed_ips=params.get("allowedIps", params.get("allowed_ips")))
+            conf_text = build_client_conf(
+                interface,
+                peer,
+                allowed_ips=params.get("allowedIps", params.get("allowed_ips")),
+                all_peers=effective.get("peers") or [],
+            )
         except KhcError as exc:
             return _action_error("client_config_failed", exc.message, exc.details)
         script = render_peer_install_script(peer_name, conf_text, hub_ip)

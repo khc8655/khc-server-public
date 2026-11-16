@@ -13,6 +13,8 @@ export interface ConfirmActionProps {
   nameLabel?: string;
   /** 确认框内的额外选项（例如危险操作的附加开关） */
   children?: ReactNode;
+  /** 确认按钮是否禁用（例如「必须勾选」）。 */
+  confirmDisabled?: boolean;
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }
@@ -29,6 +31,7 @@ export function ConfirmAction({
   targetName,
   nameLabel,
   children,
+  confirmDisabled,
   onCancel,
   onConfirm,
 }: ConfirmActionProps) {
@@ -45,6 +48,7 @@ export function ConfirmAction({
       confirmTone={confirmTone}
       confirmName={level === 'L3' ? targetName : undefined}
       nameLabel={nameLabel}
+      confirmDisabled={confirmDisabled}
       onCancel={onCancel}
       onConfirm={onConfirm}
     >

@@ -176,3 +176,26 @@ curl -s http://<ip>:<port>/health          # 唯一无鉴权端点，只回 ok+v
 
 - 删除确认框默认勾选「同时清理本机服务」，经主机运维通道下发 khc-host `cleanup`：停用 `wg-quick@wg0` 删 `wg0.conf`、清空 `/etc/caddy/khc.d` 并 reload、停删全部 `khc-forward-*.service`、停删已确认的防火墙产物（`khc-fw.service`、nft `table inet khc_fw`、fw 规则/状态文件——默认 `/etc/khc-host/` 与 Agent 数据目录 `fw-state/` 两处布局都清）、清 `/opt/khc` 与 `/etc/khc`。**khc-agent 自身不在清理范围**（Agent 卸载仍必须由人在机器上跑 `uninstall.sh`，控制面不能远程卸载 Agent）。
 - cleanup 幂等、逐项回读校验；**有残留即阻止删除**并列出清单，可取消勾选改为仅删除面板记录（此时本机服务原样保留）。`/opt/khc`、`/etc/khc` 若是 Agent 沙箱 `ReadWritePaths` bind mount（挂载点不可 rmdir），只清空内容、目录保留并记入 `skipped` 清单（明确上报原因，不算残留、不阻断删除）。
+
+## 12. Peer 网络策略（U3，2026-11-16）
+
+- **默认拒绝，服务端强制执行**：新 Peer 默认 `reach=hub`（只与 Hub 通），Peer 之间默认互不可达。
+  由适配器渲染 `wg0→wg0` 的独立链 `KHC_WG`（先按 Peer 对双向放行，再默认 DROP），
+  **插到 FORWARD 第 1 位**——节点上常有更早的 `-j REJECT`，追加的 ACCEPT 会成为死规则。
+  不只依赖客户端 `AllowedIPs`：客户端配置用户随时能改，只靠它等于没有策略。
+- **存量不降级**：配置里没有 `reach`/`egress` 字段的 Peer 一律按 `reach=all`、`egress=internal` 解释，
+  且此时**完全不接管**转发（PostUp/PostDown 与升级前一字不差）。升级不得掐断任何既有连通性。
+  真机核对见 `docs/verification/2026-11-16/ui-polish-u3-peer-isolation.md`。
+- **指定互通必须双向点名**：只有双方都把对方列进 `reachPeers` 才放行。单向放行会造成
+  「用户以为隔离了、实际能被对端连进来」的安全假象。
+- **自定义 `postUp` 时策略不生效**（N-5）：用户规则会与渲染的规则冲突，适配器不去覆盖它，
+  页面显著提示。这是有意的取舍——宁可让策略失效并说明，也不要偷偷改用户的防火墙。
+- **「全部流量走 Hub」（`egress=all`）是高风险选项**：
+  - **这台 VM 的公网 SSH 会立即断开**（实测确认，不是「可能」）：入包走物理网卡、
+    回包按默认路由从隧道出去，源地址变成隧道地址，对端无法匹配连接。
+    机制与实测见 `docs/verification/2026-11-16/ui-polish-u3-rollback.md` §1。
+  - **必须先写 Hub endpoint 的 `/32` 直连路由，再装默认路由**。顺序反了会自环，
+    连隧道本身都失效（同上 §1.4）。
+  - UI 必须二次确认且**要求勾选**才能继续；取消时退回 `internal`，不留危险配置。
+  - 回滚依赖 Peer 侧定时器，**必须在加载路由之前布防**，布防失败要中止操作。
+    Hub 侧撤销只能保证配置一致，救不回已失联的路由表。
