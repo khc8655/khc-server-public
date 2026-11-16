@@ -1,6 +1,6 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-16 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
 > 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
@@ -260,7 +260,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 - Peer 脚本：`agent/adapters/host_ops/khc_host.py`（与 `agent/khc/ops.py` 打包成单文件 `khc-host`）
 - 测试：`agent/tests/test_host_ops.py`（132 项）；全量 Agent **572 项**、前端/Worker **93 项**
 - UI：`apps/web/src/pages/hostops/`（不新增路由；VM 卡片 + WireGuard Peer 抽屉「运维」）
-- 动作：`hub_pubkey` / `probe` / `onboard` / `call`；`call` 为写动作（同一 Agent 写锁串行）
+- 动作：`hub_pubkey` / `probe` / `onboard` / `call`；`call` 的**读写按 verb 判定**（适配器 `is_write` 钩子，只读动词不抢节点级写锁，也不要求幂等键），写动词之间仍串行
 - 长耗时动作：`call_task`（mode=task）供 `fw.apply` 使用；UI 轮询任务结果（见 `docs/host-ops-async.md`）
 - 写动作审计：适配器在动作信封返回 `audit{write,target,verb}`；Worker 通用记录 `host-ops.call`（只记 target/verb/ok/error，不记参数内容）
 

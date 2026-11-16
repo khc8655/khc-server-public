@@ -265,6 +265,37 @@ describe('host-ops 动作请求', () => {
     expect(old.expectedVersion).toBe('1.4.0');
     expect(old.updateRequired).toBe(true);
   });
+
+  it('Agent 写锁 409 busy 归一化为可读的 E_BUSY，不落到 E_UNKNOWN', async () => {
+    // 409 走 ApiError 路径（Worker 透传 Agent 状态码）
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json(
+          {
+            error: {
+              code: 'busy',
+              message: '节点正在执行写动作（应用 host-ops 的请求被节点级写锁拒绝），请稍后重试',
+            },
+          },
+          409,
+        ),
+      ),
+    );
+    const blocked = await callHostOps('hub-1', 'self', 'svc.restart', { unit: 'caddy.service' });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error?.code).toBe('E_BUSY');
+
+    // 200 + ok:false 的信封路径同样要归一化
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({ ok: false, error: { code: 'busy', message: 'write lock held' } }),
+      ),
+    );
+    const envelope = await callHostOps('hub-1', 'self', 'svc.restart', { unit: 'caddy.service' });
+    expect(envelope.error?.code).toBe('E_BUSY');
+  });
 });
 
 

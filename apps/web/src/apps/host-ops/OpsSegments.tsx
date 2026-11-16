@@ -741,7 +741,6 @@ export function KeysSegment({
     setLoading(true);
     setError(null);
     try {
-      // call 是 Agent 写锁动作；读动词也串行，避免并发拿不到锁。
       const versionResult = await callHostOps(hubId, 'self', 'version');
       const keysResult = await callHostOps(hubId, 'self', 'keys.list', {});
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));

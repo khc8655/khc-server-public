@@ -767,6 +767,8 @@ export const zh = {
       E_INVALID: '规则校验失败，请检查协议、端口与来源。',
       E_UNSUPPORTED: '该主机不支持 nftables，防火墙功能不可用。',
       E_BAD_REQUEST: '请求参数不合法。',
+      // Agent 写锁冲突（409 busy）：只出现在「同时有两个写动作」时，点重试即可。
+      E_BUSY: '节点正在执行另一个写操作，请稍后重试。',
       E_UNKNOWN: '操作失败，请稍后重试。',
     },
   },
