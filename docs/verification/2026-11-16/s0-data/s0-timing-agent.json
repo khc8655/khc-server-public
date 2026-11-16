@@ -1,0 +1,50 @@
+[
+  {
+    "verb": "svc.list",
+    "medianMs": 130.64,
+    "maxMs": 205.66,
+    "ok": true
+  },
+  {
+    "verb": "processes",
+    "medianMs": 641.91,
+    "maxMs": 647.43,
+    "ok": true
+  },
+  {
+    "verb": "fw.show",
+    "medianMs": 127.38,
+    "maxMs": 133.43,
+    "ok": true
+  },
+  {
+    "verb": "keys.list",
+    "medianMs": 120.77,
+    "maxMs": 125.21,
+    "ok": true
+  },
+  {
+    "verb": "cron.list",
+    "medianMs": 74.53,
+    "maxMs": 128.74,
+    "ok": true
+  },
+  {
+    "verb": "logs.errors",
+    "medianMs": 154.9,
+    "maxMs": 195.47,
+    "ok": true
+  },
+  {
+    "verb": "status",
+    "medianMs": 347.25,
+    "maxMs": 354.57,
+    "ok": true
+  },
+  {
+    "verb": "snapshot",
+    "medianMs": 361.04,
+    "maxMs": 367.05,
+    "ok": true
+  }
+]
