@@ -87,18 +87,65 @@ install lifecycle 22 项、app manifests、docs lint strict、release 一致性�
 | 并发 10 个只读 verb | PASS（此轮恰好未撞车，说明症状是非确定性的） |
 | 写锁被占用时只读 verb | FAIL —— `BadRequest: 写动作必须带 idempotencyKey` |
 
-## 6. 清理核对
+## 6. 真机升级与 A/B 对照（同一节点，最强证据）
+
+上述隔离单元验证的是"代码逻辑"。本节在 `oracle-x86-2` 上**把生产 Agent 从 0.1.48 原地升级到
+0.3.1**，对真实运行进程打并发请求，然后在同一进程内做 A/B 对照（唯一变量是 `is_write`
+钩子有无），闭合因果链。
+
+### 6.1 原地升级
+
+用仓库出的包（`agent/package.sh`）在节点上跑官方 `install.sh`，按节点既有配置
+（`KHC_HOST=127.0.0.1` / `KHC_PORT=8443` / 原 `KHC_LIVE_ORIGINS` / 原 `KHC_NODE_ID`）重装：
+
+```
+[khc-agent] health OK (http): {'ok': True, 'version': '0.3.1', 'minPanelVersion': '0.4.0'}
+```
+
+升级前后：`ExecStart` 与 `KHC_*` 环境变量保持一致，token 文件路径不变（`install.sh` 本次
+重新生成了 token，属其既有行为），监听仍是 `127.0.0.1:8443`。
+
+### 6.2 真实进程并发（HTTP + HMAC 签名）
+
+对 `127.0.0.1:8443` 用 `X-Khc-Token/Ts/Nonce/Sig`（`METHOD|path|ts|nonce|sha256hex(body)`）打请求：
+
+| 检查 | 结果 |
+|---|---|
+| 并发 10 个只读 verb | 全部 200，无 busy |
+| 只读 verb 不带 `idempotencyKey` | 200（旧版此处会 400） |
+| 写 verb 不带 `idempotencyKey` | 400 `idempotency_key_required`（权限未放宽） |
+| 并发两个写 verb | 一个 200、一个 409 `busy`（写锁仍生效） |
+| 写动作之后只读 | 立即 200 |
+
+### 6.3 同进程 A/B：缺陷 → 修复
+
+关键点：真实前端每个请求**都带** `idempotencyKey`（`hostOpsAction` 恒带）。不带 key 的只读
+请求在旧实现上会先被 400 拦住，反而不进入写锁竞争 —— 这也是最初复现不出 busy 的原因。
+补上 key 后，10 个并发只读请求（每个注入 50ms 延迟以强制重叠）：
+
+| 场景 | 结果 |
+|---|---|
+| **旧实现**（`is_write` 退回基类默认） | **9/10 被拒，`busy`** —— 精确复现截图症状 |
+| **修复后**（当前 `is_write`） | **0/10 失败**，全部 200 |
+| 写锁被占用时只读 verb：旧实现 | FAIL —— `写动作必须带 idempotencyKey` |
+| 写锁被占用时只读 verb：修复后 | PASS —— 可用 |
+
+旧实现 9/10 失败、修复后 0/10 —— 因果链闭合，不是"改了别的东西顺带好了"。
+
+## 7. 清理核对
 
 ```
 /var/lib/khc-r3        -> 已删除
 /var/lib/khc-apps      -> 已删除
 khc-r3-driver.service  -> 已删除（stop + reset-failed）
+/tmp/khc-up-031、临时测试脚本 -> 已删除
 残留 khc-app 用户      -> 0
-生产 khc-agent / caddy -> active（未改配置、未 reload）
+生产 khc-agent / caddy -> active（Agent 已升到 0.3.1）
 ```
 
-## 7. 遗留
+## 8. 遗留
 
 - 写动作之间仍是节点级串行（设计如此，A-8），不做并发写。
-- 面板侧真正的修复在 Agent：旧 Agent（≤ 0.3.0）上只读 verb 仍会抢锁，需升级 Agent 才消除。
-  面板已能把 `busy` 显示成「节点正在执行另一个写操作」，不再是通用文案。
+- 面板侧真正的修复在 Agent：旧 Agent（≤ 0.3.0）上只读 verb 仍会抢锁。面板的 `E_BUSY` 只是
+  把冲突显示成可读文案，不改变行为。
+- 本次已在 `oracle-x86-2` 把节点升级到 0.3.1 并验证；其余节点按批次自行安排，不在本证据范围。
