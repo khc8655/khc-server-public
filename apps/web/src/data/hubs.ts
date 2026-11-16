@@ -43,8 +43,15 @@ export async function deleteHub(hubId: string): Promise<void> {
   await apiRequest(`/api/v1/nodes/${encodeURIComponent(hubId)}`, { method: 'DELETE' });
 }
 
-export async function fetchHubState(hubId: string): Promise<NodeStateResponse> {
-  const body = await apiRequest(`/api/v1/nodes/${encodeURIComponent(hubId)}/state`);
+export async function fetchHubState(
+  hubId: string,
+  options: { force?: boolean } = {},
+): Promise<NodeStateResponse> {
+  // force=1 跳过 Agent 侧 ops 采集的 5 秒缓存：写操作成功后要立刻看到真值。
+  const query = options.force ? '?force=1' : '';
+  const body = await apiRequest(
+    `/api/v1/nodes/${encodeURIComponent(hubId)}/state${query}`,
+  );
   return nodeStateResponseSchema.parse(body);
 }
 

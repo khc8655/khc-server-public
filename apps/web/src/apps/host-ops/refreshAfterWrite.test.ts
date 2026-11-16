@@ -2,10 +2,20 @@
  * 写操作成功后的刷新（2026-11-16 §5 / N-3）。
  *
  * 回归目标：状态带「服务 N 个失败」来自打开页面时的 `/state`，重启成功后只重拉了
- * `svc.list`，计数停在旧值 —— 列表已经没失败单元，状态带却还显示 1。
+ * `svc.list`，计数停在旧值。真机还发现 Agent 侧 ops 有 5 秒缓存，单纯 invalidate
+ * 仍会读到旧值 —— 所以必须带 force=1 重新拉取。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hubStateQueryKey, refreshAfterWrite } from './refreshAfterWrite';
+
+const fetchHubState = vi.fn();
+vi.mock('../../data/hubs', () => ({
+  fetchHubState: (...args: unknown[]) => fetchHubState(...args),
+}));
+
+beforeEach(() => {
+  fetchHubState.mockReset();
+});
 
 describe('hubStateQueryKey', () => {
   it('与 hubStateQueryOptions 同口径（hubs / <id> / state）', () => {
@@ -18,18 +28,30 @@ describe('hubStateQueryKey', () => {
 });
 
 describe('refreshAfterWrite', () => {
-  it('失效该节点的 /state，让失败计数重新拉取', async () => {
-    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
-    await refreshAfterWrite({ invalidateQueries }, 'hub-1');
+  it('带 force=1 重新拉 /state 并写入缓存（绕过 Agent 5 秒缓存）', async () => {
+    const state = { ok: true, state: { ops: { services: { failedUnits: [] } } } };
+    fetchHubState.mockResolvedValue(state);
+    const setQueryData = vi.fn();
+    const invalidateQueries = vi.fn();
 
-    expect(invalidateQueries).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['hubs', 'hub-1', 'state'] });
+    await refreshAfterWrite({ setQueryData, invalidateQueries }, 'hub-1');
+
+    // 关键：必须带 force，否则会落进 Agent 的缓存窗口
+    expect(fetchHubState).toHaveBeenCalledWith('hub-1', { force: true });
+    expect(setQueryData).toHaveBeenCalledWith(['hubs', 'hub-1', 'state'], state);
+    expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
-  it('只失效目标节点，不动别的节点', async () => {
+  it('拉取失败时退回 invalidate，不把异常抛给写操作收尾', async () => {
+    fetchHubState.mockRejectedValue(new Error('boom'));
+    const setQueryData = vi.fn();
     const invalidateQueries = vi.fn().mockResolvedValue(undefined);
-    await refreshAfterWrite({ invalidateQueries }, 'hub-2');
-    const call = invalidateQueries.mock.calls[0]![0] as { queryKey: string[] };
-    expect(call.queryKey[1]).toBe('hub-2');
+
+    await expect(
+      refreshAfterWrite({ setQueryData, invalidateQueries }, 'hub-1'),
+    ).resolves.toBeUndefined();
+
+    expect(setQueryData).not.toHaveBeenCalled();
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['hubs', 'hub-1', 'state'] });
   });
 });

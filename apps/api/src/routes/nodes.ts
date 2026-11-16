@@ -374,12 +374,16 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     const token = await nodeToken(c.env, node);
     // 本次实际会用的接入地址：tunnel 优先隧道地址，否则直连 endpoint。
     const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
+    // ?force=1 透传给 Agent，跳过它 ops 采集的 5 秒进程内缓存。
+    // 写操作成功后前端带这个参数重拉，否则会读到缓存里的旧失败计数（2026-11-16 U1）。
+    const force = c.req.query('force');
+    const agentPath = force === '1' || force === 'true' ? '/state?force=1' : '/state';
     try {
       const response = await deps.agent.call(
         node,
         token,
         'GET',
-        '/state',
+        agentPath,
         undefined,
         // F-M1：/state 是最重的 Agent 端点（ops 收集 systemctl/ps/df 多个子进程），
         // 系统繁忙时 3s 预算必然踩线触发 fetch 超时→TCP 回退；放宽到与默认预算一致。
