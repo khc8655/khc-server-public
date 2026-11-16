@@ -425,28 +425,59 @@ export interface HubBarProps {
   items: SidebarNavItem[];
   /** 二级模块切换（应用发布 / 内网穿透 / 服务器运维） */
   subItems?: HubSubItem[];
-  /** 直连地址，显示在节点名右侧 */
-  endpoint?: string;
+  /** 统一连接指示（P-4 A）：三态 + 每类数据的通道说明。 */
+  connection?: {
+    state: { label: string; tone: Tone };
+    rows: ReadonlyArray<{ name: string; channel: string }>;
+  };
   onSelectHub?: (hubId: string) => void;
 }
 
 /**
  * Hub 工作区头部：左侧节点身份 + 生命周期一级 Tab，右侧二级模块 Segmented。
  * 全局侧栏始终保留节点列表，所以这里不再重复切换菜单。
+ *
+ * 节点栏只放「状态点 + 节点名」：地址不再出现在这里（2026-11-16 P-1），
+ * 只在概况页标题下出现一次。地址带框等宽字体既挤掉节点名，又在页面上重复三次。
  */
-export function HubBar({ activeHub, items, subItems = [], endpoint }: HubBarProps) {
+export function HubBar({ activeHub, items, subItems = [], connection }: HubBarProps) {
   const hasSubItems = subItems.length > 0;
+  const [channelsOpen, setChannelsOpen] = useState(false);
   return (
     <div className={`ui-hubbar${hasSubItems ? ' has-subitems' : ''}`}>
       <div className="ui-hubbar-row">
         <div className="ui-hubbar-left">
           <div className="ui-hubbar-node">
             <StatusDot tone={activeHub ? statusTone(activeHub.status) : 'neutral'} />
-            <span className="ui-hubbar-node-name">
-              <Truncate text={activeHub?.name ?? '—'} />
+            <span className="ui-hubbar-node-name" title={activeHub?.name ?? undefined}>
+              {activeHub?.name ?? '—'}
             </span>
-            {endpoint ? <span className="ui-hubbar-node-endpoint">{endpoint}</span> : null}
           </div>
+          {/* 统一连接指示（P-4 A）：三态 + 点开看每类数据走哪条通道。 */}
+          {connection ? (
+            <div className="ui-conn">
+              <button
+                type="button"
+                className={`ui-conn-pill is-${connection.state.tone}`}
+                aria-expanded={channelsOpen}
+                onClick={() => setChannelsOpen((value) => !value)}
+              >
+                <StatusDot tone={connection.state.tone} />
+                {connection.state.label}
+              </button>
+              {channelsOpen ? (
+                <div className="ui-conn-panel" role="dialog" aria-label={zh.nav.connectionChannels}>
+                  <div className="ui-conn-panel-title">{zh.nav.connectionChannels}</div>
+                  {connection.rows.map((row) => (
+                    <div className="ui-conn-row" key={row.name}>
+                      <span className="ui-conn-row-name">{row.name}</span>
+                      <span className="ui-conn-row-channel ui-muted">{row.channel}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <span className="ui-hubbar-divider" aria-hidden="true" />
           <nav className="ui-hubbar-tabs" aria-label={zh.nav.currentHub}>
             {items.map((item) => (

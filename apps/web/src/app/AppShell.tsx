@@ -10,6 +10,7 @@ import {
   ToastHost,
   Topbar,
   type Crumb,
+  type HubBarProps,
   type SidebarHub,
   type SidebarNavItem,
   type ToastState,
@@ -28,10 +29,24 @@ import {
 } from '../registry/routes';
 import { zh, fmt } from '../i18n/zh';
 import { useTheme } from './theme';
-import { HubChannelsProvider, HubReadOnlyNotice, HubSnapshotNotice } from './HubChannelsProvider';
+import {
+  HubChannelsProvider,
+  HubReadOnlyNotice,
+  HubSnapshotNotice,
+  useConnectionIndicator,
+} from './HubChannelsProvider';
 import { TaskCenter } from './TaskCenter';
 
 /** 全局外壳：左侧固定控制台 + 节点直达列表；右侧单行清爽工作区。 */
+/**
+ * 节点栏 + 连接指示：HubBar 本身不读 context（它是 ui/ 里的通用组件），
+ * 由这里取好数据传下去（P-4 A）。
+ */
+function HubBarWithConnection(props: Omit<HubBarProps, 'connection'>) {
+  const connection = useConnectionIndicator();
+  return <HubBar {...props} connection={connection} />;
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -291,11 +306,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
           {match ? (
             <HubChannelsProvider hubId={hubId} liveEndpoint={hubQuery.data?.liveEndpoint}>
               {topbar(<TaskCenter />)}
-              <HubBar
+              <HubBarWithConnection
                 activeHub={activeHub}
                 hubs={sidebarHubs}
                 items={hubPrimaryTabs}
-                endpoint={hubQuery.data?.endpoint}
                 onSelectHub={handleSelectHub}
               />
               <div className="ui-content ui-hub-content">

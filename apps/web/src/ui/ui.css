@@ -2768,6 +2768,42 @@
   white-space: nowrap;
 }
 
+/* 节点地址行（2026-11-16 P-1）：概况页标题下唯一一处地址。
+   灰色纯文本，复制按钮只在悬停/聚焦时出现，不占常态视觉。 */
+.ui-endpoint-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-top: var(--s05);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+
+.ui-endpoint-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-endpoint-copy {
+  display: inline-flex;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.ui-endpoint-line:hover .ui-endpoint-copy,
+.ui-endpoint-line:focus-within .ui-endpoint-copy {
+  opacity: 1;
+}
+
+/* 触屏没有 hover：直接常显，否则复制入口不可达。 */
+@media (hover: none) {
+  .ui-endpoint-copy {
+    opacity: 1;
+  }
+}
+
 .ui-page-actions {
   display: flex;
   align-items: center;
@@ -3640,6 +3676,102 @@
   font-size: var(--fs-xs);
 }
 
+/* 概况页「对外服务」三组列表（2026-11-16 P-2）：只列名字，计数留指标卡。
+   整行可点、悬停出现灰色 ›，不用蓝色链接（沿用 2026-11-12 定案）。 */
+.ui-service-group + .ui-service-group {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+}
+
+.ui-service-group-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: var(--s15);
+}
+
+.ui-service-empty {
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+.ui-service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ui-service-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--s15) var(--s1);
+  background: none;
+  border: 0;
+  border-radius: var(--r-sm);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-service-row:hover,
+.ui-service-row:focus-visible {
+  background: var(--bg-muted);
+}
+
+.ui-service-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+
+.ui-service-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  margin-left: auto;
+}
+
+.ui-service-chevron {
+  flex: none;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.ui-service-row:hover .ui-service-chevron,
+.ui-service-row:focus-visible .ui-service-chevron {
+  opacity: 1;
+}
+
+.ui-service-row.is-more .ui-service-name {
+  color: var(--text-2);
+}
+
+/* 服务名 chip：圆点 + 名字（§8.1 列表用圆点，徽标只给状态列）。 */
+.ui-service-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+@media (hover: none) {
+  .ui-service-chevron {
+    opacity: 1;
+  }
+}
+
 /* Telemetry meters inside Hub card */
 .ui-hub-telemetry {
   display: grid;
@@ -4010,17 +4142,6 @@
   white-space: nowrap;
 }
 
-.ui-hubbar-node-endpoint {
-  padding: var(--s05) var(--s2);
-  color: var(--fg-secondary);
-  background: var(--bg-muted);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  font-family: var(--mono);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-}
-
 .ui-hubbar-tabs {
   display: flex;
   align-items: center;
@@ -4028,6 +4149,79 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
+}
+
+/* 统一连接指示（2026-11-16 P-4 A）：三态药丸 + 点开看通道清单。
+   取代过去散在「实时状态」卡片上的「直连 / 隧道」标签。 */
+.ui-conn {
+  position: relative;
+  flex: none;
+}
+
+.ui-conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s05) var(--s2);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-conn-pill:hover,
+.ui-conn-pill[aria-expanded='true'] {
+  background: var(--bg-muted);
+}
+
+.ui-conn-pill.is-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+.ui-conn-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 320px;
+  max-width: min(460px, calc(100vw - var(--s6)));
+  padding: var(--s3);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+}
+
+.ui-conn-panel-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: var(--s2);
+}
+
+.ui-conn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s15) 0;
+  font-size: var(--fs-xs);
+}
+
+.ui-conn-row + .ui-conn-row {
+  border-top: 1px solid var(--line);
+}
+
+.ui-conn-row-name {
+  color: var(--fg);
+}
+
+.ui-conn-row-channel {
+  font-family: var(--mono);
 }
 
 .ui-hubbar-tab {
@@ -4117,10 +4311,20 @@
     padding: 0 var(--s3);
   }
 
-  .ui-hubbar-node,
-  .ui-hubbar-divider,
-  .ui-hubbar-node-endpoint {
+  /* 窄屏保留节点名（2026-11-16 P-1）：节点栏不再有地址，宽度够放名字+状态点。
+     只隐藏分隔线，节点名整体换行占一行，绝不截断。 */
+  .ui-hubbar-divider {
     display: none;
+  }
+
+  .ui-hubbar-node {
+    padding: var(--s15) 0 var(--s05);
+  }
+
+  .ui-hubbar-node-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .ui-hubbar:not(.has-subitems) .ui-hubbar-right {

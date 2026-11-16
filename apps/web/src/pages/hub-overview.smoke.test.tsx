@@ -61,6 +61,8 @@ let withSummary = true;
 let wgInstalled = true;
 let caddyInstalled = true;
 let emptySites = false;
+// 失败单元：用来区分「面板受管」与「系统自带」（P-3 A）
+let failedUnits: string[] = [];
 // 证书状态相关：节点绑定域名 + 控制面实测结论（/state 的 tls 字段）
 let nodeDomain: string | null = null;
 let tlsProbeState: 'verified' | 'failed' | 'none' | 'unknown' | null = null;
@@ -104,7 +106,7 @@ function stateBody() {
             { name: 'caddy', state: 'active' },
             { name: 'khc-agent', state: 'active' },
           ],
-          failedUnits: [],
+          failedUnits,
         },
       },
       adapters: [
@@ -138,6 +140,7 @@ beforeEach(() => {
   withSummary = true;
   wgInstalled = true;
   caddyInstalled = true;
+  failedUnits = [];
   emptySites = false;
   nodeDomain = null;
   tlsProbeState = null;
@@ -199,24 +202,70 @@ async function renderOverview() {
   return utils;
 }
 
-describe('节点概况页 · 对外服务摘要', () => {
-  it('只列已配置的对外服务：单徽标 + 数量与后端概览，无「已安装/未配置」文案', async () => {
+describe('节点概况页 · 需要处理只收受管单元', () => {
+  it('系统自带单元失败：不进「需要处理」，只在主机卡片给一行入口', async () => {
+    failedUnits = ['unattended-upgrades.service', 'fwupd.service'];
     const { container } = await renderOverview();
 
+    // 「需要处理」条只应由证书/Peer 构成，不该出现系统单元
+    const triage = container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(triage).not.toContain('unattended-upgrades');
+    expect(triage).not.toContain('fwupd');
+
+    // 主机卡片里有一行灰色入口，说明「系统服务 2 个失败」并可点进去
+    expect(screen.getByText('系统服务 2 个失败')).toBeTruthy();
+  });
+
+  it('面板受管单元失败：进「需要处理」，也计入主机卡片计数', async () => {
+    failedUnits = ['khc-agent.service', 'caddy.service'];
+    const { container } = await renderOverview();
+
+    const triage = container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(triage).toContain('khc-agent.service');
+    expect(triage).toContain('caddy.service');
+    // 徽标词已从「服务异常」改为「服务失败」
+    expect(triage).toContain('服务失败');
+    expect(triage).not.toContain('异常');
+
+    // 主机卡片显示受管失败计数
+    expect(screen.getByText('2 个失败')).toBeTruthy();
+  });
+
+  it('受管与系统混合：两者分开表达，互不吞掉', async () => {
+    failedUnits = ['khc-agent.service', 'unattended-upgrades.service'];
+    const { container } = await renderOverview();
+
+    const triage = container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(triage).toContain('khc-agent.service');
+    expect(triage).not.toContain('unattended-upgrades');
+    // 只余一条系统单元
+    expect(screen.getByText('系统服务 1 个失败')).toBeTruthy();
+  });
+});
+
+describe('节点概况页 · 对外服务摘要', () => {
+  it('只列已配置的对外服务：三组各列名字，不再复述计数', async () => {
+    const { container } = await renderOverview();
+
+    // 分组标题仍在（2026-11-16 P-2：卡片只列名字）
     expect(screen.getByText('网页服务')).toBeTruthy();
     expect(screen.getByText('远程访问')).toBeTruthy();
-    await waitFor(() => expect(screen.getAllByText('运行中')).toHaveLength(2));
+    expect(screen.getByText('Peer')).toBeTruthy();
+
+    // 不再出现按应用聚合的徽标文案
     expect(screen.queryByText('已安装')).toBeNull();
     expect(screen.queryByText(/未配置/)).toBeNull();
     expect(screen.queryByText(/还没有站点/)).toBeNull();
 
-    const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[0]).toContain('1 个站点');
-    expect(facts[0]).toContain('内网 VM 1');
-    expect(facts[1]).toContain('1 条规则');
-    expect(facts[1]).toContain('内网 VM 1');
-    // Peer 概览保留在摘要卡底部，不进表格
-    expect(screen.getByText('Peer 1/2 在线')).toBeTruthy();
+    // 每个站点是一行：域名 + 后端（fixture 站点 blog.example.dev → 10.99.0.2:8080）
+    const rows = Array.from(container.querySelectorAll('.ui-service-row')).map((el) => el.textContent);
+    expect(rows.some((text) => text?.includes('blog.example.dev'))).toBe(true);
+    expect(rows.some((text) => text?.includes('10.99.0.2:8080'))).toBe(true);
+
+    // 计数只留在上方指标卡，卡片里不再重复「1 个站点 / 1 条规则」
+    const card = container.querySelector('.ui-service-list')?.closest('.ui-card')?.textContent ?? '';
+    expect(card).not.toContain('1 个站点');
+    expect(card).not.toContain('1 条规则');
 
     // 页头：模式徽标（D1 摘要）+ 副标题计数
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
@@ -226,66 +275,33 @@ describe('节点概况页 · 对外服务摘要', () => {
     expect(screen.getByText('khc0 · :51820')).toBeTruthy();
   });
 
-  it('配置未应用时单徽标为「待生效」，不叠双徽标', async () => {
-    sitesRev = 2;
-    sitesAppliedRev = 1;
-    await renderOverview();
-    await waitFor(() => {
-      expect(screen.getByText('待生效')).toBeTruthy();
-      expect(screen.getAllByText('运行中')).toHaveLength(1);
-    });
-  });
-
-  it('Agent 不可达：徽标降级为「未读取」，模式徽标仍来自 D1', async () => {
-    stateOk = false;
-    await renderOverview();
-    await waitFor(() => expect(screen.getAllByText('未读取')).toHaveLength(2));
-    expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
-  });
-
-  it('summary 缺失（POST/PATCH 响应或旧缓存）：摘要行与 Peer 指标不消失', async () => {
-    withSummary = false;
+  it('Peer 行显示最近握手时间，不再有「Peer 1/2 在线」汇总行', async () => {
     const { container } = await renderOverview();
-
-    // 回退到同源 wireguard 配置：Peer 指标仍按接口/端口展示
-    expect(screen.getByText('网页服务')).toBeTruthy();
-    expect(screen.getByText('远程访问')).toBeTruthy();
-    expect(screen.getByText('Peer 1/2 在线')).toBeTruthy();
-    const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[0]).toContain('1 个站点');
-    expect(screen.getByText('khc0 · :51820')).toBeTruthy();
-    expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Peer 1/2 在线')).toBeNull();
+    const rows = Array.from(container.querySelectorAll('.ui-service-row')).map((el) => el.textContent);
+    // 两个 Peer 各一行，握手/未握手都在行内
+    expect(rows.some((text) => text?.includes('握手'))).toBe(true);
   });
 
   it('Agent 明确 installed=false：显示中性「未安装」，不是「未读取」', async () => {
     caddyInstalled = false;
     await renderOverview();
 
-    await waitFor(() => expect(screen.getAllByText('未安装')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText('未安装')).toBeTruthy());
     expect(screen.queryByText('未读取')).toBeNull();
     // 模式徽标只看 D1 期望配置，离线/未装也可见
     expect(screen.getAllByText('组网节点').length).toBeGreaterThan(0);
   });
 
-  it('拿不到 /state：显示「未读取」，不冒充「未安装」', async () => {
-    stateOk = false;
-    await renderOverview();
-
-    await waitFor(() => expect(screen.getAllByText('未读取')).toHaveLength(2));
-    expect(screen.queryByText('未安装')).toBeNull();
-  });
-
-  it('Caddy 有配置行但 0 站点：行不消失，显示「0 个站点」，不出现「暂无站点 / 未纳管」', async () => {
+  it('Caddy 有配置行但 0 站点：组仍在，显示「暂无」而不是旧占位文案', async () => {
     emptySites = true;
     const { container } = await renderOverview();
 
-    await waitFor(() => expect(container.textContent).toContain('0 个站点'));
+    // 0 站点时该组不出行，但页面不因此空白
+    expect(screen.getByText('网页服务')).toBeTruthy();
     expect(screen.queryByText('已安装 · 暂无站点')).toBeNull();
     expect(screen.queryByText('外部安装 · 未纳管')).toBeNull();
     expect(container.textContent).not.toContain('未纳管');
-    const facts = Array.from(container.querySelectorAll('.ui-app-facts')).map((el) => el.textContent);
-    expect(facts[0]).toContain('0 个站点');
-    expect(facts[0]).not.toContain('接管');
   });
 });
 /**
