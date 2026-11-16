@@ -256,26 +256,48 @@ def _listening(proc_root: str) -> dict[str, Any]:
     return {"count": len(ordered), "items": items}
 
 
-def _systemd() -> dict[str, Any]:
-    def run(args: list[str]) -> str:
-        try:
-            result = _runner(args, capture_output=True, text=True, timeout=2, check=False)
-            return result.stdout or ""
-        except Exception:
-            return ""
+def _systemctl_stdout(args: list[str]) -> Optional[str]:
+    """跑一次 systemctl 取 stdout。命令跑不起来返回 ``None``（区别于「跑了但没输出」）。"""
 
+    try:
+        result = _runner(args, capture_output=True, text=True, timeout=2, check=False)
+        return result.stdout or ""
+    except Exception:
+        return None
+
+
+# 失败单元上限：/state 与 /snapshot 必须一致，否则两处计数会对不上。
+FAILED_UNITS_LIMIT = 10
+
+
+def _failed_units() -> Optional[list[str]]:
+    """当前处于 failed 状态的单元名（最多 ``FAILED_UNITS_LIMIT`` 条）。
+
+    ``/state`` 与 ``/snapshot`` 共用这一份采集，避免两处逻辑漂移。
+
+    返回 ``None`` 表示**这次没读到**（systemctl 不可用/超时），调用方据此区分
+    「不知道」与「确实没有失败单元」—— 两者在页面上是完全不同的文案。
+    """
+
+    stdout = _systemctl_stdout(["systemctl", "list-units", "--state=failed", "--no-legend", "--plain"])
+    if stdout is None:
+        return None
+    units: list[str] = []
+    for line in stdout.splitlines():
+        parts = line.split()
+        if parts:
+            units.append(parts[0])
+    return units[:FAILED_UNITS_LIMIT]
+
+
+def _systemd() -> dict[str, Any]:
     # 一次调用查两个受管单元，避免每次 /state 起两个 systemctl 子进程。
-    states = run(["systemctl", "is-active", "khc-agent", "caddy"]).splitlines()
+    states = (_systemctl_stdout(["systemctl", "is-active", "khc-agent", "caddy"]) or "").splitlines()
     services = [
         {"name": name, "state": (states[index] if index < len(states) else "").strip() or "unknown"}
         for index, name in enumerate(("khc-agent", "caddy"))
     ]
-    failed: list[str] = []
-    for line in run(["systemctl", "list-units", "--state=failed", "--no-legend", "--plain"]).splitlines():
-        parts = line.split()
-        if parts:
-            failed.append(parts[0])
-    return {"services": services, "failedUnits": failed[:10]}
+    return {"services": services, "failedUnits": _failed_units() or []}
 
 
 def _oom_kill_count(proc_root: str) -> Optional[int]:
@@ -527,19 +549,37 @@ def collect_snapshot(
     proc_root: str = "/proc",
     now: Optional[float] = None,
 ) -> dict[str, Any]:
-    """轻量指标：CPU/内存/磁盘/负载 + 采集时间；无缓存、无子进程。"""
+    """轻量指标：CPU/内存/磁盘/负载 + 失败单元 + 采集时间。
+
+    **关于「无子进程」这条约束（ADR-0010）的偏离**（2026-11-16 U2）：
+
+    快照原本只读 ``/proc`` 与 ``statvfs``，不跑任何子进程。但失败单元过去只在
+    ``/state`` 采集，而 ``/state`` 不是轮询入口 —— 结果是页面打开后失败计数就冻住了，
+    用户重启修好服务，状态带还在显示旧数字（真机复现见
+    ``docs/verification/2026-11-16/ui-polish-u1.md``）。
+
+    所以这里补一次 ``systemctl list-units --state=failed``。实测单次 5–8 ms
+    （``ui-polish-s0.md`` §②，占 10 秒周期的 0.7%），可以承受。采集逻辑与
+    ``/state`` 共用 ``_failed_units()``，不重复写两份；失败时只让该字段缺省，
+    **不拖垮整个快照** —— 指标比失败单元重要得多。
+    """
 
     moment = now if now is not None else time.time()
     try:
         cpu_payload, moment = _snapshot_cpu(proc_root, moment)
         meminfo = memory(proc_root)
-        return {
+        payload = {
             "cpu": cpu_payload,
             **meminfo,
             "disks": disks(paths),
             "uptime": _read_uptime(proc_root),
             "collectedAt": int(moment),
         }
+        # 失败单元单独兜底：这一项失败就当「不知道」，不返回空列表冒充「没有失败」。
+        failed = _failed_units()
+        if failed is not None:
+            payload["failedUnits"] = failed
+        return payload
     except Exception:  # noqa: BLE001 - 快照失败不能拖垮轮询接口
         return {"collectedAt": int(moment), "error": "snapshot_collect_failed"}
 

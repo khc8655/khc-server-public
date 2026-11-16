@@ -62,6 +62,7 @@ def _load_module(name: str, path: str):
 ADAPTER_MODULE = _load_module("khc_test_host_ops_adapter", os.path.join(ADAPTERS_DIR, "host_ops.py"))
 HostOps = ADAPTER_MODULE.HostOps
 HOST_SCRIPT = ADAPTER_MODULE._khc_host_module()  # 与适配器共享同一脚本模块实例
+PEER_SAFE_WRITE_VERBS = ADAPTER_MODULE.PEER_SAFE_WRITE_VERBS
 
 SCRIPT_GLOBAL_NAMES = (
     "PROC_ROOT",
@@ -294,7 +295,15 @@ class ScriptProtocolTests(ScriptTestBase):
 
     def test_write_verbs_require_root(self) -> None:
         HOST_SCRIPT.ROOT_OVERRIDE = False
-        for verb in ("fw.apply", "fw.confirm", "keys.add", "keys.remove", "svc.restart", "cron.set"):
+        for verb in (
+            "fw.apply",
+            "fw.confirm",
+            "keys.add",
+            "keys.remove",
+            "svc.restart",
+            "svc.reset-failed",
+            "cron.set",
+        ):
             result = self.run_verb(verb, {})
             self.assertFalse(result["ok"], verb)
             self.assertEqual(result["error"]["code"], "E_NO_PRIV", verb)
@@ -302,6 +311,50 @@ class ScriptProtocolTests(ScriptTestBase):
         self.assertTrue(self.run_verb("version")["ok"])
         HOST_SCRIPT.ROOT_OVERRIDE = True
         self.assertTrue(self.run_verb("version")["data"]["root"])
+
+    def test_reset_failed_verb_present_and_is_write(self) -> None:
+        """svc.reset-failed 必须登记为写动词，否则只读请求会抢写锁（#63 的教训）。"""
+        self.assertIn("svc.reset-failed", HOST_SCRIPT.WRITE_VERBS)
+        self.assertIn("svc.reset-failed", HOST_SCRIPT._VERB_HANDLERS)
+        self.assertIn("svc.reset-failed", HOST_SCRIPT.PUBLIC_VERBS)
+
+    def test_reset_failed_rejects_bad_unit_name(self) -> None:
+        for bad in ("", "no-suffix", "../etc/passwd", "a;rm -rf /", "demo.timer"):
+            result = self.run_verb("svc.reset-failed", {"unit": bad})
+            self.assertFalse(result["ok"], bad)
+            self.assertEqual(result["error"]["code"], "E_BAD_REQUEST", bad)
+
+    def test_reset_failed_rejects_protected_units(self) -> None:
+        """受保护单元与 svc.restart 同一套规则，避免口径分裂。"""
+        for unit in ("ssh.service", "sshd.service", "dbus.service"):
+            result = self.run_verb("svc.reset-failed", {"unit": unit})
+            self.assertFalse(result["ok"], unit)
+            self.assertEqual(result["error"]["code"], "E_PROTECTED", unit)
+
+    def test_reset_failed_calls_systemctl_and_reports_state(self) -> None:
+        self.runner.on("systemctl reset-failed", lambda argv, _i: (0, "", ""))
+        self.runner.on("systemctl is-failed", lambda argv, _i: (0, "inactive\n", ""))
+        result = self.run_verb("svc.reset-failed", {"unit": "demo.service"})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["data"]["unit"], "demo.service")
+        self.assertTrue(result["data"]["reset"])
+        self.assertFalse(result["data"]["stillFailed"])
+        self.assertIn(["systemctl", "reset-failed", "demo.service"], self.runner.commands("systemctl"))
+
+    def test_reset_failed_reports_still_failed_when_unit_keeps_failing(self) -> None:
+        """reset-failed 之后单元立刻又失败时，必须如实回报，不能让页面以为清干净了。"""
+        self.runner.on("systemctl reset-failed", lambda argv, _i: (0, "", ""))
+        self.runner.on("systemctl is-failed", lambda argv, _i: (0, "failed\n", ""))
+        result = self.run_verb("svc.reset-failed", {"unit": "loop.service"})
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["data"]["stillFailed"])
+
+    def test_reset_failed_surfaces_systemctl_error(self) -> None:
+        self.runner.on("systemctl reset-failed", lambda argv, _i: (1, "", "Unit x.service not loaded."))
+        result = self.run_verb("svc.reset-failed", {"unit": "x.service"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "E_INVALID")
+        self.assertIn("清除失败状态失败", result["error"]["message"])
 
     def test_invalid_stdin(self) -> None:
         for raw in ("{not-json", "[1,2]", "123"):
@@ -2132,6 +2185,22 @@ class AdapterCallTests(AdapterTestBase):
         )
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "E_PEER_FORBIDDEN")
+
+    def test_peer_forbidden_reset_failed(self) -> None:
+        """N-2：`svc.reset-failed` 只对 Hub 自身开放。
+
+        Peer 上的 Host-Ops 脚本由 Hub 远程更新不了（见 khc_host.py 文件头），
+        给 Peer 下发一个它可能不认识的动词只会报 E_UNKNOWN_VERB，不如在 Hub 侧就拒绝，
+        文案也能说清「Peer 脚本需更新」。
+        """
+        self.assertNotIn("svc.reset-failed", PEER_SAFE_WRITE_VERBS)
+        result = self.call({"target": "a", "verb": "svc.reset-failed", "params": {"unit": "demo.service"}})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "E_PEER_FORBIDDEN")
+
+    def test_peer_still_allows_restart(self) -> None:
+        """对照组：svc.restart 仍是 Peer 允许的写动词，别把这条也一起收掉了。"""
+        self.assertIn("svc.restart", PEER_SAFE_WRITE_VERBS)
 
 
 # ===========================================================================

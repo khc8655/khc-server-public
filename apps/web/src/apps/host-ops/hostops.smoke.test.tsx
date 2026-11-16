@@ -360,8 +360,9 @@ function mockApi() {
               services: [
                 { unit: 'caddy.service', load: 'loaded', active: 'active', sub: 'running', description: 'Caddy' },
                 { unit: 'ssh.service', load: 'loaded', active: 'active', sub: 'running', description: 'OpenBSD Secure Shell server' },
+                { unit: 'khc-r3-driver.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'KHC R3 driver' },
               ],
-              count: 2,
+              count: 3,
             },
           });
         }
@@ -375,6 +376,12 @@ function mockApi() {
           return json({
             ok: true,
             data: { unit: String(body.params.params.unit), restarted: true, active: true },
+          });
+        }
+        if (verb === 'svc.reset-failed') {
+          return json({
+            ok: true,
+            data: { unit: String(body.params.params.unit), reset: true, stillFailed: false },
           });
         }
         return json({ ok: false, error: { code: 'E_BAD_REQUEST', message: 'unknown verb' } });
@@ -443,6 +450,38 @@ describe('主机运维页（ui-redesign §4：状态带 + 分段对象表 + 唯�
     const sshRestart = await screen.findByRole('menuitem', { name: '重启' });
     expect((sshRestart as HTMLButtonElement).disabled).toBe(true);
     expect(sshRestart.getAttribute('title')).toBe('该服务受保护，不允许从面板操作');
+  });
+
+  it('失败单元可清除失败状态：L2 确认后调用 svc.reset-failed 并成功提示', async () => {
+    await renderRoute('/hubs/tyo-1/ops');
+    const failedRow = (await screen.findAllByText('khc-r3-driver.service'))
+      .map((element) => element.closest('tr'))
+      .find((element): element is HTMLTableRowElement => element !== null);
+    if (!failedRow) throw new Error('missing failed row');
+
+    await userEvent.click(within(failedRow).getByRole('button', { name: '更多操作' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: '清除失败状态' }));
+    const confirm = await screen.findByRole('dialog');
+    expect(within(confirm).getByText('清除 khc-r3-driver.service 的失败状态？')).toBeTruthy();
+    // 确认框必须说清「只清标记、不修服务」，否则用户会以为问题解决了
+    expect(within(confirm).getByText(/不会启动服务、也不会改配置/)).toBeTruthy();
+    await userEvent.click(within(confirm).getByRole('button', { name: '清除失败状态' }));
+    await waitFor(() =>
+      expect(screen.getAllByText(/已清除 khc-r3-driver\.service 的失败状态/).length).toBeGreaterThan(0),
+    );
+  });
+
+  it('非失败单元上「清除失败状态」禁用并说明原因（点了也没意义）', async () => {
+    await renderRoute('/hubs/tyo-1/ops');
+    const caddyRow = (await screen.findAllByText('caddy.service'))
+      .map((element) => element.closest('tr'))
+      .find((element): element is HTMLTableRowElement => element !== null);
+    if (!caddyRow) throw new Error('missing caddy row');
+
+    await userEvent.click(within(caddyRow).getByRole('button', { name: '更多操作' }));
+    const item = await screen.findByRole('menuitem', { name: '清除失败状态' });
+    expect((item as HTMLButtonElement).disabled).toBe(true);
+    expect(item.getAttribute('title')).toBe('这个单元当前不是失败状态，无需清除');
   });
 
   it('状态带 CPU 下钻进程段，行点击在唯一抽屉展示详情（无二级弹窗）', async () => {

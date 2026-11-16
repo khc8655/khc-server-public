@@ -600,6 +600,19 @@ export const agentOpsSchema = z
       .optional(),
     rootReadonly: z.boolean().optional(),
     memoryPressure: z.number().nullable().optional(),
+    /**
+     * 当前失败的 systemd 单元名（2026-11-16 U2）。
+     *
+     * 快照（`/snapshot`，10 秒轮询）与 `/state` 共用同一份采集。放在 `ops` 顶层
+     * 而不是 `ops.services.failedUnits`，是因为快照过去不含 `services` 结构，
+     * 保持平铺让前端两条路径读同一字段。
+     *
+     * **三态语义**（前端必须区分）：
+     * - 数组（可为空）：采集成功，空数组 = 确实没有失败单元；
+     * - 字段缺省：Agent 太旧（< 0.3.3）或这次没读到 —— 前端应退回读 `/state`；
+     * - 不返回 `null`：不用 null 表达「不知道」，避免和「空数组」混淆。
+     */
+    failedUnits: z.array(z.string()).optional(),
     collectedAt: z.number().int().nonnegative().optional(),
     error: z.string().optional(),
   })

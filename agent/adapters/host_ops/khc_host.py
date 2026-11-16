@@ -151,12 +151,22 @@ PUBLIC_VERBS = (
     "svc.list",
     "svc.logs",
     "svc.restart",
+    "svc.reset-failed",
     "logs.errors",
     "cron.list",
     "cron.set",
     "cleanup",
 )
-WRITE_VERBS = ("fw.apply", "fw.confirm", "keys.add", "keys.remove", "svc.restart", "cron.set", "cleanup")
+WRITE_VERBS = (
+    "fw.apply",
+    "fw.confirm",
+    "keys.add",
+    "keys.remove",
+    "svc.restart",
+    "svc.reset-failed",
+    "cron.set",
+    "cleanup",
+)
 INTERNAL_VERBS = ("__fw_rollback",)
 
 ERROR_CODES = (
@@ -1871,6 +1881,29 @@ def svc_restart_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, An
     return ok(data)
 
 
+def svc_reset_failed_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    """``systemctl reset-failed <unit>``：只清失败标记，不启动也不改服务状态。
+
+    为什么需要它（2026-11-16 U2）：服务失败后 systemd 会一直把它留在 failed 列表里，
+    即使问题已经修好 —— 用户看到「还有 1 个失败」，但重启一次可能又失败、
+    或者根本不需要重启（依赖恢复了）。``reset-failed`` 是 systemd 提供的标准做法。
+
+    护栏与 ``svc.restart`` 完全一致（复用 `_service_unit_param`）：只允许 ``*.service``，
+    受保护单元（ssh/sshd/dbus 等）一律拒绝 —— 清失败标记本身无害，但保持同一套规则
+    可以避免「这条能过那条不能过」的口径分裂。
+    """
+
+    unit = _service_unit_param(params)
+    rc, _, stderr = _run(["systemctl", "reset-failed", unit], timeout=15)
+    if rc != 0:
+        raise HostError("E_INVALID", f"清除失败状态失败: {stderr.strip()[:300]}")
+    # 回读真实状态：reset-failed 之后单元通常是 inactive；若它在失败循环里，
+    # 会立刻再变 failed。把结论一并返回，省得前端再猜。
+    _, failed_out, _ = _run(["systemctl", "is-failed", unit], timeout=8)
+    still_failed = (failed_out or "").strip() == "failed"
+    return ok({"unit": unit, "reset": True, "stillFailed": still_failed})
+
+
 # ---------------------------------------------------------------------------
 # logs.errors：近 24 小时错误日志 + 内核 OOM 记录（只读，按需调用）
 # ---------------------------------------------------------------------------
@@ -2485,6 +2518,7 @@ _VERB_HANDLERS = {
     "svc.list": svc_list_verb,
     "svc.logs": svc_logs_verb,
     "svc.restart": svc_restart_verb,
+    "svc.reset-failed": svc_reset_failed_verb,
     "logs.errors": logs_errors_verb,
     "cron.list": cron_list_verb,
     "cron.set": cron_set_verb,

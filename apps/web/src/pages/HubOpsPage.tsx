@@ -14,6 +14,7 @@ import {
 import type { HostOpsCronEntry, HostOpsProcess } from '../data/hostOps';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { StatusBar, type StatusTile } from '../apps/host-ops/StatusBar';
+import { pickFailedUnits } from '../data/failedUnits';
 import {
   CronEntryForm,
   CronSegment,
@@ -100,7 +101,10 @@ export default function HubOpsPage() {
 
   const tiles = useMemo<StatusTile[]>(() => {
     const ops = metrics;
-    const failed = state?.ops?.services?.failedUnits?.length ?? 0;
+    // 失败单元取快照优先（2026-11-16 U2）：只读 /state 会让计数冻在打开页面那一刻，
+    // 用户重启修好服务后状态带还显示旧数字。null 表示读不到，不谎报 0。
+    const failedUnits = pickFailedUnits(ops, state?.ops?.services);
+    const failed = failedUnits?.length ?? 0;
     const diskPercent = ops?.disks?.[0]?.percent ?? null;
     const list: StatusTile[] = [
       {
