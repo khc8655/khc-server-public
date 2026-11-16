@@ -2147,6 +2147,8 @@ export const zh = {
       egressHelp: '决定这个 Peer 的流量是否经 Hub 上网。默认只把面板配置的业务走隧道，原有网络不受影响。',
       egressInternal: '仅内网流量走 Hub',
       egressAll: '全部流量走 Hub',
+      egressAllExperimental: '全部流量走 Hub（暂不可用）',
+      egressAllDisabledReason: '经 Hub 出网当前不通，正在排查；恢复前请保持「仅内网流量走 Hub」',
       egressAllBanner:
         '已选择「全部流量走 Hub」。保存并应用后，这台机器的公网 SSH 断开就无法重连，需要从 Hub 侧或其它 Peer 跳板进入。',
       egressWarnTitle: '确认「全部流量走 Hub」？',

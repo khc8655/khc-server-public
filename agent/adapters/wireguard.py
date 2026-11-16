@@ -531,6 +531,17 @@ def build_client_conf(
         f"PrivateKey = {private_key}",
         f"Address = {address}",
     ]
+    # `egress=all` 时默认路由进隧道，封装包会被投回隧道自己（自环），隧道当场失效。
+    # 必须先把 Hub endpoint 钉在物理网卡上。用 `replace` 而不是 `add`：`add` 不幂等，
+    # 残留一次之后每次 up 都报 "File exists"，而 wg-quick 会整条链回滚、接口都建不起来
+    # （2026-11-16 真机踩过）。
+    if _needs_endpoint_route(routed_text):
+        host = endpoint.rsplit(":", 1)[0].strip("[]")
+        # 不指定 dev：让内核按当前路由表选物理网卡（wg-quick 加的是 `ip rule`，
+        # 此时默认路由仍在 main 表里，所以这条能正确落到物理出接口）。
+        # `replace` 保证重复 apply 不失败。
+        lines.append(f"PostUp = ip route replace {host}/32 2>/dev/null || true")
+        lines.append(f"PostDown = ip route del {host}/32 2>/dev/null || true")
     mtu = int(interface.get("mtu") or 0)
     if mtu:
         lines.append(f"MTU = {mtu}")
@@ -607,7 +618,10 @@ if command -v systemctl >/dev/null 2>&1; then
     || fail "wg-quick@$IFACE 启动失败；请查看: journalctl -u wg-quick@$IFACE -n 50"
   RESULT_UNIT="已启用（开机自启）"
 else
+  # wg-quick down 在路由被改过（例如 egress=all 的默认路由还在）之后可能失败，
+  # 失败会留下半配状态的接口。补一次 ip link del 兜底，避免下次 up 撞 "File exists"。
   wg-quick down "$IFACE" >/dev/null 2>&1 || true
+  ip link del "$IFACE" >/dev/null 2>&1 || true
   wg-quick up "$IFACE" || fail "wg-quick up $IFACE 失败；请检查 $CONF_FILE"
   RESULT_UNIT="已启用（无 systemd，手动 wg-quick）"
 fi
@@ -2990,3 +3004,17 @@ __all__ = [
     "parse_dump",
     "parse_handshakes",
 ]
+
+
+def _needs_endpoint_route(routed_text: str) -> bool:
+    """客户端是否需要在加载隧道前钉住 endpoint 的直连路由。
+
+    只有 ``AllowedIPs`` 含默认路由（``0.0.0.0/0`` / ``::/0``）时才需要：
+    否则封装包会被默认路由投回隧道自己，形成自环，隧道当场失效。
+    """
+
+    for item in str(routed_text or "").split(","):
+        text = item.strip()
+        if text in ("0.0.0.0/0", "::/0", "0/0"):
+            return True
+    return False

@@ -1851,13 +1851,19 @@ function PeerDrawer({
                 value={form.egress}
                 options={[
                   { value: 'internal', label: zh.wireguard.network.egressInternal },
-                  { value: 'all', label: zh.wireguard.network.egressAll },
+                  // 2026-11-16 真机验证：经 Hub 出网不通（包出去 9 个、NAT 只命中 4 个，
+                  // 回包不返回）。在根因定位并修好之前不放出来 —— 留一个坏选项比没有更糟。
+                  {
+                    value: 'all',
+                    label: zh.wireguard.network.egressAllExperimental,
+                    disabled: true,
+                    description: zh.wireguard.network.egressAllDisabledReason,
+                  },
                 ]}
                 onChange={(value) => {
                   const next = value as WgPeerEgress;
+                  if (next === 'all') return; // 已置灰，双保险
                   onChange({ egress: next });
-                  // 选「全部流量走 Hub」必须二次确认：这是唯一会导致 VM 当场失联的选项。
-                  if (next === 'all') setEgressWarning(true);
                 }}
               />
             </Field>
