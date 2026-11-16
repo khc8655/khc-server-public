@@ -2148,14 +2148,14 @@ export const zh = {
       egressInternal: '仅内网流量走 Hub',
       egressAll: '全部流量走 Hub',
       egressAllBanner:
-        '已选择「全部流量走 Hub」。保存并应用后，这台机器的公网 SSH 会立即断开，需要从 Hub 侧或其它 Peer 跳板进入。',
+        '已选择「全部流量走 Hub」。保存并应用后，这台机器的公网 SSH 断开就无法重连，需要从 Hub 侧或其它 Peer 跳板进入。',
       egressWarnTitle: '确认「全部流量走 Hub」？',
       egressWarnBody1:
-        '这台 VM 的公网 SSH 会立即断开。全部流量改走隧道后，SSH 的回包会从隧道出去、源地址变成隧道地址，对端无法匹配连接，表现为连接卡死。',
+        '这台 VM 的公网 SSH 一旦断开就无法重连。全部流量改走隧道后，SSH 的回包会从隧道出去、源地址变成隧道地址，对端无法匹配连接，所以新连接建不起来（已建立的会话可能先撑一会儿，但断了回不来）。',
       egressWarnBody2: '如果 Hub 或隧道出问题，这台 VM 会同时失去入站和出网，只能从 Hub 侧恢复。',
       egressWarnBody3: '这台 VM 的全部流量都计入 Hub 的带宽与流量费用。',
       egressWarnBody4: 'DNS 需要另外配置，否则解析仍走本地。',
-      egressWarnAck: '我已了解，公网 SSH 会断开',
+      egressWarnAck: '我已了解，公网 SSH 断开后无法重连',
       egressWarnCancel: '改回仅内网流量',
       egressWarnConfirm: '仍然保存',
       customPostUpWarn: '接口设置了自定义 PostUp，此时网络策略不生效（会和你的规则冲突）。',
