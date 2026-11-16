@@ -76,7 +76,11 @@ MAX_RULES = 100
 MAX_RULE_NOTE = 200
 MAX_KEYS = 100
 # 进程 CPU%：同一请求内两次采样求差的窗口（秒）。
-PROCESS_CPU_SAMPLE_INTERVAL = 0.5
+PROCESS_CPU_SAMPLE_INTERVAL = 0.1
+# status 单独取 CPU 基线时的等待（有进程采样可借用时会跳过）
+STATUS_CPU_BASELINE_SECONDS = 0.2
+# 采样窗口下限：低于此值认为采样无效（分母过小会让百分比失真）
+MIN_CPU_SAMPLE_WINDOW = 0.001
 # logs.errors：最近 24 小时的错误日志与内核 OOM 记录上限。
 LOGS_ERRORS_SINCE = "24 hours ago"
 LOGS_ERRORS_MAX_ENTRIES = 50
@@ -229,6 +233,7 @@ NFT_AVAILABLE: Optional[bool] = None
 ROOT_OVERRIDE: Optional[bool] = None
 RUNNER = None  # 测试注入：runner(argv, input_text, timeout) -> (rc, stdout, stderr)
 SLEEP = time.sleep  # 测试注入：进程 CPU 两次采样之间的等待，mock 后不真的等
+MONOTONIC = time.monotonic  # 测试注入：采样窗口的真实时长来源（见 _sample_process_cpu）
 USER_HOME_MAP: dict[str, str] = {}
 # cron.* 只管理 /etc/cron.d/khc-* 文件；测试注入改指临时目录。
 CRON_DIR = os.environ.get("KHC_HOST_CRON_DIR") or CRON_DIR_DEFAULT
@@ -513,12 +518,22 @@ def _collect_ops_payload() -> dict[str, Any]:
         return dict(collector(paths))
 
 
-def status_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+def status_verb(
+    params: Mapping[str, Any],
+    args: list[str],
+    *,
+    wants_processes: bool = False,
+) -> dict[str, Any]:
     payload = _collect_ops_payload()
-    # 独立进程首次读 /proc/stat 没有基线，cpu.usagePercent 会是 null；
-    # 再采一次（200ms 间隔）让 Hub/Peer 的 status 都能看到真实使用率。
-    if isinstance(payload.get("cpu"), Mapping) and payload["cpu"].get("usagePercent") is None:
-        time.sleep(0.2)
+    # 独立进程首次读 /proc/stat 没有基线，cpu.usagePercent 会是 null；再采一次拿真实使用率。
+    #
+    # **等待时长与进程采样共用同一个窗口**（2026-11-16 U4）：
+    # 调用方要进程列表时，`collect_processes` 本来就要睡一个采样窗口，那段时间
+    # 足够让 /proc/stat 产生增量。所以这里把 sleep 让给它，不再各睡一次 ——
+    # 面板实际走的就是 `snapshot{processes:true}` 这条路，原先是 200ms + 100ms 叠加。
+    # 不带进程时退回自己的 200ms（没有可借用的窗口）。
+    if isinstance(payload.get("cpu"), Mapping) and payload["cpu"].get("usagePercent") is None and not wants_processes:
+        time.sleep(STATUS_CPU_BASELINE_SECONDS)
         try:
             payload = _collect_ops_payload()
         except Exception:  # noqa: BLE001 - 第二次失败保留第一次结果
@@ -668,6 +683,11 @@ def _sample_process_cpu(pids: list[int]) -> dict[int, float]:
 
     ``SLEEP`` 是模块级可注入依赖：测试用 side_effect 在两次采样之间改写 fixture，
     不必真的等待。窗口内新建/退出的进程、jiffies 回绕一律跳过（按 0 处理）。
+
+    **分母用真实经过时间，不用固定间隔**（2026-11-16 U4）：``time.sleep`` 只保证
+    「至少睡这么久」，实际可能 overshoot 几毫秒到几十毫秒。窗口从 500ms 缩到 100ms 后，
+    overshoot 的占比显著变大 —— 仍按 100ms 算会让 CPU% 系统性偏高。用两次采样的
+    ``time.monotonic()`` 差值做分母，结果就与真实窗口一致，与休眠精度无关。
     """
 
     first: dict[int, int] = {}
@@ -675,15 +695,20 @@ def _sample_process_cpu(pids: list[int]) -> dict[int, float]:
         ticks = _cpu_ticks(pid)
         if ticks is not None:
             first[pid] = ticks
+    started = MONOTONIC()
     SLEEP(PROCESS_CPU_SAMPLE_INTERVAL)
     second: dict[int, int] = {}
     for pid in pids:
         ticks = _cpu_ticks(pid)
         if ticks is not None:
             second[pid] = ticks
-    span = _clock_ticks() * PROCESS_CPU_SAMPLE_INTERVAL
-    if span <= 0:
+    elapsed = MONOTONIC() - started
+    # 退化保护：窗口过小时算不出有意义的百分比。除以接近 0 的分母会得出荒谬数值
+    # （实测过 2279%），宁可不报也不要造假数。1ms 下限远小于 100ms 窗口，
+    # 正常采样不会被触发，只挡住被信号打断、时钟异常这类情况。
+    if elapsed < MIN_CPU_SAMPLE_WINDOW:
         return {}
+    span = _clock_ticks() * elapsed
     cpu: dict[int, float] = {}
     for pid, after in second.items():
         before = first.get(pid)
@@ -800,7 +825,24 @@ def collect_processes(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMIT) -> 
 def snapshot_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     """一次返回 version + status（可选进程摘要），减少面板打开时的 SSH 往返（#48）。"""
 
-    status = status_verb(params, args)
+    wants = bool(params.get("processes"))
+    # 顺序很重要（2026-11-16 U4）。进程采样要睡一个 100ms 窗口，而 status 的 CPU%
+    # 也需要一段时间增量。**先采进程**，它睡觉的那 100ms 正好让 /proc/stat 累积出增量，
+    # 之后 status 就读得到真实使用率，不必再等自己那 200ms。
+    # 反过来（先 status 再采进程）会让 status 拿到 null，因为那时还没有任何时间流逝。
+    rows: Optional[list[dict[str, Any]]] = None
+    sort = "cpu"
+    limit = DEFAULT_PROCESS_LIMIT
+    if wants:
+        sort = _as_text(params.get("sort")) or "cpu"
+        if sort not in ("cpu", "mem"):
+            raise HostError("E_BAD_REQUEST", "sort 只能是 cpu 或 mem")
+        limit = _int_param(params, "limit", DEFAULT_PROCESS_LIMIT)
+        if not 1 <= limit <= MAX_PROCESSES:
+            raise HostError("E_BAD_REQUEST", f"limit 必须在 1-{MAX_PROCESSES}")
+        rows = collect_processes(sort=sort, limit=limit)
+
+    status = status_verb(params, args, wants_processes=wants)
     if not status.get("ok"):
         return status
     payload = dict(status.get("data") or {})
@@ -809,18 +851,8 @@ def snapshot_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     payload["protocol"] = PROTOCOL_VERSION
     payload["root"] = is_root()
     payload["nft"] = _nft_available()
-    if bool(params.get("processes")):
-        try:
-            sort = _as_text(params.get("sort")) or "cpu"
-            limit = _int_param(params, "limit", DEFAULT_PROCESS_LIMIT)
-            if sort not in ("cpu", "mem"):
-                raise HostError("E_BAD_REQUEST", "sort 只能是 cpu 或 mem")
-            if not 1 <= limit <= MAX_PROCESSES:
-                raise HostError("E_BAD_REQUEST", f"limit 必须在 1-{MAX_PROCESSES}")
-            rows = collect_processes(sort=sort, limit=limit)
-            payload["processes"] = rows
-        except HostError:
-            raise
+    if rows is not None:
+        payload["processes"] = rows
     return ok(payload)
 
 
