@@ -2805,3 +2805,67 @@ class ClientAllowedIpsPolicyTests(unittest.TestCase):
         )
         # 自己不在结果里重复出现
         self.assertEqual(self._allowed(conf), "10.99.0.1/32")
+
+
+class ClientEndpointRouteTests(unittest.TestCase):
+    """`egress=all` 时客户端必须钉住 endpoint 的直连路由（2026-11-16 U7）。
+
+    不钉的话，默认路由进隧道后封装包会被投回隧道自己（自环），隧道当场失效。
+    这一条是 2026-11-16 真机验证的产物：先用 `ip route add` 实现，
+    残留一次之后每次 up 都报 "File exists"，wg-quick 整条链回滚、接口都建不起来。
+    所以这里同时锁「有这条路由」和「用的是 replace 而不是 add」。
+    """
+
+    def _iface(self) -> dict:
+        return {
+            "address": "10.99.0.1/24",
+            "publicKey": make_key("hub"),
+            "publicEndpoint": "203.0.113.10:51820",
+        }
+
+    def _peer(self, **extra) -> dict:
+        peer = {"name": "phone", "privateKey": make_key("p"), "allowedIps": ["10.99.0.2/32"]}
+        peer.update(extra)
+        return peer
+
+    def _post_lines(self, conf: str, prefix: str) -> list[str]:
+        return [line for line in conf.splitlines() if line.startswith(prefix)]
+
+    def test_egress_all_pins_endpoint_route(self) -> None:
+        conf = build_client_conf(self._iface(), self._peer(egress="all"))
+        ups = self._post_lines(conf, "PostUp = ")
+        self.assertEqual(len(ups), 1, conf)
+        self.assertIn("203.0.113.10/32", ups[0])
+        self.assertIn("ip route replace", ups[0], "必须用 replace：add 不幂等，重复 apply 会失败")
+        self.assertNotIn("ip route add", ups[0])
+
+    def test_egress_all_removes_route_on_down(self) -> None:
+        conf = build_client_conf(self._iface(), self._peer(egress="all"))
+        downs = self._post_lines(conf, "PostDown = ")
+        self.assertEqual(len(downs), 1)
+        self.assertIn("ip route del", downs[0])
+        self.assertIn("203.0.113.10/32", downs[0])
+
+    def test_internal_egress_adds_no_route_hacks(self) -> None:
+        """只走内网时不需要动路由，配置里不应出现 PostUp/PostDown。"""
+
+        conf = build_client_conf(self._iface(), self._peer(egress="internal"))
+        self.assertEqual(self._post_lines(conf, "PostUp"), [])
+        self.assertEqual(self._post_lines(conf, "PostDown"), [])
+
+    def test_legacy_peer_adds_no_route_hacks(self) -> None:
+        """存量 Peer（无策略字段）解析为 reach=all/egress=internal，也不该动路由。"""
+
+        conf = build_client_conf(self._iface(), self._peer())
+        self.assertEqual(self._post_lines(conf, "PostUp"), [])
+
+    def test_ipv6_endpoint_strips_brackets(self) -> None:
+        """IPv6 endpoint 写成 [addr]:port，路由里不能带方括号。"""
+
+        iface = self._iface()
+        iface["publicEndpoint"] = "[2001:db8::1]:51820"
+        conf = build_client_conf(iface, self._peer(egress="all"))
+        ups = self._post_lines(conf, "PostUp = ")
+        self.assertEqual(len(ups), 1)
+        self.assertIn("2001:db8::1/32", ups[0])
+        self.assertNotIn("[", ups[0])
