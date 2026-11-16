@@ -441,6 +441,65 @@ describe('WireGuard 页', () => {
     });
   });
 
+  it('新建 Peer 默认「仅 Hub」：可达范围与出网方式都是安全值', async () => {
+    mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
+    await renderWireGuard();
+    await screen.findAllByText('pixel-8');
+
+    await userEvent.click(screen.getByRole('button', { name: '添加 Peer' }));
+    const drawer = (await screen.findAllByRole('dialog')).at(-1);
+    if (!drawer) throw new Error('missing peer drawer');
+
+    // 默认必须是仅 Hub（新建 Peer 不该被动看到别人），出网保持原状
+    expect((within(drawer).getByLabelText('可达范围') as HTMLSelectElement).value).toBe('hub');
+    expect((within(drawer).getByLabelText('出网方式') as HTMLSelectElement).value).toBe('internal');
+  });
+
+  it('选「全部流量走 Hub」必须二次确认，勾选前不能继续', async () => {
+    mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
+    await renderWireGuard();
+    await screen.findAllByText('pixel-8');
+
+    await userEvent.click(screen.getByRole('button', { name: '添加 Peer' }));
+    const drawer = (await screen.findAllByRole('dialog')).at(-1);
+    if (!drawer) throw new Error('missing peer drawer');
+
+    await userEvent.selectOptions(within(drawer).getByLabelText('出网方式'), 'all');
+    const confirm = (await screen.findAllByRole('dialog')).at(-1);
+    if (!confirm) throw new Error('missing egress warning');
+
+    // 文案必须是确定语气（实测确认会断，不是「可能」）
+    expect(within(confirm).getByText(/公网 SSH 会立即断开/)).toBeTruthy();
+    // 没勾选时确认按钮不可用
+    const confirmButton = within(confirm).getByRole('button', { name: '仍然保存' });
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.click(within(confirm).getByRole('checkbox'));
+    expect((within(confirm).getByRole('button', { name: '仍然保存' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('取消「全部流量走 Hub」确认时退回安全值，不留危险配置', async () => {
+    mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
+    await renderWireGuard();
+    await screen.findAllByText('pixel-8');
+
+    await userEvent.click(screen.getByRole('button', { name: '添加 Peer' }));
+    const drawer = (await screen.findAllByRole('dialog')).at(-1);
+    if (!drawer) throw new Error('missing peer drawer');
+
+    await userEvent.selectOptions(within(drawer).getByLabelText('出网方式'), 'all');
+    const confirm = (await screen.findAllByRole('dialog')).at(-1);
+    if (!confirm) throw new Error('missing egress warning');
+    await userEvent.click(within(confirm).getByRole('button', { name: /取消|改回/ }));
+
+    // 退回后仍然是「仅内网流量走 Hub」
+    await waitFor(() => {
+      expect((within(drawer).getByLabelText('出网方式') as HTMLSelectElement).value).toBe('internal');
+    });
+  });
+
   it('Peer 抽屉高级区可发起轮换密钥，确认按钮禁用', async () => {
     mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
     await renderWireGuard();

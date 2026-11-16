@@ -26,9 +26,13 @@ from adapters.wireguard import (
     _match_recovery_public_key,
     build_client_conf,
     build_conf,
+    build_policy_rules,
     default_post_down,
     default_post_up,
     interface_signature,
+    needs_managed_policy,
+    peers_may_communicate,
+    resolve_peer_policy,
     parse_dump,
     parse_handshakes,
     render_peer_install_script,
@@ -2525,3 +2529,279 @@ class DiagnosticProblemsTests(WireGuardTestBase):
         self.assertEqual([item["code"] for item in problems], ["rotation_stuck"])
         self.assertEqual(problems[0]["severity"], "warn")
         self.assertEqual(problems[0]["action"], {"id": "peer.cancelRotation", "label": "取消换钥", "params": {"peer": "phone"}})
+
+
+# ---------------------------------------------------------------------------
+# Peer 网络策略（2026-11-16 U3）
+# ---------------------------------------------------------------------------
+
+
+class PeerPolicyResolveTests(unittest.TestCase):
+    """策略规范化。**最重要的是存量 Peer 不能被掐断**（N-6）。"""
+
+    def test_missing_fields_is_legacy_all_peers(self) -> None:
+        """字段全缺省 -> reach=all / egress=internal（老 Peer 全体互通）。"""
+
+        policy = resolve_peer_policy({"name": "old"})
+        self.assertEqual(policy, {"reach": "all", "reachPeers": [], "egress": "internal"})
+
+    def test_invalid_values_fall_back_to_legacy(self) -> None:
+        policy = resolve_peer_policy({"name": "x", "reach": "bogus", "egress": "bogus"})
+        self.assertEqual(policy["reach"], "all")
+        self.assertEqual(policy["egress"], "internal")
+
+    def test_reach_peers_cleared_when_not_peers_mode(self) -> None:
+        policy = resolve_peer_policy({"name": "a", "reach": "hub", "reachPeers": ["b"]})
+        self.assertEqual(policy["reachPeers"], [])
+
+    def test_reach_peers_filters_blank_entries(self) -> None:
+        policy = resolve_peer_policy({"name": "a", "reach": "peers", "reachPeers": ["b", "", "  "]})
+        self.assertEqual(policy["reachPeers"], ["b"])
+
+
+class PeerPolicyCommunicationTests(unittest.TestCase):
+    def test_two_new_peers_are_isolated(self) -> None:
+        self.assertFalse(peers_may_communicate({"name": "a", "reach": "hub"}, {"name": "b", "reach": "hub"}))
+
+    def test_legacy_peers_still_communicate(self) -> None:
+        """存量 && 存量 -> 通，升级后老网络不变。"""
+
+        self.assertTrue(peers_may_communicate({"name": "a"}, {"name": "b"}))
+
+    def test_new_peer_isolation_wins_over_legacy(self) -> None:
+        """新 Peer 选了「仅 Hub」，老 Peer 也连不进来。"""
+
+        self.assertFalse(peers_may_communicate({"name": "old"}, {"name": "new", "reach": "hub"}))
+
+    def test_explicit_peers_requires_both_sides(self) -> None:
+        a = {"name": "a", "reach": "peers", "reachPeers": ["b"]}
+        b = {"name": "b", "reach": "peers", "reachPeers": ["a"]}
+        self.assertTrue(peers_may_communicate(a, b))
+        # 单向放行不算通（否则是安全假象）
+        self.assertFalse(peers_may_communicate(a, {"name": "b", "reach": "peers", "reachPeers": []}))
+
+
+class PeerPolicyRenderTests(unittest.TestCase):
+    def test_legacy_config_keeps_default_post_up(self) -> None:
+        """**N-6 的守门测试**：没有策略字段时，渲染结果必须与升级前一字不差。"""
+
+        peers = [{"name": "phone", "allowedIps": ["10.99.0.2/32"], "enabled": True}]
+        self.assertFalse(needs_managed_policy(peers))
+        conf = build_conf({"address": "10.99.0.1/24", "extIface": "ens3"}, peers)
+        # _ipv4_networks 会把 /24 归一成网络地址 10.99.0.0/24
+        expected_up = default_post_up("ens3", ["10.99.0.0/24"])
+        self.assertIn(f"PostUp = {expected_up}", conf)
+        self.assertNotIn("KHC_WG", conf)
+
+    def test_policy_config_uses_managed_chain(self) -> None:
+        peers = [
+            {"name": "a", "allowedIps": ["10.99.0.2/32"], "reach": "hub", "enabled": True},
+            {"name": "b", "allowedIps": ["10.99.0.3/32"], "reach": "hub", "enabled": True},
+        ]
+        self.assertTrue(needs_managed_policy(peers))
+        conf = build_conf({"address": "10.99.0.1/24", "extIface": "ens3"}, peers)
+        self.assertIn("KHC_WG", conf)
+        # 链必须插到 FORWARD 第 1 位（否则会被既有 REJECT 抢先，S0 §④ 实测过）
+        self.assertIn("iptables -I FORWARD 1 -j KHC_WG", conf)
+        # 两个「仅 Hub」Peer 之间不许放行，只有默认 DROP
+        self.assertIn("-i %i -o %i -j DROP", conf)
+        self.assertNotIn("-s 10.99.0.2/32 -d 10.99.0.3/32 -j ACCEPT", conf)
+        # NAT 仍要保留，否则 egress 也回不来
+        self.assertIn("MASQUERADE", conf)
+
+    def test_policy_allows_mutual_pairs_both_directions(self) -> None:
+        peers = [
+            {"name": "a", "allowedIps": ["10.99.0.2/32"], "reach": "peers", "reachPeers": ["b"], "enabled": True},
+            {"name": "b", "allowedIps": ["10.99.0.3/32"], "reach": "peers", "reachPeers": ["a"], "enabled": True},
+        ]
+        up, down = build_policy_rules(peers)
+        self.assertIn("-s 10.99.0.2/32 -d 10.99.0.3/32 -j ACCEPT", up)
+        self.assertIn("-s 10.99.0.3/32 -d 10.99.0.2/32 -j ACCEPT", up)
+        # 对称删除
+        self.assertIn("-D FORWARD -j KHC_WG", down)
+        self.assertIn("-F KHC_WG", down)
+        self.assertIn("-X KHC_WG", down)
+
+    def test_policy_is_idempotent_by_flush_and_rebuild(self) -> None:
+        """重复 apply 不叠加：靠 -F 整链重建，而不是不断 -A。"""
+
+        peers = [{"name": "a", "allowedIps": ["10.99.0.2/32"], "reach": "all", "enabled": True}]
+        up, _ = build_policy_rules(peers)
+        self.assertIn("iptables -F KHC_WG", up)
+        # 建链用 || true，已存在时不报错
+        self.assertIn("iptables -N KHC_WG 2>/dev/null || true", up)
+        # 挂链用 -C 判存在，避免每次都插一条
+        self.assertIn("iptables -C FORWARD -j KHC_WG", up)
+
+    def test_egress_all_only_opens_that_peer(self) -> None:
+        peers = [
+            {"name": "a", "allowedIps": ["10.99.0.2/32"], "egress": "all", "enabled": True},
+            {"name": "b", "allowedIps": ["10.99.0.3/32"], "egress": "internal", "enabled": True},
+        ]
+        up, _ = build_policy_rules(peers)
+        self.assertIn("! -o %i -s 10.99.0.2/32 -j ACCEPT", up)
+        self.assertNotIn("! -o %i -s 10.99.0.3/32 -j ACCEPT", up)
+
+    def test_disabled_peer_excluded_from_rules(self) -> None:
+        peers = [
+            {"name": "a", "allowedIps": ["10.99.0.2/32"], "reach": "all", "enabled": False},
+            {"name": "b", "allowedIps": ["10.99.0.3/32"], "reach": "all", "enabled": True},
+        ]
+        up, _ = build_policy_rules(peers)
+        self.assertNotIn("10.99.0.2/32", up)
+
+    def test_custom_post_up_is_not_overridden(self) -> None:
+        """N-5：用户自定义 PostUp 时不接管策略（会和用户规则打架）。"""
+
+        peers = [{"name": "a", "allowedIps": ["10.99.0.2/32"], "reach": "hub", "enabled": True}]
+        conf = build_conf({"address": "10.99.0.1/24", "postUp": "echo mine"}, peers)
+        self.assertIn("PostUp = echo mine", conf)
+        self.assertNotIn("KHC_WG", conf)
+
+
+class PeerPolicyValidationTests(unittest.TestCase):
+    """策略字段校验。
+
+    直接调 ``_normalize_config``：它需要 ctx 才能生成密钥，但**校验分支在生成之前**
+    就会抛错，所以传一个最小 ctx 即可覆盖非法值路径。
+    """
+
+    def _ctx(self):
+        from khc.adapters import Ctx
+
+        tmp = tempfile.mkdtemp(prefix="khc-wg-policy-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        return Ctx(
+            data_dir=tmp,
+            run=FakeRunner(),
+            etc=os.path.join(tmp, "etc"),
+            var=os.path.join(tmp, "var"),
+        )
+
+    def _peers(self, first: dict, second: dict | None = None) -> list[dict]:
+        base = {"name": "a", "publicKey": make_key("a"), "allowedIps": ["10.99.0.2/32"]}
+        base.update(first)
+        peers = [base]
+        if second is not None:
+            other = {"name": "b", "publicKey": make_key("b"), "allowedIps": ["10.99.0.3/32"]}
+            other.update(second)
+            peers.append(other)
+        return peers
+
+    def _normalize(self, peers: list[dict]):
+        adapter = WireGuard(watchdog_enabled=False)
+        config = {
+            "interface": {
+                "name": "wg0",
+                "address": "10.99.0.1/24",
+                "listenPort": 51820,
+                "publicEndpoint": "203.0.113.10:51820",
+                "publicKey": make_key("hub"),
+                "privateKey": make_key("hub-priv"),
+            },
+            "peers": peers,
+        }
+        return adapter._normalize_config(config)
+
+    def test_rejects_bad_reach(self) -> None:
+        with self.assertRaises(ValidationFailed):
+            self._normalize(self._peers({"reach": "everywhere"}))
+
+    def test_rejects_bad_egress(self) -> None:
+        with self.assertRaises(ValidationFailed):
+            self._normalize(self._peers({"egress": "some"}))
+
+    def test_rejects_unknown_reach_peer(self) -> None:
+        with self.assertRaises(ValidationFailed):
+            self._normalize(self._peers({"reach": "peers", "reachPeers": ["ghost"]}))
+
+    def test_rejects_self_reference(self) -> None:
+        with self.assertRaises(ValidationFailed):
+            self._normalize(self._peers({"reach": "peers", "reachPeers": ["a"]}))
+
+    def test_rejects_hub_mode_with_peer_list(self) -> None:
+        with self.assertRaises(ValidationFailed):
+            self._normalize(self._peers({"reach": "hub", "reachPeers": ["b"]}, {"name": "b"}))
+
+    def test_accepts_valid_policy_and_renders_chain(self) -> None:
+        interface, peers = self._normalize(
+            self._peers(
+                {"reach": "peers", "reachPeers": ["b"], "egress": "internal"},
+                {"name": "b", "reach": "peers", "reachPeers": ["a"]},
+            )
+        )
+        self.assertEqual(len(peers), 2)
+        self.assertIn("KHC_WG", interface["postUp"])
+
+
+class ClientAllowedIpsPolicyTests(unittest.TestCase):
+    """客户端 AllowedIPs 跟随策略（2026-11-16 U3）。
+
+    最要紧的一条：**存量 Peer 的 AllowedIPs 必须与升级前完全一致**，
+    否则老客户端重新导出配置后路由会变，属于静默的行为变更。
+    """
+
+    def _interface(self) -> dict:
+        return {
+            "address": "10.99.0.1/24",
+            "publicKey": make_key("hub"),
+            "publicEndpoint": "203.0.113.10:51820",
+        }
+
+    def _peer(self, **extra) -> dict:
+        peer = {
+            "name": "phone",
+            "privateKey": make_key("phone-priv"),
+            "allowedIps": ["10.99.0.2/32"],
+            "keepalive": 25,
+        }
+        peer.update(extra)
+        return peer
+
+    def _allowed(self, conf: str) -> str:
+        for line in conf.splitlines():
+            if line.startswith("AllowedIPs = "):
+                return line.split("= ", 1)[1]
+        raise AssertionError("缺少 AllowedIPs")
+
+    def test_legacy_peer_keeps_whole_network(self) -> None:
+        """无策略字段 = reach all -> 仍只是整个网段（与升级前一字不差）。"""
+
+        conf = build_client_conf(self._interface(), self._peer())
+        self.assertEqual(self._allowed(conf), "10.99.0.0/24")
+
+    def test_reach_hub_gives_only_hub(self) -> None:
+        conf = build_client_conf(self._interface(), self._peer(reach="hub"))
+        self.assertEqual(self._allowed(conf), "10.99.0.1/32")
+
+    def test_reach_all_gives_whole_network(self) -> None:
+        conf = build_client_conf(self._interface(), self._peer(reach="all"))
+        self.assertEqual(self._allowed(conf), "10.99.0.0/24")
+
+    def test_reach_peers_adds_named_peer(self) -> None:
+        other = {"name": "laptop", "allowedIps": ["10.99.0.3/32"]}
+        conf = build_client_conf(
+            self._interface(),
+            self._peer(reach="peers", reachPeers=["laptop"]),
+            all_peers=[self._peer(reach="peers", reachPeers=["laptop"]), other],
+        )
+        self.assertEqual(self._allowed(conf), "10.99.0.1/32, 10.99.0.3/32")
+
+    def test_egress_all_gives_default_route(self) -> None:
+        conf = build_client_conf(self._interface(), self._peer(egress="all"))
+        self.assertEqual(self._allowed(conf), "0.0.0.0/0, ::/0")
+
+    def test_explicit_allowed_ips_still_wins(self) -> None:
+        """显式传 allowed_ips 时不被策略覆盖（兼容旧调用方）。"""
+
+        conf = build_client_conf(self._interface(), self._peer(reach="hub"), allowed_ips="10.5.0.0/16")
+        self.assertEqual(self._allowed(conf), "10.5.0.0/16")
+
+    def test_reach_peers_ignores_itself(self) -> None:
+        conf = build_client_conf(
+            self._interface(),
+            self._peer(reach="peers", reachPeers=["phone"]),
+            all_peers=[self._peer(reach="peers", reachPeers=["phone"])],
+        )
+        # 自己不在结果里重复出现
+        self.assertEqual(self._allowed(conf), "10.99.0.1/32")

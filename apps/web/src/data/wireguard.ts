@@ -28,6 +28,24 @@ export interface WgInterface {
   postDown: string;
 }
 
+/**
+ * Peer 可达范围（2026-11-16 U3）：
+ * - `hub`：只能与 Hub 通（新建 Peer 的默认值）
+ * - `peers`：Hub + 指定 Peer（见 `reachPeers`，双向可通）
+ * - `all`：Hub + 所有 Peer（**存量 Peer 的兼容值**，见 N-6）
+ *
+ * 服务端强制执行：适配器渲染 `wg0→wg0` 的 FORWARD 规则，不完全依赖客户端 AllowedIPs。
+ */
+export type WgPeerReach = 'hub' | 'peers' | 'all';
+
+/**
+ * 出网方式（2026-11-16 U3）：
+ * - `internal`：只有面板配置的业务走 wg，Peer 原有公网网络不动（默认）
+ * - `all`：全部流量走 Hub —— **有公网 SSH 断开的真实风险**，
+ *   见 `docs/verification/2026-11-16/ui-polish-u3-rollback.md` §1
+ */
+export type WgPeerEgress = 'internal' | 'all';
+
 export interface WgPeer {
   name: string;
   publicKey: string;
@@ -36,6 +54,15 @@ export interface WgPeer {
   keepalive: number;
   endpoint: string | null;
   enabled: boolean;
+  /**
+   * 可达范围。**字段缺省时按 `all` 处理**（N-6）：存量 Peer 是「全体互通」的，
+   * 不能因为新字段缺失就把它们的连通性掐掉。
+   */
+  reach?: WgPeerReach;
+  /** `reach === 'peers'` 时的互通对象（Peer 名）；其它取值下忽略。 */
+  reachPeers?: string[];
+  /** 出网方式。字段缺省时按 `internal` 处理（保持 Peer 原有网络）。 */
+  egress?: WgPeerEgress;
 }
 
 export interface WgConfig {
