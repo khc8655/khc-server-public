@@ -1,100 +1,83 @@
 # U3 真机验证：Peer 隔离与策略链（2026-11-16）
 
-> 状态：证据（一次性验收记录，写完不再修改） ｜ 最后核验：2026-11-16 ｜ 关联：PR、`docs/plans/ui-polish-2026-11-16-todo.md` §6
-> 节点：`oracle-x86-2`（ubuntu@140.245.108.105），Agent 0.3.3，内核实 7.0.0-1016-oracle，真实 WireGuard
+> 状态：证据（一次性验收记录，写完不再修改） ｜ 最后核验：2026-11-16 ｜ 关联：PR #69、`docs/plans/ui-polish-2026-11-16-todo.md` §6
+> 节点：`oracle-x86-2`（ubuntu@140.245.108.105），Agent 0.4.0，内核实 7.0.0-1016-oracle，真实 WireGuard
 
-## 1. 为什么用 netns 而不是远端 VM
+## 0. 两种验证方式
 
-清单要求「真机，至少两个 Peer」。实测发现文档里的候选 Peer 全部不可用：
+本文有两部分，**第二部分是真机物理 Peer，优先级更高**：
 
-| 主机 | 地址 | 实测 |
+| 部分 | 拓扑 | 能证明什么 |
 |---|---|---|
-| 香港 NAT | `202.73.4.182:56686` / `2001:470:19:8c2:1::2b` | **从 Hub 全部不可达**（22/2222/56686/10022/2022 全关，v4 与 v6 都不通） |
-| 新加坡 NAT | `104.234.174.203:53455` / `2001:470:36:de8:1::51` | 不可达 |
-| AWS Lightsail | `54.179.74.225` | 不可达（本机与 Hub 都不通） |
-| oracle-arm-1 | `161.118.228.99` | 22 关；但它是现有 peer（`10.98.0.2`），**经 wg 可 ping 通 1ms** |
+| §1 netns | netns 内真实 WireGuard | 规则链逻辑、幂等、PostDown 对称 |
+| **§2 真机两 Peer** | **香港 LXD ↔ Hub ↔ oracle-arm-1** | **真实跨公网隔离；客户端配置不变时服务端能强制切断** |
 
-Hub 自身出站正常（`https://www.google.com` 200），所以不是 Hub 侧断网，是这些主机已关机或换了 IP。
+## 1. netns 验证（8/8）
 
-`oracle-arm-1` 虽然经 wg 可达，但从公网无法登录（22 关），改不了它的配置。
-**结论：没有可登录的第二个真实 Peer。**
+### 1.1 为什么先做 netns
 
-改用 netns 内**真实 WireGuard**（真实握手、真实内核转发、真实 iptables）验证策略链效果。
-这能验证服务端强制执行的隔离行为，且完全不碰 Hub 的生产 `wg0` 与 `FORWARD`。
+文档 `临时文件/测试 VM 信息.md` 里的候选 Peer，从 `oracle-x86-2` 的 SSH 端口全部不可达
+（香港 `202.73.4.182:56686`、新加坡 `104.234.174.203:53455`、AWS `54.179.74.225`）。
+Hub 自身出站正常（`https://www.google.com` 200），是这些主机的 SSH 端口对 Hub 关闭。
 
-## 2. 拓扑
+后来发现香港主机**从本机走 IPv6 可以 SSH 登录**（Hub 到它的 v6 也通），
+于是补做了 §2 的真机验证。netns 部分保留，因为它验证了幂等与清理这类
+不方便在生产 Hub 上反复做的动作。
 
-```
-Hub  u3hub  wg0 10.99.0.1/24   公网 172.60.0.10   ← 挂 KHC_WG 策略链
-PeerA u3pa  wg0 10.99.0.2/24   公网 172.50.0.20
-PeerB u3pb  wg0 10.99.0.3/24   公网 172.51.0.30
-路由器 u3rtr 172.50.0.1 / 172.51.0.1 / 172.60.0.1
-```
+### 1.2 结果
 
-三个 netns 通过 veth + 路由器连接，模拟跨网段公网。两个 Peer 各自与 Hub 建立真实 WireGuard 隧道
-（`persistent-keepalive 5`）。
+拓扑：`Hub u3hub`（10.99.0.1）、`PeerA u3pa`（10.99.0.2）、`PeerB u3pb`（10.99.0.3），
+经路由器 netns 跨网段互联，两个 Peer 各自与 Hub 建立真实 WireGuard 隧道。
 
-## 3. 结果：8/8 通过
+| 阶段 | 检查 | 结果 |
+|---|---|---|
+| 1 基线（无策略链） | A→Hub / A→B | 通 / 通 |
+| 2 `reach=hub` | **A→B 应隔离** | **不通** |
+| 2 | A→Hub 不受影响 | 通 |
+| 3 指定互通 | A→B / B→A | 通 / 通 |
+| 4 幂等 | 重复施加后规则条数 | 不变 |
+| 5 清理 | 删链后 A→B 恢复 | 通 |
 
-### 阶段 1 基线（无策略链）
+## 2. 真机两 Peer 验证（关键）
 
-```
-[PASS] A -> Hub             通
-[PASS] A -> B（无策略时互通）  通
-```
-
-确认「不施加策略时全体互通」——这正是升级前的行为，也是存量的默认状态。
-
-### 阶段 2 reach=hub（新建 Peer 的默认值）
-
-规则：
+### 2.1 拓扑
 
 ```
--N KHC_WG
--A KHC_WG -i wg0 -o wg0 -j DROP
--A KHC_WG -j RETURN
+香港 LXD (lxd1145144686160)          oracle-x86-2 (Hub)              oracle-arm-1
+2001:470:19:8c2:1::2b                140.245.108.105                 161.118.228.99
+出口 v4 202.73.4.182                 wg0 10.98.0.1/24                wg0 10.98.0.2
+     │                                    │                               │
+     └──── WireGuard 10.98.0.3 ───────────┴───── 存量 peer 10.98.0.2 ─────┘
+                    (新建 peer, reach=hub)              (存量, 缺字段 = reach=all)
 ```
 
-```
-[PASS] A -> B（reach=hub，应隔离）   不通
-[PASS] A -> Hub（隔离不影响连 Hub）  通
-```
+香港到 Hub：`ping` 2/2，**37ms**；WireGuard 握手成功（`latest handshake: 2 seconds ago`）。
 
-**这是 U3 最核心的验收项：新 Peer 默认 ping 不通其他 Peer，但连 Hub 不受影响。**
+### 2.2 结果
 
-### 阶段 3 指定互通（双向）
+| 检查 | 结果 |
+|---|---|
+| 基线：香港 → arm-1:443（无策略链） | **通** |
+| `reach=hub` 策略后：香港 → Hub | **通** |
+| `reach=hub` 策略后：香港 → arm-1:443 | **不通** —— 隔离生效 |
+| 指定互通（双向 ACCEPT）后：香港 → arm-1:443 | **通** |
+| **客户端配置完全不动、只把服务端改回全隔离** | **不通** —— 服务端强制执行生效 |
 
-规则：
+### 2.3 最后一条最重要
 
-```
--A KHC_WG -s 10.99.0.2/32 -d 10.99.0.3/32 -i wg0 -o wg0 -j ACCEPT
--A KHC_WG -s 10.99.0.3/32 -d 10.99.0.2/32 -i wg0 -o wg0 -j ACCEPT
--A KHC_WG -i wg0 -o wg0 -j DROP
--A KHC_WG -j RETURN
-```
+「客户端配置不变，只改服务端规则就能切断」——这才是「服务端强制执行」的定义。
+只靠客户端 `AllowedIPs` 的方案做不到这一点：用户随时能改自己的配置。
 
-```
-[PASS] A -> B（互相点名，应通）  通
-[PASS] B -> A（双向都要通）     通
-```
+### 2.4 顺带验证了客户端侧的 AllowedIPs 也生效
 
-### 阶段 4 幂等性
+第一次测「指定互通」时香港仍然不通，查计数发现 `KHC_WG` 全是 0 ——
+包根本没到 Hub 的 FORWARD 链。原因是香港的 `AllowedIPs = 10.98.0.1/32` 只含 Hub，
+发往 `10.98.0.2` 的包不进隧道。
 
-```
-[PASS] 重复施加后规则条数不变
-```
+**这恰好证明策略在两层都生效**：客户端按 `AllowedIPs` 决定往隧道送什么，
+服务端按 `KHC_WG` 决定放不放行。改客户端为 `10.98.0.0/24` 后才测到服务端那一层。
 
-靠「先 `-F` 整链再重建」与「`-C` 判存在再 `-I`」实现，不依赖调用方去重。
-
-### 阶段 5 清理
-
-```
-[PASS] 删除链后 A -> B 恢复  通
-```
-
-`-D FORWARD -j KHC_WG` + `-F` + `-X` 后回到互通状态，确认 PostDown 的对称清理有效。
-
-## 4. 一个必须记住的顺序问题
+## 3. 一个必须记住的顺序问题
 
 `iptables -A FORWARD -i wg0 -j ACCEPT`（现有 `default_post_up` 的做法）在这台节点上是**死规则**：
 
@@ -112,29 +95,20 @@ iptables -C FORWARD -j KHC_WG 2>/dev/null || iptables -I FORWARD 1 -j KHC_WG
 
 `build_policy_rules()` 就是这么渲染的，有单测锁住（`test_policy_is_idempotent_by_flush_and_rebuild`）。
 
-## 5. 生产环境未受影响核对
+## 4. 生产环境未受影响核对
 
 ```
-Hub 生产 FORWARD：仍是最初 6 条（未增未减）
-Hub wg0：仍只有原有 peer 10.98.0.2，allowed-ips 未变
-现有 peer 连通：1 received
-netns 残留：空
+Hub FORWARD：仍是最初 6 条（KHC_WG 已 -D/-F/-X）
+Hub wg0：测试 peer 已 remove，只剩原有 10.98.0.2
+香港：我建的 u3test 接口与 conf 已删；**原有 wg0（11-14 建）未动，仍在运行**
+节点服务：khc-agent active（0.4.0）、caddy active
 ```
 
-## 6. 仍未真机覆盖的部分
+## 5. 仍未真机覆盖的部分
 
-- **客户端 `AllowedIPs` 的实际生效效果**：本次只验证了服务端 FORWARD 策略。
-  客户端配置生成有单测（`clientAllowedIps`），但「装上之后 Peer 真的只把该走的流量送进隧道」
-  需要一台可登录的真实 Peer 才能验。
-- **`egress=all` 的公网 SSH 断开与回滚**：已在 `ui-polish-u3-rollback.md` 用 netns 验过断开原因与
-  回滚机制，但真实发行版的 `systemd-run` 定时器仍需真机补验。
-- **跨真实的两个物理 Peer**：等有可登录的第二台机器时补。
+- **`egress=all` 的公网 SSH 断开与回滚**：已用 netns 验过机制
+  （`ui-polish-u3-rollback.md` §1），但真实发行版的 `systemd-run` 定时器未在物理机上跑过。
+  香港这台是 LXD 容器、有独立 v6，适合下次补验（它的 SSH 走 v6，理论上
+  `egress=all` 只接管 v4 时不会断——这个假设也还没验）。
+- **DNS 行为**：`egress=all` 后的解析路径未测。
 
-## 7. 清理
-
-```
-netns u3hub/u3pa/u3pb/u3rtr  -> 已删除（trap 自动 + 复核为空）
-veth u3v1/u3v2/u3v3          -> 已删除
-临时密钥 /tmp/u3*.key         -> 已删除
-临时脚本 /tmp/u3-*.sh         -> 已删除（root 写入需 sudo rm）
-```
