@@ -64,7 +64,6 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
     setLoading(true);
     setError(null);
     try {
-      // call 是 Agent 写锁动作；读动词也串行，避免并发拿不到锁。
       const versionResult = await callHostOps(hubId, 'self', 'version');
       const showResult = await callHostOps(hubId, 'self', 'fw.show', {});
       if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));

@@ -1275,7 +1275,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.0.0")
+        self.assertEqual(self.adapter.version, "1.0.1")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -2061,15 +2061,24 @@ class AdapterCallTests(AdapterTestBase):
         self.assertTrue(write_result["write"])
 
     def test_kernel_action_call_requires_idempotency_key(self) -> None:
+        """写动词必须带 key；只读动词不需要（不再抢写锁，见 is_write 测试）。"""
+
         kernel = make_kernel(self.paths, [self.adapter], runner=self.runner)
         with self.assertRaises(BadRequest):
-            kernel.handle_action("host-ops", "call", {"config": self.config_data, "params": {"target": "self", "verb": "version", "params": {}}})
+            kernel.handle_action(
+                "host-ops",
+                "call",
+                {
+                    "config": self.config_data,
+                    "params": {"target": "self", "verb": "svc.restart", "params": {"unit": "demo.service"}},
+                },
+            )
         result = kernel.handle_action(
             "host-ops",
             "call",
             {
                 "config": self.config_data,
-                "params": {"target": "self", "verb": "version", "params": {}},
+                "params": {"target": "self", "verb": "svc.restart", "params": {"unit": "demo.service"}},
                 "idempotencyKey": "call-1",
             },
         )
@@ -2154,6 +2163,55 @@ class AdapterCallTaskMetadataTests(AdapterTestBase):
         self.assertTrue(callable(getattr(self.adapter, "action_call_task", None)))
         self.assertTrue(callable(getattr(self.adapter, "_dispatch_call", None)))
         self.assertTrue(callable(getattr(self.adapter, "action_call", None)))
+
+
+class AdapterIsWriteTests(AdapterTestBase):
+    """``call`` / ``call_task`` 的读写必须按 verb 判定，不能整条算写。
+
+    缺陷（2026-11-16）：``call`` 在 actions 里标 ``write: True``，适配器未实现
+    ``is_write`` 钩子 → 只读动词也抢节点级写锁 → 面板并发只读请求随机 409 ``busy``，
+    表现为「操作失败，请稍后重试」。
+    """
+
+    def is_write(self, action: str, params: dict | None = None, *, write: bool = True) -> bool:
+        body = {"config": self.config("a"), "params": params or {}}
+        return self.adapter.is_write(action, body, {"write": write})
+
+    def test_read_verbs_are_not_writes(self) -> None:
+        for verb in ("version", "status", "snapshot", "processes", "svc.list", "svc.logs",
+                     "fw.show", "keys.list", "cron.list", "logs.errors"):
+            self.assertFalse(self.is_write("call", {"target": "self", "verb": verb}), verb)
+
+    def test_write_verbs_are_writes(self) -> None:
+        for verb in ("fw.apply", "fw.confirm", "keys.add", "keys.remove", "svc.restart",
+                     "cron.set", "cleanup"):
+            self.assertTrue(self.is_write("call", {"target": "self", "verb": verb}), verb)
+
+    def test_writes_decided_per_verb_for_call_task_too(self) -> None:
+        self.assertFalse(self.is_write("call_task", {"target": "self", "verb": "status"}))
+        self.assertTrue(self.is_write("call_task", {"target": "self", "verb": "fw.apply"}))
+
+    def test_metadata_write_false_always_read(self) -> None:
+        """probe/onboard 等本来就不是写动作，任何参数都是读。"""
+        self.assertFalse(self.is_write("probe", {"peerId": "a"}, write=False))
+        self.assertFalse(self.is_write("hub_pubkey", {}, write=False))
+
+    def is_write(self, action: str, params: dict | None = None, *, write: bool = True) -> bool:
+        body = {"config": self.config("a"), "params": params or {}}
+        return self.adapter.is_write(action, body, {"write": write})
+
+    def test_unknown_or_missing_verb_is_conservative_write(self) -> None:
+        """未知动词、缺 verb、参数畸形一律按写处理：宁可多锁一次，不放过真正的写。"""
+        self.assertTrue(self.adapter.is_write("call", {"params": {"verb": "no.such.verb"}}, {"write": True}))
+        self.assertTrue(self.adapter.is_write("call", {"params": {"target": "self"}}, {"write": True}))
+        self.assertTrue(self.adapter.is_write("call", {"params": {"verb": ""}}, {"write": True}))
+        # params 不是 object：action_params 抛 ValidationFailed，钩子仍须保守判定
+        self.assertTrue(self.adapter.is_write("call", {"params": "not-an-object"}, {"write": True}))
+
+    def test_other_write_actions_unaffected(self) -> None:
+        """非 call/call_task 的动作照旧看 meta.write。"""
+        self.assertTrue(self.is_write("apply", {}, write=True))
+        self.assertFalse(self.is_write("apply", {}, write=False))
 
 
 class AdapterCallTaskSubmitTests(AdapterTestBase):
@@ -2294,11 +2352,16 @@ class AdapterCallTaskSubmitTests(AdapterTestBase):
 
 class AdapterCallTaskErrorTests(AdapterCallTaskSubmitTests):
     def test_requires_idempotency_key(self) -> None:
+        """写动词走 call_task 必须带 key；只读动词不需要（不抢写锁）。"""
+
         with self.assertRaises(BadRequest) as caught:
             self.kernel.handle_action(
                 "host-ops",
                 "call_task",
-                {"config": self.config_data, "params": {"target": "self", "verb": "version", "params": {}}},
+                {
+                    "config": self.config_data,
+                    "params": {"target": "self", "verb": "fw.apply", "params": {}},
+                },
             )
         self.assertEqual(caught.exception.code, "idempotency_key_required")
 
@@ -2340,30 +2403,59 @@ class AdapterCallTaskErrorTests(AdapterCallTaskSubmitTests):
 
 class AdapterCallTaskLockTests(AdapterCallTaskSubmitTests):
     def test_task_holds_write_lock_until_done(self) -> None:
+        """写动词任务持锁期间：写动词被挡，只读动词仍可用。
+
+        缺陷背景（2026-11-16）：``call`` 曾整条标成写动作，只读动词也去抢节点级写锁，
+        页面并发发起的 ``svc.list`` / ``snapshot`` 会随机 409 ``busy``。原用例的注释
+        写「读动作不受影响」，断言却是只读 ``version`` 必须 Busy——把缺陷固定了下来。
+        """
+
         started = threading.Event()
         release = threading.Event()
+        real_dispatch = self.adapter._dispatch_call
 
-        def blocking(_ctx, _body):
+        def blocking(ctx, body):
+            """只让写动词 svc.restart 卡住；只读动词照常直通。"""
+            verb = str((body.get("params") or {}).get("verb") or "")
+            if verb != "svc.restart":
+                return real_dispatch(ctx, body)
             started.set()
             self.assertTrue(release.wait(5))
-            return {"ok": True, "data": {"slow": True}, "target": "self", "verb": "status", "write": False}
+            return {"ok": True, "data": {"slow": True}, "target": "self", "verb": "svc.restart", "write": True}
 
         with mock.patch.object(self.adapter, "_dispatch_call", side_effect=blocking):
-            payload = self.submit({"target": "self", "verb": "status", "params": {}}, key="lock-1")
+            payload = self.submit(
+                {"target": "self", "verb": "svc.restart", "params": {"unit": "demo.service"}},
+                key="lock-1",
+            )
             self.assertTrue(started.wait(5))
 
-            # 任务执行期间：写动作被写锁挡住（Busy），读动作不受影响
+            # 写动词任务执行期间：另一个写动词被写锁挡住（Busy）
             with self.assertRaises(Busy) as caught:
                 self.kernel.handle_action(
                     "host-ops",
                     "call",
                     {
                         "config": self.config_data,
-                        "params": {"target": "self", "verb": "version", "params": {}},
+                        "params": {"target": "self", "verb": "svc.restart", "params": {"unit": "other.service"}},
                         "idempotencyKey": "blocked-write",
                     },
                 )
             self.assertEqual(caught.exception.code, "busy")
+
+            # 同一期间只读动词不受影响：这正是原缺陷的症状所在
+            self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {"verb": "svc.list"}}
+            readonly = self.kernel.handle_action(
+                "host-ops",
+                "call",
+                {
+                    "config": self.config_data,
+                    "params": {"target": "self", "verb": "svc.list", "params": {}},
+                    "idempotencyKey": "read-only-during-write",
+                },
+            )
+            self.assertTrue(readonly["ok"], readonly)
+
             self.runner.scan_stdout = f"10.8.0.12 {PUB_A}\n"
             probe = self.kernel.handle_action(
                 "host-ops",
@@ -2376,13 +2468,19 @@ class AdapterCallTaskLockTests(AdapterCallTaskSubmitTests):
             status = wait_task(self.kernel, payload["taskId"])
         self.assertEqual(status["state"], "done")
         # 任务结束后写锁释放：写动作恢复
-        after = self.submit({"target": "self", "verb": "version", "params": {}}, key="after-lock")
+        after = self.submit(
+            {"target": "self", "verb": "svc.restart", "params": {"unit": "demo.service"}}, key="after-lock"
+        )
         self.assertTrue(after["ok"])
         self.assertEqual(wait_task(self.kernel, after["taskId"])["state"], "done")
 
     def test_idempotent_replay_returns_same_task_id(self) -> None:
-        self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {}}
-        params = {"target": "a", "verb": "status", "params": {}}
+        """幂等重放只对写动作生效：同一 key 只发一次 SSH。"""
+
+        self.runner.ssh_result = RunResult(
+            cmd=["ssh"], rc=0, stdout=json.dumps({"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {}})
+        )
+        params = {"target": "a", "verb": "svc.restart", "params": {"unit": "demo.service"}}
         first = self.submit(params, key="replay-1")
         second = self.submit(params, key="replay-1")
         self.assertEqual(first["taskId"], second["taskId"])
@@ -2452,13 +2550,28 @@ class HttpContractTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "E_SCRIPT_MISSING")
 
     def test_call_write_requires_idempotency_key(self) -> None:
+        """写动词必须带 key；只读动词不需要（见 test_call_read_does_not_require_key）。"""
+
         status, payload, _ = self.harness.request(
             "POST",
             "/apps/host-ops/call",
-            payload={"config": {}, "params": {"target": "self", "verb": "version", "params": {}}},
+            payload={
+                "config": {},
+                "params": {"target": "self", "verb": "svc.restart", "params": {"unit": "demo.service"}},
+            },
         )
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "idempotency_key_required")
+
+    def test_call_read_does_not_require_key(self) -> None:
+        """只读动词不抢写锁，因此也不需要幂等键（缺陷 2026-11-16 的回归点）。"""
+
+        status, payload, _ = self.harness.request(
+            "POST",
+            "/apps/host-ops/call",
+            payload={"config": {}, "params": {"target": "self", "verb": "svc.list", "params": {}}},
+        )
+        self.assertEqual(status, 200, payload)
 
     def test_call_self_via_http(self) -> None:
         status, payload, _ = self.harness.request(
@@ -2497,13 +2610,54 @@ class HttpContractTests(unittest.TestCase):
         self.assertEqual(task["result"]["v"], HOST_SCRIPT.SCRIPT_VERSION)
 
     def test_call_task_requires_idempotency_key(self) -> None:
+        """``call_task`` 的幂等键判定同样按 verb：写动词要 key，只读不要。"""
+
         status, payload, _ = self.harness.request(
             "POST",
             "/apps/host-ops/call_task",
-            payload={"config": {}, "params": {"target": "self", "verb": "version", "params": {}}},
+            payload={
+                "config": {},
+                "params": {"target": "self", "verb": "fw.apply", "params": {}},
+            },
         )
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "idempotency_key_required")
+
+    def test_concurrent_read_verbs_over_http_all_succeed(self) -> None:
+        """回归（2026-11-16）：进「主机运维」时多个只读动词并发，不允许有请求吃 409 busy。
+
+        原实现把 ``call`` 整条标成写动作，节点级写锁是 ``acquire(blocking=False)``，
+        并发只读请求后到者直接 409 ``busy``，面板显示「操作失败，请稍后重试」。
+        这里同时打 6 个只读动词，全部必须 200。
+        """
+
+        self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {}}
+        verbs = ("version", "svc.list", "cron.list", "fw.show", "keys.list", "logs.errors")
+        results: list[tuple[int, dict]] = []
+        lock = threading.Lock()
+
+        def hit(verb: str) -> None:
+            status, payload, _ = self.harness.request(
+                "POST",
+                "/apps/host-ops/call",
+                payload={"config": {}, "params": {"target": "self", "verb": verb, "params": {}}},
+            )
+            with lock:
+                results.append((status, payload))
+
+        threads = [threading.Thread(target=hit, args=(verb,)) for verb in verbs]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+
+        self.assertEqual(len(results), len(verbs), results)
+        failures = [
+            (status, payload.get("error"))
+            for status, payload in results
+            if status != 200 or not payload.get("ok")
+        ]
+        self.assertEqual(failures, [], f"并发只读请求被拒: {failures}")
 
 
 class ScriptPathResolutionTests(unittest.TestCase):

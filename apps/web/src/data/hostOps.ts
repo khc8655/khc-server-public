@@ -315,6 +315,17 @@ function envelopeData(envelope: HostOpsEnvelope): unknown {
   return Object.keys(direct).length > 0 ? direct : null;
 }
 
+/**
+ * Agent 内核错误码 → 面板错误码。
+ *
+ * `busy` 是 Agent 节点级写锁的 409（同一时刻只允许一个写动作）。它是**可重试**的
+ * 暂时状态，不该落到 E_UNKNOWN 显示成「操作失败」。正常使用下只读动词已不抢写锁
+ * （适配器 `is_write` 钩子），只有两个写动作撞在一起才会出现。
+ */
+const AGENT_ERROR_CODES: Record<string, string> = {
+  busy: 'E_BUSY',
+};
+
 function resultFromEnvelope<T>(envelope: HostOpsEnvelope): HostOpsResult<T> {
   const top = envelope as unknown as Record<string, unknown>;
   const result = asRecord(envelope.result);
@@ -325,12 +336,13 @@ function resultFromEnvelope<T>(envelope: HostOpsEnvelope): HostOpsResult<T> {
   const updateRequired = asBoolean(top.updateRequired ?? result.updateRequired);
   if (!envelope.ok) {
     const error = envelope.error;
+    const raw = error?.code || 'E_UNKNOWN';
     return {
       ok: false,
       v: asString(top.v ?? result.v) || null,
       data: null,
       error: {
-        code: error?.code || 'E_UNKNOWN',
+        code: AGENT_ERROR_CODES[raw] ?? raw,
         message: error?.message || '主机运维操作失败',
         details: stringifyUnknown(error?.details),
       },
@@ -351,12 +363,13 @@ function resultFromEnvelope<T>(envelope: HostOpsEnvelope): HostOpsResult<T> {
 }
 
 function apiErrorResult<T>(error: ApiError): HostOpsResult<T> {
+  const raw = error.code || 'E_UNKNOWN';
   return {
     ok: false,
     v: null,
     data: null,
     error: {
-      code: error.code || 'E_UNKNOWN',
+      code: AGENT_ERROR_CODES[raw] ?? raw,
       message: error.message,
       details: stringifyUnknown(error.fields),
     },

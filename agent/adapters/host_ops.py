@@ -18,7 +18,7 @@
   - ``onboard``（读）：``{peerId?, host?, port?, user?}`` 返回 ``installCommand`` /
     ``uninstallCommand`` / ``publicKey`` / ``hubWgIp`` / ``scriptVersion`` /
     ``expectedVersion``；接入命令内联 gzip+base64 脚本 + 受限 authorized_keys，不依赖下载。
-  - ``call``（**写**，sync）：``{target: "self" | "<peerId>", verb, params}``；self 直接跑
+  - ``call``（sync，读写按 verb）：``{target: "self" | "<peerId>", verb, params}``；self 直接跑
     本地脚本，peer 用固定 SSH 参数（``-i/-p/BatchMode/IdentitiesOnly/
     StrictHostKeyChecking/UserKnownHostsFile/ConnectTimeout=4/ServerAlive*/ -T``），
     参数 JSON 走 stdin、整体 6 秒；错误也返回 HTTP 200 的 ``{ok:false,error:{code,message}}``，
@@ -57,11 +57,13 @@ from khc.util import (
 )
 
 APP_NAME = "host-ops"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DATA_DIRNAME = "host-ops"
 KEY_FILENAME = "id_ed25519"
 SCRIPT_FILENAME = "khc-host"
 KNOWN_HOSTS_FILENAME = "known_hosts"
+#: 动词转发类动作：读写取决于 verb，由 ``is_write`` 钩子判定（见该类方法注释）。
+_CALL_ACTIONS = ("call", "call_task")
 
 DEFAULT_PORT = 22
 DEFAULT_USER = "khcops"
@@ -302,12 +304,12 @@ class HostOps(Adapter):
         "call": {
             "mode": "sync",
             "write": True,
-            "description": "调用 khc-host 白名单动词（self 本机 / peer 经 SSH；写动词见 verb）",
+            "description": "调用 khc-host 白名单动词（self 本机 / peer 经 SSH）；读写按 verb 判定，见 is_write",
         },
         "call_task": {
             "mode": "task",
             "write": True,
-            "description": "异步调用 khc-host 白名单动词（长耗时：fw.apply；参数与 call 相同）",
+            "description": "异步调用 khc-host 白名单动词（长耗时：fw.apply；参数与 call 相同）；读写按 verb 判定",
         },
     }
 
@@ -1113,6 +1115,34 @@ class HostOps(Adapter):
             f"{peer['user']}@{peer['host']}",
             verb,
         ]
+
+    def is_write(self, action: str, body: Mapping[str, Any], meta: Mapping[str, Any]) -> bool:
+        """``call`` / ``call_task`` 按**动词**区分读写，而不是整条动作一律算写。
+
+        缺陷背景（2026-11-16）：``call`` 在 ``actions`` 里标 ``write: True``，适配器又没
+        实现本钩子，于是内核把 ``svc.list`` / ``snapshot`` 这类只读动词也当写动作，去抢
+        节点级写锁。写锁是 ``acquire(blocking=False)``，页面同时发起多个只读请求时后到
+        的直接 409 ``busy``；面板没有 ``busy`` 文案，只显示「操作失败，请稍后重试」。
+        前端为绕开它，在四处写了「读动词也串行」的注释。
+
+        判定用**只读白名单**：``PUBLIC_VERBS`` 内且不属于 ``WRITE_VERBS`` 才算读。未知动词
+        也按写处理（它本来会被 ``_dispatch_call`` 以 ``E_BAD_REQUEST`` 拒掉，多锁一次无害，
+        但绝不能因为不认识就放它绕过写锁）。参数畸形同理，与内核 ``_is_write`` 的保守口径一致。
+        """
+
+        if not bool(meta.get("write")):
+            return False
+        if action not in _CALL_ACTIONS:
+            return True
+        try:
+            params = action_params(body)
+            verb = _text(params.get("verb"))
+            if not verb:
+                return True
+            module = _khc_host_module()
+            return verb not in module.PUBLIC_VERBS or verb in module.WRITE_VERBS
+        except Exception:  # noqa: BLE001 - 参数畸形时保守按写处理
+            return True
 
     def action_call(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         """同步调用：读动作 + 短写动作（version/keys.* 等）。
