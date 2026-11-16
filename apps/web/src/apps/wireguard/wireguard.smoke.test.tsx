@@ -469,7 +469,8 @@ describe('WireGuard 页', () => {
     if (!confirm) throw new Error('missing egress warning');
 
     // 文案必须是确定语气（实测确认会断，不是「可能」）
-    expect(within(confirm).getByText(/公网 SSH 会立即断开/)).toBeTruthy();
+    // 文案按真机实测修订：已建立会话不会立刻掉，但断了无法重连（2026-11-16）
+    expect(within(confirm).getByText(/断开后无法重连/)).toBeTruthy();
     // 没勾选时确认按钮不可用
     const confirmButton = within(confirm).getByRole('button', { name: '仍然保存' });
     expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
