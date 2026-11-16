@@ -1,0 +1,38 @@
+[
+  {
+    "verb": "svc.list",
+    "execMs": 5.3,
+    "httpMs": 104.8,
+    "transportMs": 99.5
+  },
+  {
+    "verb": "processes",
+    "execMs": 518.7,
+    "httpMs": 603.3,
+    "transportMs": 84.7
+  },
+  {
+    "verb": "fw.show",
+    "execMs": 8.1,
+    "httpMs": 92.2,
+    "transportMs": 84.1
+  },
+  {
+    "verb": "keys.list",
+    "execMs": 0.3,
+    "httpMs": 99.6,
+    "transportMs": 99.3
+  },
+  {
+    "verb": "cron.list",
+    "execMs": 0.1,
+    "httpMs": 97.9,
+    "transportMs": 97.8
+  },
+  {
+    "verb": "logs.errors",
+    "execMs": 24.4,
+    "httpMs": 108.0,
+    "transportMs": 83.6
+  }
+]
