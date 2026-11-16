@@ -24,7 +24,7 @@ import { nodeToken, requireNode } from './helpers';
 import { resolveSecretRefs } from '../lib/secret-refs';
 import { assertSecureChannelForSecrets } from '../lib/secure-channel';
 import { redactAgentEnvelope } from '../lib/redact';
-import { resolveManifestParams } from '../lib/app-manifests';
+import { manifestAuditDetail, resolveManifestParams } from '../lib/app-manifests';
 import { throwAgentError } from './nodes';
 
 /** 内置动作 + 适配器自定义动作（如 client_config / rotate_peer） */
@@ -211,6 +211,7 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
     // R1：带 manifestId 的动作，从 D1 读出脚本正文附上；浏览器直传正文会被拒绝。
     // 按字段做通用注入，路由不认识任何应用名。
     const resolvedParams = (await resolveSecretRefs(deps, body.params)) as Record<string, unknown>;
+    const actionParams = await resolveManifestParams(deps, resolvedParams);
     const payload = {
       config: (await resolveSecretRefs(deps, record?.config ?? {})) as Record<string, unknown>,
       expectRev: record?.rev ?? 0,
@@ -218,7 +219,7 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       // 清除 appliedRev 基线，让节点重建/恢复后的低 rev 重新下发不再 409。
       // 旧 Agent（0.1.12）忽略未知字段，不受影响。
       ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
-      params: await resolveManifestParams(deps, resolvedParams),
+      params: actionParams,
       idempotencyKey,
     };
 
@@ -276,6 +277,18 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
           ok: envelope.ok,
           error: envelope.error?.code ?? null,
         },
+      });
+    }
+
+    // 应用脚本动作：按字段识别（manifestId），记下运行身份，root 安装因此可追溯。
+    const manifestAudit = manifestAuditDetail(actionParams);
+    if (manifestAudit && envelope.ok) {
+      await deps.audit.log({
+        actor: c.get('user').name,
+        nodeId: node.id,
+        app,
+        action: `${app}.${action}`,
+        detail: manifestAudit,
       });
     }
 

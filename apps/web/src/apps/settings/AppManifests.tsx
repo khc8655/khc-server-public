@@ -44,7 +44,7 @@ interface ManifestForm {
 const EMPTY_DEFINITION = `{
   "name": "",
   "version": "0.1.0",
-  "runtime": { "mode": "shared", "linger": true },
+  "runtime": { "mode": "create", "linger": true },
   "params": [],
   "scripts": { "install": "#!/usr/bin/env bash\\necho KHC_RESULT={}", "uninstall": "#!/usr/bin/env bash\\nexit 0" },
   "sha256": { "install": "", "uninstall": "" },
@@ -142,11 +142,11 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
     {
       key: 'user',
       type: 'text',
-      header: '运行用户',
+      header: '默认运行身份',
       value: (item) =>
-        item.manifest.runtime.mode === 'create'
-          ? (item.manifest.runtime.user ?? '安装时填写')
-          : '默认用户',
+        item.manifest.runtime.mode === 'root'
+          ? 'root'
+          : (item.manifest.runtime.user ?? '新建用户（安装时填写）'),
     },
     {
       key: 'state',

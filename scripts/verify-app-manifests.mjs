@@ -43,7 +43,7 @@ const MANIFEST_KEYS = ['name', 'version', 'runtime', 'params', 'scripts', 'sha25
 const RUNTIME_KEYS = ['mode', 'user', 'linger'];
 const PARAM_KEYS = ['key', 'type', 'label', 'default', 'min', 'max', 'maxLength', 'pattern', 'secret'];
 const PARAM_TYPES = ['string', 'integer', 'boolean'];
-const RUNTIME_MODES = ['shared', 'create'];
+const RUNTIME_MODES = ['root', 'create'];
 
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
 const ID_RE = /^[a-z][a-z0-9-]*$/;
