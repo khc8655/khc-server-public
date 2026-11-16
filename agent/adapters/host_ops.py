@@ -46,7 +46,7 @@ import sys
 from typing import Any, Mapping, Optional
 
 from khc import Adapter, Ctx, File, action_params
-from khc.adapters import validate_config
+from khc.adapters import RunResult, validate_config
 from khc.util import (
     CommandFailed,
     ValidationFailed,
@@ -100,6 +100,69 @@ UNINSTALL_SNIPPETS = (
 PEER_SAFE_WRITE_VERBS = frozenset({"svc.restart"})
 
 
+def _should_fallback(interpreted: Mapping[str, Any]) -> bool:
+    """进程内执行失败时，是否值得改用子进程重试一次。
+
+    **只有「环境类」失败才回退**：进程内跑脚本会受 Agent 沙箱限制（例如某个动词要写的
+    路径不在 ``ReadWritePaths`` 里），而子进程走 sudo、权限模型不同。这类失败换条路径
+    可能就好了。
+
+    **业务类错误一律不回退**：参数非法、单元受保护、服务不存在这些，子进程会给出
+    一模一样的答案，再跑一次只是把耗时翻倍，还会让审计里出现两条记录。
+    """
+
+    error = interpreted.get("error")
+    if not isinstance(error, Mapping):
+        return False
+    code = str(error.get("code") or "")
+    # 这几类是「本进程干不了」，不是「这件事做不成」
+    return code in {
+        "E_NO_PRIV",
+        "E_UNSUPPORTED",
+        "E_SCRIPT_MISSING",
+        "E_IO",
+        "E_PERMISSION",
+    }
+
+
+def _call_host_script_in_process(
+    ctx: Ctx,
+    verb: str,
+    payload: str,
+    state_dir: str,
+) -> Any:
+    """在 Agent 进程内直接执行 khc-host 动词，不起子进程（2026-11-16 U4）。
+
+    **为什么**：实测每次 ``python3 khc-host <verb>`` 要 83–185 ms，其中 Python 启动
+    只占 12–23 ms，其余是加载 124 KB 脚本与它的 import。而模块已在 Agent 内缓存时，
+    ``main()`` 只要 0.035 ms。所以 self 路径改进程内调用，Peer 仍走 SSH（那是另一台机器，
+    无法进程内）。
+
+    **返回值刻意构造成 ``RunResult``**：``_interpret_call`` 从 ``result.stdout`` 解析 JSON，
+    这样下游（版本校验、错误映射、审计）一行都不用改，两条路径行为完全一致。
+
+    **状态目录必须显式覆盖**：``khc_host.STATE_DIR`` 在 import 时读环境变量后固化，
+    而 Agent 沙箱里 ``/etc`` 只读。若不覆盖，写操作会尝试写 ``/etc/khc-host`` 而失败。
+    """
+    if _INPROC_EXECUTOR is not None:
+        return _INPROC_EXECUTOR(verb, payload, state_dir)
+    module = _khc_host_module()
+    # 每次调用前对齐运行期全局：模块是长驻的，不能假设它的状态还是上次的样子。
+    module.STATE_DIR = state_dir
+    module.PROC_ROOT = "/proc"
+    try:
+        payload_obj = module.main([verb], payload)
+    except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
+        return RunResult(
+            cmd=["khc-host", verb],
+            rc=1,
+            stdout="",
+            stderr=f"{type(exc).__name__}: {exc}",
+        )
+    text = module.serialize(payload_obj)
+    return RunResult(cmd=["khc-host", verb], rc=0, stdout=text + "\n", stderr="")
+
+
 def peer_allowed_verbs(module: Any) -> frozenset[str]:
     """Peer 可用动词集合：只读查询动词 + svc.restart；其余写动词一律拒绝。"""
 
@@ -111,6 +174,9 @@ def peer_allowed_verbs(module: Any) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 _script_module = None
+# 测试注入：进程内执行 khc-host 的入口。为 None 时走真实模块。
+# 与 khc_host 的 SLEEP/RUNNER 同类做法 —— 让测试能控制这一层而不必真的起解释器。
+_INPROC_EXECUTOR: Any = None
 
 
 def _khc_host_module():
@@ -1208,6 +1274,19 @@ class HostOps(Adapter):
                 return self._err("E_SCRIPT_MISSING", exc.message, target=target, verb=verb, write=write, audit=audit)
             # hub self 在 agent systemd 沙箱内运行（/etc 只读），khc-host 的可写
             # 状态目录指到 agent 数据目录；peer 形态不经此处（脚本走 sudo，无沙箱）。
+            # 进程内执行（U4）：每次起子进程要 83–185ms，而模块已加载时只要 0.035ms。
+            # 失败时回退到子进程，保证「进程内被沙箱限制了」也能工作 —— 代价是那一次慢，
+            # 但正确性优先。
+            try:
+                result = _call_host_script_in_process(
+                    ctx, verb, payload, self.self_state_dir(ctx)
+                )
+                interpreted = self._interpret_call(result, target, verb, write, audit, started)
+                # 进程内执行失败（脚本内部报错）时同样回退，避免两条路径的错误处理不一致。
+                if interpreted.get("ok") or not _should_fallback(interpreted):
+                    return interpreted
+            except Exception:  # noqa: BLE001 - 任何进程内异常都回退
+                pass
             result = ctx.run(
                 [sys.executable, self.script_path(ctx), verb],
                 input=payload,
