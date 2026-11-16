@@ -93,6 +93,9 @@ class AppCatalog(Adapter):
                 action=action,
                 values=dict(values),
                 instance=params.get("instance") if isinstance(params.get("instance"), str) else None,
+                runtime_mode=(
+                    params.get("runtimeMode") if isinstance(params.get("runtimeMode"), str) else None
+                ),
                 runtime_user=(
                     params.get("runtimeUser") if isinstance(params.get("runtimeUser"), str) else None
                 ),

@@ -1412,16 +1412,22 @@ export const appManifestSha256Schema = z
   .strict();
 export type AppManifestSha256 = z.infer<typeof appManifestSha256Schema>;
 
-/** 运行身份：脚本与该用户起的进程都不是 root。 */
 /**
- * 运行身份策略：
- * - shared：用节点预置的默认用户（nobody），不建账号、不需要凭据；
- * - create：安装时按填写的用户名/密码在节点上建系统账号，凭据只在安装请求里走一趟。
- * manifest 只存策略，不存密码。
+ * 运行身份，安装时二选一：
+ * - root：脚本以 root 执行（不签名，靠审计兜底，主人 2026-11-16 定案）；
+ * - create：安装时按填写的用户名/密码建应用账号，脚本以该用户执行。
+ * 旧值 shared 按 create 读入，绝不升级成 root。
+ * manifest 里的 mode 只是安装表单的默认选项；manifest 不存密码。
  */
+export const appRuntimeModeSchema = z.preprocess(
+  (value) => (value === 'shared' ? 'create' : value),
+  z.enum(['root', 'create']),
+);
+export type AppRuntimeMode = 'root' | 'create';
+
 export const appManifestRuntimeSchema = z
   .object({
-    mode: z.enum(['shared', 'create']).default('shared'),
+    mode: appRuntimeModeSchema.default('create'),
     user: z
       .string()
       .trim()
@@ -1522,7 +1528,9 @@ export const manifestActionParamsSchema = z
       .max(32)
       .regex(/^[a-z][a-z0-9-]*$/, '实例名必须是小写 slug')
       .optional(),
-    /** 仅 runtime.mode === 'create' 时填写；绝不落 D1、不进审计与日志。 */
+    /** 安装时选的运行身份；不填用 manifest.runtime.mode。 */
+    runtimeMode: appRuntimeModeSchema.optional(),
+    /** 仅 create 时填写；用户名进审计，密码绝不落 D1、不进审计与日志。 */
     runtimeUser: z
       .string()
       .trim()

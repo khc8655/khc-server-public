@@ -1052,10 +1052,15 @@ export const zh = {
     accessTitle: '访问信息',
     secretHelp: '密码类参数只用于安装，不会保存到 D1，也不会写入日志。',
     runtimeLabel: '运行身份',
-    runtimeShared: '使用默认用户（不建账号）',
+    runtimeRoot: '以 root 运行',
     runtimeCreate: '新建应用用户',
-    runtimeSharedHelp: '脚本以节点预置的默认用户运行，不需要填写任何凭据。',
-    runtimeCreateHelp: '在节点上创建独立系统账号；密码只在安装时使用，不保存到控制面。',
+    runtimeRootShort: 'root',
+    runtimeCreateShort: '新建用户 {user}',
+    runtimeRootWarnTitle: '脚本将以 root 执行',
+    runtimeRootWarnDesc:
+      '脚本可以改动节点上的任何文件和服务。应用脚本没有签名，请确认脚本内容可信；本次安装会写入审计日志。',
+    runtimeCreateHelp:
+      '在节点上创建独立的应用账号，脚本以该账号运行。只能新建或沿用面板建过的账号，不能填 root 或已有的登录账号；密码只在安装时使用，不保存到控制面。',
     runtimeUserLabel: '用户名',
     runtimePasswordLabel: '密码',
     runtimeUserRequired: '请填写用户名',

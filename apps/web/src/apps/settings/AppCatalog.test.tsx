@@ -49,7 +49,7 @@ function stubApi() {
               manifest: {
                 name: '示例服务（假服务）',
                 version: '1.0.0',
-                runtime: { mode: 'shared', linger: true },
+                runtime: { mode: 'root', linger: true },
                 params: [
                   {
                     key: 'port',
@@ -211,8 +211,35 @@ describe('应用目录（R1 运行时清单）', () => {
         .find(([url]) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install')?.[1]
         ?.body as string,
     );
+    expect(sent.params.runtimeMode).toBe('create');
     expect(sent.params.runtimeUser).toBe('khc-app-new');
     expect(sent.params.runtimePassword).toBe('s3cret');
+  });
+
+  it('运行身份选「以 root 运行」时显示警示，提交 runtimeMode=root 且不带凭据', async () => {
+    renderCatalog();
+    const names = await screen.findAllByText(/示例服务/);
+    await userEvent.click(names.at(-1)!);
+    const select = (await screen.findByLabelText('运行身份')) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['create', 'root']);
+    await userEvent.selectOptions(select, 'root');
+    expect(await screen.findByText('脚本将以 root 执行')).toBeTruthy();
+    expect(screen.queryByLabelText('密码')).toBeNull();
+
+    await userEvent.click(screen.getAllByRole('button', { name: '安装' }).at(-1)!);
+    await waitFor(() => {
+      expect(
+        requests.filter((url) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install').length,
+      ).toBe(1);
+    });
+    const sent = JSON.parse(
+      (vi.mocked(fetch).mock.calls as Array<[string, RequestInit | undefined]>)
+        .find(([url]) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install')?.[1]
+        ?.body as string,
+    );
+    expect(sent.params.runtimeMode).toBe('root');
+    expect(sent.params.runtimeUser).toBeUndefined();
+    expect(sent.params.runtimePassword).toBeUndefined();
   });
 
   it('旧 Agent 返回 recipe 清单错误时显示升级引导而不是原始报错', async () => {

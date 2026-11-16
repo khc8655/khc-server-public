@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { TaskResponse } from '@khc/contracts';
 import { appManifestsQueryOptions } from '../../data/appManifests';
-import type { AppManifest } from '@khc/contracts';
+import type { AppManifest, AppRuntimeMode } from '@khc/contracts';
 import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import { hubsQueryOptions } from '../../data/queries';
 import { action } from '../../registry/actions';
@@ -58,8 +58,16 @@ interface CatalogRecipe {
   requiresRoot: boolean;
   params: RecipeParam[];
   access: unknown;
-  runtimeMode: 'shared' | 'create';
+  runtimeMode: AppRuntimeMode;
   runtimeUser?: string;
+}
+
+/** 列表与卡片里的运行身份文案；旧值 shared 按「新建用户」显示。 */
+export function runtimeLabel(runtime: AppManifest['manifest']['runtime']): string {
+  if (runtime.mode === 'root') return zh.catalog.runtimeRootShort;
+  return runtime.user
+    ? fmt(zh.catalog.runtimeCreateShort, { user: runtime.user })
+    : zh.catalog.runtimeCreate;
 }
 
 interface AccessItem {
@@ -81,9 +89,9 @@ function toCatalogRecipe(item: AppManifest): CatalogRecipe {
     id: item.id,
     name: item.manifest.name,
     version: item.manifest.version,
-    description: `运行用户 ${item.manifest.runtime.user}`,
+    description: runtimeLabel(item.manifest.runtime),
     requiresRoot: false,
-    runtimeMode: item.manifest.runtime.mode,
+    runtimeMode: item.manifest.runtime.mode === 'root' ? 'root' : 'create',
     runtimeUser: item.manifest.runtime.user,
     params: item.manifest.params.map((param) => ({
       key: param.key,
@@ -189,7 +197,7 @@ export function AppCatalog() {
   const [target, setTarget] = useState<CatalogRecipe | null>(null);
   const [nodeId, setNodeId] = useState('');
   const [values, setValues] = useState<Record<string, unknown>>({});
-  const [runtimeMode, setRuntimeMode] = useState<'shared' | 'create'>('shared');
+  const [runtimeMode, setRuntimeMode] = useState<AppRuntimeMode>('create');
   const [runtimeUser, setRuntimeUser] = useState('');
   const [runtimePassword, setRuntimePassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -264,6 +272,7 @@ export function AppCatalog() {
       const envelope = await runAppAction(nodeId, 'app-catalog', 'recipe_install', {
         manifestId: target.id,
         values,
+        runtimeMode,
         ...(runtimeMode === 'create'
           ? { runtimeUser: runtimeUser.trim(), runtimePassword }
           : {}),
@@ -488,23 +497,26 @@ export function AppCatalog() {
             <Field
               id="catalog-runtime-mode"
               label={zh.catalog.runtimeLabel}
-              help={
-                runtimeMode === 'create'
-                  ? zh.catalog.runtimeCreateHelp
-                  : zh.catalog.runtimeSharedHelp
-              }
+              help={runtimeMode === 'create' ? zh.catalog.runtimeCreateHelp : undefined}
             >
               <Select
                 id="catalog-runtime-mode"
                 value={runtimeMode}
                 options={[
-                  { value: 'shared', label: zh.catalog.runtimeShared },
                   { value: 'create', label: zh.catalog.runtimeCreate },
+                  { value: 'root', label: zh.catalog.runtimeRoot },
                 ]}
-                onChange={(value) => setRuntimeMode(value as 'shared' | 'create')}
+                onChange={(value) => setRuntimeMode(value as AppRuntimeMode)}
                 ariaLabel={zh.catalog.runtimeLabel}
               />
             </Field>
+            {runtimeMode === 'root' ? (
+              <Banner
+                tone="warn"
+                title={zh.catalog.runtimeRootWarnTitle}
+                description={zh.catalog.runtimeRootWarnDesc}
+              />
+            ) : null}
 
             {runtimeMode === 'create' ? (
               <>

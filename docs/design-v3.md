@@ -295,7 +295,8 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 
 2. **recipe 引擎**（`agent/khc/recipes.py` + `agent/adapters/app_catalog.py`）
    - 内置 recipe 清单 `agent/recipes/catalog.json` 随 Agent 包发布，旧通道只读保留；面板「应用管理」里的脚本定义存 D1，安装时由 Worker 按 `manifestId` 读出正文随请求下发，浏览器不能直传正文。
-   - 下发的脚本由 `agent/khc/app_manifests.py` 校验 sha256、`writes` 只允许 `~/` 家目录相对路径，并以定义里 `runtime.user` 指定的普通用户执行（`runuser -u`，非 root）；参数仍走 `KHC_PARAM_*` 环境变量。
+   - 下发的脚本由 `agent/khc/app_manifests.py` 校验 sha256、`writes` 只允许 `~/` 家目录相对路径；参数仍走 `KHC_PARAM_*` 环境变量。
+   - 运行身份在安装时二选一（参数 `runtimeMode`，定义里的 `runtime.mode` 只是默认选项）：`root` 经 `systemd-run` 一次性单元在 Agent 沙箱外以 root 执行，参数经 0600 环境文件传入；`create` 新建或沿用面板建过的应用用户（家目录在 `/var/lib/khc-apps/home/`、nologin、非管理员组），以 `runuser -u` 执行。安装身份记在 Agent 数据目录，卸载沿用。
    - 参数经 `KHC_PARAM_<KEY>` 环境变量传入；未知参数/类型/范围在 Agent 侧校验。
    - 脚本最后输出 `KHC_RESULT={"access":[...],"cards":[...]}`；结果写入 `<data>/recipes/results/<id>.<action>.json`，权限 0600，密码类参数不进任务日志。
    - 清单 `writes` 必须在白名单根（`/etc/khc-recipes`、`/opt/khc-recipes`、`/var/lib/khc-recipes`、`/etc/systemd/system/khc-*`）下，且目标/父级不能是符号链接。

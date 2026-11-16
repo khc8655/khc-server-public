@@ -5,10 +5,12 @@ Worker 安装时把 D1 里的应用定义随请求下发，本模块负责：
 - 校验脚本正文与 ``sha256`` 一致（节点侧第二道闸，Worker 已校过一次）；
 - 校验 ``runtime.user`` / ``writes`` / 参数，拒绝控制字符与路径逃逸；
 - 把脚本落到受控目录，权限 0755，供降权用户读取；
-- 运行身份由安装时配置决定：``shared`` 用默认用户 ``nobody``；``create``
-  用安装时给的用户名/密码自动建系统账号（systemd-run 跳出沙箱），
-  密码只经 chpasswd 的 stdin，不落 D1/日志/命令行；
-- 用 ``runuser -u <user> -- bash <script>`` 执行，脚本进程**不是 root**；
+- 运行身份在安装时二选一：``root`` 经 systemd-run 一次性单元在沙箱外以 root
+  执行；``create`` 用安装时给的用户名/密码建应用账号（systemd-run 跳出沙箱），
+  密码只经 chpasswd 的 stdin，不落 D1/日志/命令行，再以
+  ``runuser -u <user> -- bash <script>`` 降权执行；
+- ``create`` 只接受面板自己建的账号（家目录在受控根、nologin、非管理员组），
+  已有的 root、sudo/wheel 账号一律拒绝，避免「新建用户」悄悄变成 root；
 - 参数经 ``KHC_PARAM_*`` 环境变量传入，不拼接命令行、不进日志；
 - 结果沿用 ``KHC_RESULT=`` 约定。
 
@@ -18,11 +20,14 @@ Worker 安装时把 D1 里的应用定义随请求下发，本模块负责：
 
 from __future__ import annotations
 
+import grp
 import hashlib
 import json
 import os
 import pwd
 import re
+import shlex
+from secrets import token_hex
 from typing import Any, Mapping, Optional
 
 from .adapters import Ctx
@@ -30,6 +35,7 @@ from .util import (
     KhcError,
     atomic_write,
     ensure_dir,
+    load_json,
     save_json,
     tail,
 )
@@ -44,11 +50,20 @@ MAX_SCRIPT_BYTES = 64 * 1024
 #: 每个应用目录 chown 给 runtime.user。ProtectSystem=full 不拦 /var/lib
 #: 下自有目录，实测属主正确时无需额外 ReadWritePaths 即可写。
 APP_ROOT = "/var/lib/khc-apps"
-#: 不建用户时的默认运行身份：系统自带、非 root、零预建。
-DEFAULT_APP_USER = "nobody"
+#: 安装时可选的运行身份。
+RUNTIME_MODES = ("root", "create")
+#: 旧定义里的 shared（nobody）按 create 处理，绝不升级成 root。
+LEGACY_MODES = {"shared": "create"}
+#: create 模式只接受这些 shell 的账号（面板建号固定用 nologin）。
+NOLOGIN_SHELLS = ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false")
+#: 这些组的成员能提权，不能当应用用户。
+ADMIN_GROUPS = ("root", "sudo", "wheel", "admin")
 #: 建账号要写 /etc/passwd，Agent unit 的 ProtectSystem=full 下 /etc 只读，
 #: 故照 khc.pkg 的做法用 systemd-run 一次性单元跳出沙箱。
 SYSTEMD_RUN_PREFIX = ["systemd-run", "--wait", "--pipe", "--collect"]
+#: root 模式的包装：从 0600 环境文件读参数后立即删除，再执行脚本。
+#: 参数不进命令行（ps 与 ctx.run 日志都看不到）。
+ROOT_WRAPPER = '. "$1"; rm -f -- "$1"; exec /bin/bash "$2"'
 USER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -79,11 +94,9 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
 
     raw = _require_mapping(manifest, "manifest")
     runtime = _require_mapping(raw.get("runtime"), "runtime")
-    mode = runtime.get("mode", "shared")
-    if mode not in ("shared", "create"):
-        raise ManifestError("runtime.mode 只支持 shared / create")
+    mode = normalize_mode(runtime.get("mode", "create"))
     declared_user = runtime.get("user")
-    if mode == "create" and declared_user is not None:
+    if declared_user is not None:
         if not isinstance(declared_user, str) or not USER_RE.match(declared_user):
             raise ManifestError("runtime.user 非法", details={"field": "runtime.user"})
     if runtime.get("linger") not in (True, False, None):
@@ -143,6 +156,14 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
     }
 
 
+def normalize_mode(value: Any) -> str:
+    """把运行身份规整为 root / create；旧值 shared 视为 create。"""
+    mode = LEGACY_MODES.get(value, value) if isinstance(value, str) else value
+    if mode not in RUNTIME_MODES:
+        raise ManifestError("运行身份只支持 root / create", details={"field": "runtimeMode"})
+    return mode
+
+
 def _env_key(key: str) -> str:
     return "KHC_PARAM_" + re.sub(r"[^A-Za-z0-9]", "_", key).upper()
 
@@ -200,6 +221,14 @@ def _script_dir(manifest_id: str, instance: str) -> str:
     return os.path.join(APP_ROOT, manifest_id, instance)
 
 
+def _record_path(ctx: Ctx, manifest_id: str, instance: str) -> str:
+    """安装身份记录放在 Agent 自己的数据目录（root 0700），应用用户改不了。
+
+    不能放进脚本目录：那里属主是应用用户，改成 mode=root 就能在卸载时提权。
+    """
+    return os.path.join(ctx.paths.data_dir, "app-manifests", f"{manifest_id}--{instance}.json")
+
+
 def _account(user: str):
     """解析应用用户；不存在即中止，绝不静默退回 root。"""
     try:
@@ -208,40 +237,78 @@ def _account(user: str):
         raise ManifestError(f"运行用户 {user} 不存在，请先在节点上创建")
 
 
+def _assert_app_account(entry: Any, user: str) -> None:
+    """已存在的账号必须是面板建的应用用户，否则拒绝沿用。
+
+    判定：非 uid/gid 0、家目录在 ``APP_ROOT/home/`` 下、shell 为 nologin、
+    不在任何管理员组。root、ubuntu 这类登录/提权账号都过不了。
+    """
+    if entry.pw_uid == 0 or entry.pw_gid == 0:
+        raise ManifestError(
+            "不能把 root 当作新建的应用用户；需要 root 请选择「以 root 运行」",
+            details={"field": "runtimeUser"},
+        )
+    home_root = os.path.join(APP_ROOT, "home") + os.sep
+    if not str(entry.pw_dir).startswith(home_root) or entry.pw_shell not in NOLOGIN_SHELLS:
+        raise ManifestError(
+            f"用户 {user} 已存在，且不是面板创建的应用用户，请换一个用户名",
+            details={"field": "runtimeUser"},
+        )
+    for group in grp.getgrall():
+        if group.gr_name in ADMIN_GROUPS and (
+            user in group.gr_mem or group.gr_gid == entry.pw_gid
+        ):
+            raise ManifestError(
+                f"用户 {user} 属于管理员组 {group.gr_name}，不能当作应用用户",
+                details={"field": "runtimeUser"},
+            )
+
+
 def resolve_runtime_user(
     ctx: Ctx,
     checked: Mapping[str, Any],
     *,
+    mode: Optional[str] = None,
     runtime_user: Optional[str] = None,
     runtime_password: Optional[str] = None,
 ) -> str:
-    """按应用的运行身份策略决定最终用户，必要时建账号。
+    """按安装时选的运行身份决定最终用户，必要时建账号。
 
-    - shared：用 DEFAULT_APP_USER，忽略任何凭据；
-    - create：安装时给的用户名/密码，账号不存在则用一次性单元建出来并设密码。
+    - root：脚本以 root 执行，不接受任何凭据；
+    - create：安装时给的用户名/密码，账号不存在则用一次性单元建出来并设密码；
+      已存在则必须是面板建的应用用户（见 ``_assert_app_account``）。
       密码只经 stdin 传给 chpasswd，不出现在命令行、日志、D1 或审计里。
     """
-    if checked["mode"] == "shared":
+    mode = normalize_mode(mode or checked["mode"])
+    if mode == "root":
         if runtime_user or runtime_password:
-            raise ManifestError("该应用使用默认用户，不接受用户名和密码")
-        return DEFAULT_APP_USER
+            raise ManifestError("以 root 运行时不接受用户名和密码")
+        return "root"
 
     user = runtime_user or checked.get("user")
     if not isinstance(user, str) or not USER_RE.match(user):
         raise ManifestError("缺少或非法的应用用户名", details={"field": "runtimeUser"})
-    if not isinstance(runtime_password, str) or not runtime_password:
-        raise ManifestError("新建用户必须提供密码", details={"field": "runtimePassword"})
-    if CONTROL_CHARS_RE.search(runtime_password):
+    if user == "root":
+        raise ManifestError(
+            "不能把 root 当作新建的应用用户；需要 root 请选择「以 root 运行」",
+            details={"field": "runtimeUser"},
+        )
+    if isinstance(runtime_password, str) and CONTROL_CHARS_RE.search(runtime_password):
         raise ManifestError("密码含控制字符")
 
     try:
-        pwd.getpwnam(user)
-        # 账号已存在：不重复建、不改密码，沿用现有账号（幂等）。
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        entry = None
+    if entry is not None:
+        # 账号已存在：先确认是面板建的，再沿用（幂等，不改密码，因此不需要密码）。
+        _assert_app_account(entry, user)
         if checked.get("linger"):
             _enable_linger(ctx, user)
         return user
-    except KeyError:
-        pass
+
+    if not isinstance(runtime_password, str) or not runtime_password:
+        raise ManifestError("新建用户必须提供密码", details={"field": "runtimePassword"})
 
     # useradd 要写 /etc/passwd，必须在沙箱外执行。全程 argv 数组，不拼 shell。
     # 家目录必须真实存在且可写：systemd user manager 只搜 $HOME/.config/systemd/user，
@@ -309,6 +376,46 @@ def _write_paths(user: str, instance: str, writes: list[str]) -> str:
     return "\n".join(os.path.join(base, item[2:]) for item in writes)
 
 
+def _run_as_root(
+    ctx: Ctx, directory: str, action: str, script_path: str, env: Mapping[str, str]
+) -> Any:
+    """root 模式：经 systemd-run 一次性单元在 Agent 沙箱外执行。
+
+    沙箱内 ``ProtectSystem=full`` 让 /etc、/usr 只读，root 脚本在里面装不了东西。
+    一次性单元不继承环境，参数写进 0600 环境文件，由包装命令读入后立即删除；
+    客户端超时比 RuntimeMaxSec 长 10 秒，rc=124 时显式停单元兜底。
+    """
+    env_file = os.path.join(directory, f".{action}.env")
+    atomic_write(
+        env_file,
+        "".join(f"export {key}={shlex.quote(value)}\n" for key, value in env.items()),
+        mode=0o600,
+    )
+    unit = f"khc-app-{token_hex(4)}"
+    cmd = SYSTEMD_RUN_PREFIX + [
+        "--quiet",
+        f"--unit={unit}",
+        f"--property=RuntimeMaxSec={int(SCRIPT_TIMEOUT)}",
+        f"--working-directory={directory}",
+        "/bin/bash",
+        "-c",
+        ROOT_WRAPPER,
+        "khc-app",
+        env_file,
+        script_path,
+    ]
+    try:
+        result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT + 10)
+        if getattr(result, "rc", 0) == 124:
+            ctx.run(["systemctl", "stop", unit], check=False, timeout=15)
+        return result
+    finally:
+        try:
+            os.unlink(env_file)
+        except FileNotFoundError:
+            pass
+
+
 def _parse_result(stdout: str, result_file: str, ctx: Ctx) -> dict[str, Any]:
     for line in reversed(stdout.splitlines()):
         if line.startswith(RESULT_PREFIX):
@@ -342,10 +449,11 @@ def run_manifest(
     action: str,
     values: Any = None,
     instance: Optional[str] = None,
+    runtime_mode: Optional[str] = None,
     runtime_user: Optional[str] = None,
     runtime_password: Optional[str] = None,
 ) -> dict[str, Any]:
-    """校验 → 定运行身份（必要时建账号）→ 落盘 → 降权执行 → 回传结果。"""
+    """校验 → 定运行身份（必要时建账号）→ 落盘 → 执行 → 回传结果。"""
 
     if action not in ("install", "uninstall"):
         raise ManifestError("未知动作", details={"action": action})
@@ -362,8 +470,22 @@ def run_manifest(
     if runtime_password:
         secrets.append(runtime_password)
 
+    # 卸载未指定身份时沿用安装时的记录，避免用 manifest 默认值跑错身份。
+    record_path = _record_path(ctx, manifest_id, name)
+    if action == "uninstall" and not runtime_mode:
+        recorded = load_json(record_path, default=None)
+        if isinstance(recorded, Mapping) and recorded.get("mode") in RUNTIME_MODES:
+            runtime_mode = recorded["mode"]
+            if runtime_mode == "create" and not runtime_user:
+                runtime_user = recorded.get("user") if isinstance(recorded.get("user"), str) else None
+
+    mode = normalize_mode(runtime_mode or checked["mode"])
     user = resolve_runtime_user(
-        ctx, checked, runtime_user=runtime_user, runtime_password=runtime_password
+        ctx,
+        checked,
+        mode=mode,
+        runtime_user=runtime_user,
+        runtime_password=runtime_password,
     )
 
     directory = _script_dir(manifest_id, name)
@@ -391,11 +513,14 @@ def run_manifest(
     }
     env.update(env_values)
 
-    # runuser 不带 -l，保留调用方环境，KHC_PARAM_* 因此能完整传到脚本。
-    # 这样参数不出现在命令行里，也不会被 ctx.run 的日志记录。
-    cmd = ["runuser", "-u", user, "--", "bash", script_path]
-    ctx.log(f"manifest {manifest_id}/{name} {action} 开始（user={user}）")
-    result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
+    ctx.log(f"manifest {manifest_id}/{name} {action} 开始（mode={mode} user={user}）")
+    if mode == "root":
+        result = _run_as_root(ctx, directory, action, script_path, env)
+    else:
+        # runuser 不带 -l，保留调用方环境，KHC_PARAM_* 因此能完整传到脚本。
+        # 这样参数不出现在命令行里，也不会被 ctx.run 的日志记录。
+        cmd = ["runuser", "-u", user, "--", "bash", script_path]
+        result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
     stdout = _redact(result.stdout or "", secrets)
     stderr = _redact(result.stderr or "", secrets)
     if result.rc != 0:
@@ -408,6 +533,14 @@ def run_manifest(
     if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESULT_BYTES:
         raise ManifestError("KHC_RESULT 超过 64KB")
     save_json(result_file, {"manifestId": manifest_id, "instance": name, "action": action}, mode=0o600)
+    if action == "install":
+        ensure_dir(os.path.dirname(record_path), mode=0o700)
+        save_json(record_path, {"mode": mode, "user": user, "version": checked["version"]}, mode=0o600)
+    else:
+        try:
+            os.unlink(record_path)
+        except FileNotFoundError:
+            pass
     # access / cards 必须放在返回顶层：后台任务的 result 会原样透传给面板，
     # 前端读的是 task.result.access（见 AppCatalog.tsx 的 taskAccess）。
     # 脚本里写 KHC_RESULT={"access":[...]} 就靠这里显示成可点击的链接。
@@ -416,7 +549,7 @@ def run_manifest(
         "instance": name,
         "action": action,
         "user": user,
-        "mode": checked["mode"],
+        "mode": mode,
         "result": payload,
         "cards": [],
         "access": [],

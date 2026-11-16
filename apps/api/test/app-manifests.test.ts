@@ -11,7 +11,7 @@ function definition(overrides: Record<string, unknown> = {}): import('@khc/contr
   return {
     name: '测试应用',
     version: '0.1.0',
-    runtime: { mode: 'shared', linger: true },
+    runtime: { mode: 'root', linger: true },
     params: [{ key: 'port', type: 'integer', default: 3425 }],
     scripts: { install: INSTALL, uninstall: UNINSTALL },
     sha256: { install: sha(INSTALL), uninstall: sha(UNINSTALL) },
