@@ -41,7 +41,7 @@
 
 ## 3. 发版流程
 
-### 3.1 合并前（执行者）
+### 3.1 合并前（开发 PR）
 
 1. 按 §2 判定档位并 bump 版本；在 CHANGELOG 写版本段（格式见 `CONTRIBUTING.md`）。
 2. `./scripts/verify.sh` 全绿。
