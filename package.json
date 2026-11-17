@@ -1,8 +1,8 @@
 {
   "name": "khc-server",
   "private": true,
-  "version": "0.17.4",
-  "khcRelease": "2026-11-16",
+  "version": "0.17.5",
+  "khcRelease": "2026-11-17",
   "description": "KHC multi-node control plane: Cloudflare Workers + React + Python Node Agent + signed app modules",
   "type": "module",
   "packageManager": "pnpm@9.15.0",
