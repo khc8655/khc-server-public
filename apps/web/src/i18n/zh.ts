@@ -1089,6 +1089,8 @@ export const zh = {
     emptyTitle: '目录为空',
     emptyDesc: 'Agent 包中没有可用的 recipe。',
     loadError: '无法读取节点列表',
+    manifestsLoadFailed: '应用目录加载失败',
+    manifestsLoadFailedDesc: '读取应用清单失败，目录暂不可用；请重试，若持续失败请检查控制面日志或 D1 迁移是否已应用。',
     paramRequired: '请填写{label}',
     paramInteger: '{label}必须是整数',
     paramRange: '{label}需在 {min}–{max} 之间',
