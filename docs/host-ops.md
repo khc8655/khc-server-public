@@ -111,8 +111,9 @@ Peer 放行 `PUBLIC_VERBS` 中除 `WRITE_VERBS` 外的全部只读动词（含 `
 ### 4.1 进程只读
 
 - 生产路径：执行一次 `ps -eo pid,ppid,%cpu,rss,uid,etimes --sort=-cpu|mem` 取元数据，
-  对入选的 Top N 行读取 `/proc/<pid>/comm` 与 `cmdline`；不逐 PID 全量读取 `/proc`
-  （fixture 测试走 `_collect_processes_proc`）。
+  对入选的 Top N 行读取 `/proc/<pid>/comm` 与 `cmdline`；采集窗口内已退出的进程（典型是
+  `ps` 自身）读不到这两者，直接丢弃，不返回名字与命令行都为空的条目；不逐 PID 全量读取
+  `/proc`（fixture 测试走 `_collect_processes_proc`）。
 - `cpu` 是同一请求内两次读取 `/proc/<pid>/stat` 的 `utime+stime` 求差，间隔 0.5 秒：
   `差值 / (CLK_TCK × 0.5) × 100`，100 表示单核跑满；窗口内新建或退出的进程按 0 计。
   两次采样之间用可注入的 `SLEEP`，测试不真的等待。

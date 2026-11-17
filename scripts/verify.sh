@@ -25,6 +25,7 @@ node scripts/check-release-consistency.mjs --repo
 echo "==> agent package retention"
 node scripts/prune-agent-packages.mjs --check
 echo "==> app catalog drift"
+node scripts/verify-app-catalog.mjs
 echo "==> app manifests"
 node scripts/verify-app-manifests.mjs
 echo "==> d1 migrations (local)"
@@ -32,7 +33,7 @@ echo "==> d1 migrations (local)"
 echo "==> installer lifecycle"
 ./scripts/install-lifecycle-test.sh
 echo "==> node script syntax"
-for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/docs-lint.mjs; do node --check "$f"; done
+for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/docs-lint.mjs scripts/verify-app-catalog.mjs; do node --check "$f"; done
 echo "==> docs lint"
 node scripts/docs-lint.mjs --strict
 echo "==> shell syntax"

@@ -504,6 +504,41 @@ class ScriptProcessesTests(ScriptTestBase):
         finally:
             HOST_SCRIPT.PROC_ROOT = saved
 
+    def test_collect_processes_ps_drops_exited_processes(self) -> None:
+        """采集窗口内退出的进程（典型是 ``ps -eo`` 自身）读不到 comm/cmdline，
+        不能在进程列表里留下一条 name/cmdline 都为空的幽灵行。"""
+
+        saved = HOST_SCRIPT.PROC_ROOT
+        HOST_SCRIPT.PROC_ROOT = "/proc"
+        try:
+            live = os.getpid()
+            ghost = 99999999
+
+            def read_text(path, *_args, **_kwargs):
+                return "demo\n" if str(live) in path else ""
+
+            def read_cmdline(pid, *_args, **_kwargs):
+                return "demo --flag" if pid == live else ""
+
+            with mock.patch.object(
+                HOST_SCRIPT,
+                "_run",
+                return_value=(0, f"{live} 1 2.0 1024 0 10\n{ghost} 1 0.0 0 0 0\n", ""),
+            ), mock.patch.object(
+                HOST_SCRIPT, "_sample_process_cpu", return_value={live: 99.9}
+            ), mock.patch.object(
+                HOST_SCRIPT, "_read_text", side_effect=read_text
+            ), mock.patch.object(
+                HOST_SCRIPT, "_read_cmdline", side_effect=read_cmdline
+            ):
+                rows = HOST_SCRIPT.collect_processes("cpu", 5)
+            # 已退出的 ghost 行被丢弃，只留下能读到名字/命令行的进程。
+            self.assertEqual([row["pid"] for row in rows], [live])
+            self.assertEqual(rows[0]["name"], "demo")
+            self.assertEqual(rows[0]["cmdline"], "demo --flag")
+        finally:
+            HOST_SCRIPT.PROC_ROOT = saved
+
     def test_processes_mem_sort_and_limit(self) -> None:
         write_proc(self.proc_root, 5001, comm="big", rss_pages=1024)
         write_proc(self.proc_root, 5002, comm="small", rss_pages=1)
@@ -3457,17 +3492,23 @@ class CleanupVerbTests(ScriptTestBase):
         self.assertIn("opt-khc", {item["item"] for item in again["data"]["skipped"]})
 
     def test_cleanup_mount_point_partial_failure_reported(self) -> None:
-        # 挂载点内容删不掉（无写权限）：明确上报 remaining，且不破坏其余清理项。
+        # 挂载点内容删不掉：明确上报 remaining，且不破坏其余清理项。
+        # 不用 chmod 造 EACCES —— root 无视目录写权限，测试会假绿；改为让
+        # opt-khc 下的 unlink 直接抛 EACCES，任何用户身份都能稳定复现。
         self._patch_busy_rmtree(self.opt_khc)
         os.makedirs(self.opt_khc, exist_ok=True)
         _write(os.path.join(self.opt_khc, "keep.txt"), "x\n")
         os.makedirs(self.etc_khc, exist_ok=True)
 
-        try:
-            os.chmod(self.opt_khc, 0o500)  # owner 无写权限 -> unlink 子项 EACCES
+        real_unlink = os.unlink
+
+        def deny_unlink(path, *args, **kwargs):
+            if os.path.dirname(str(path)) == self.opt_khc:
+                raise OSError(errno.EACCES, "Permission denied", path)
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch("os.unlink", side_effect=deny_unlink):
             result = self._run_cleanup()
-        finally:
-            os.chmod(self.opt_khc, 0o700)  # 恢复权限，保证 tmp 目录可清理
 
         self.assertTrue(result["ok"])
         remaining = {item["item"]: item["reason"] for item in result["data"]["remaining"]}
@@ -3681,19 +3722,27 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         self.assertNotIn(HOST_SCRIPT.STATUS_CPU_BASELINE_SECONDS, sleeps)
 
     def test_status_still_sleeps_without_processes(self) -> None:
-        """不带进程时 status 仍要自己等基线，否则 CPU% 恒为 null。"""
+        """不带进程时 status 仍要自己等基线，否则 CPU% 恒为 null。
+
+        用 mock 固定 ``_collect_ops_payload``（cpu 无基线）隔离真实采集：真实
+        `systemctl` 子进程在等待输出时会调用 ``time.sleep(0.001)`` 轮询，那条
+        sleep 会被同一 mock 记进来，导致断言失败（CI 无 systemd 时不触发）。
+        """
 
         sleeps: list[float] = []
 
         def fake_sleep(seconds):
             sleeps.append(seconds)
 
-        with mock.patch.object(time, "sleep", side_effect=fake_sleep):
+        with mock.patch.object(
+            HOST_SCRIPT, "_collect_ops_payload", return_value={"cpu": {"usagePercent": None}}
+        ), mock.patch.object(time, "sleep", side_effect=fake_sleep):
             HOST_SCRIPT.status_verb({}, [], wants_processes=False)
-        # 首次采到 null 才会睡；若本次恰好有缓存基线则可能不睡，两者都合理，
-        # 这里只要求「睡的话必须用约定常量」
-        for value in sleeps:
-            self.assertEqual(value, HOST_SCRIPT.STATUS_CPU_BASELINE_SECONDS)
+        self.assertIn(
+            HOST_SCRIPT.STATUS_CPU_BASELINE_SECONDS,
+            sleeps,
+            "无缓存基线时必须用约定的基线等待",
+        )
 
 
 class ChannelClassificationTests(unittest.TestCase):

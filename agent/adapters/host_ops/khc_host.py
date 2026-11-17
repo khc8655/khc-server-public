@@ -871,7 +871,11 @@ def _collect_processes_ps(sort: str, limit: int) -> list[dict[str, Any]]:
     for row in rows:
         row["name"] = _read_text(_proc_path(row["pid"], "comm"), 256).strip()
         row["cmdline"] = _read_cmdline(row["pid"])
-    return rows
+    # 采集窗口内已退出的进程（典型是 ``ps -eo`` 自身及其子 shell）此时读不到
+    # ``comm`` 与 ``cmdline``，留在结果里就是一条 name/cmdline 都为空的幽灵进程；
+    # 前端 ``isSystemProcess`` 对空 cmdline 判为非系统进程，会把它当业务进程展示。
+    # 两个来源都读不到即视为已退出，丢弃这一行（comm 有值的内核线程照常保留）。
+    return [row for row in rows if row["name"] or row["cmdline"]]
 
 
 def collect_processes(sort: str = "cpu", limit: int = DEFAULT_PROCESS_LIMIT) -> list[dict[str, Any]]:
