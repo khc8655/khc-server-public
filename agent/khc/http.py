@@ -360,6 +360,13 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "khc-agent"
     sys_version = ""
+    # 关掉 Nagle（2026-11-17 C2 排查的产物）。BaseHTTPRequestHandler 默认启用 Nagle，
+    # 配合 HTTP/1.1 keep-alive 会踩经典的「延迟 ACK」：同一连接上**第 2 个及之后**的
+    # 请求固定多出约 40ms —— 响应头和响应体分两次写，第二段被 Nagle 按住等 ACK，
+    # 而客户端的 ACK 被延迟确认拖了 40ms。
+    # 实测：新建连接 0.4ms，复用连接第 2 个请求 40.9ms，加这一行后回到 0.5ms。
+    # 这只影响 keep-alive 的第 2+ 个请求，所以单次 curl 测不出来，容易被忽略。
+    disable_nagle_algorithm = True
     # slowloris/慢 body/空闲 keep-alive 都必须有上限（#45）。
     timeout = 10
 

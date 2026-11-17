@@ -588,3 +588,27 @@ class OverloadRejectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandlerSocketOptionTests(unittest.TestCase):
+    """Handler 的 socket 选项（2026-11-17）。
+
+    `disable_nagle_algorithm` 这一行看着无关紧要，但拿掉它会踩经典的「延迟 ACK」：
+    HTTP/1.1 keep-alive 上**第 2 个及之后**的请求固定多约 40ms。真机实测
+    41ms → 0.5ms。单次 curl 测不出来（新建连接只要 0.4ms），所以特别容易在重构时丢掉。
+    """
+
+    def test_nagle_is_disabled(self) -> None:
+        from khc.http import _Handler
+
+        self.assertTrue(
+            _Handler.disable_nagle_algorithm,
+            "必须关掉 Nagle：keep-alive 上第 2 个请求会固定多 40ms（延迟 ACK）",
+        )
+
+    def test_http11_keep_alive_is_still_on(self) -> None:
+        """关 Nagle 不是改成短连接 —— 协议版本必须还是 HTTP/1.1。"""
+
+        from khc.http import _Handler
+
+        self.assertEqual(_Handler.protocol_version, "HTTP/1.1")
