@@ -29,6 +29,12 @@ from urllib.parse import parse_qs, urlsplit
 
 LOG = logging.getLogger("khc.live")
 TICKET_TTL = 120.0
+
+# 允许的票据作用域（白名单）。**这是通道分类的安全兜底（ADR-0020 §5）**：
+# `control` 类别的数据永远不在这里，所以它签不出可直连的票据 —— 即使有人想给
+# 「改防火墙」「读公钥清单」这类动作开直连，也没有作用域可用。
+# 新增作用域等于新增一条直连通路，必须同时更新 ADR-0020 并说明理由。
+TICKET_SCOPES = ("live", "nudge", "snap")
 HEARTBEAT_INTERVAL = 15.0
 
 
@@ -89,7 +95,7 @@ class TicketVerifier:
         if self.node_id and payload.get("n") != self.node_id:
             return None, "wrong_node"
         scope = payload.get("s")
-        if scope not in ("live", "nudge", "snap"):
+        if scope not in TICKET_SCOPES:
             return None, "bad_scope"
         now = self.clock()
         if float(payload.get("e", 0)) < now:

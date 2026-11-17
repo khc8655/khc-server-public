@@ -1555,3 +1555,55 @@ export const manifestActionParamsSchema = z
   })
   .passthrough();
 export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;
+
+// ---------------------------------------------------------------------------
+// 节点数据通道分类（ADR-0020）
+// ---------------------------------------------------------------------------
+
+/**
+ * 通道类别：决定一份数据能不能由浏览器直连。
+ *
+ * - `observe`：周期性观测（指标、失败单元），优先直连
+ * - `ops-read`：只读运维查询，优先直连
+ * - `control`：改状态 / 含机密 / 跨节点汇总，**永不直连**
+ */
+export const NODE_CHANNELS = ['observe', 'ops-read', 'control'] as const;
+export type NodeChannel = (typeof NODE_CHANNELS)[number];
+
+export const nodeChannelSchema = z.enum(NODE_CHANNELS);
+
+/** 是否允许浏览器直连。 */
+export function isDirectChannel(channel: NodeChannel): boolean {
+  return channel === 'observe' || channel === 'ops-read';
+}
+
+/**
+ * host-ops 各动词的通道类别。**唯一权威在 `agent/adapters/host_ops/khc_host.py` 的
+ * `CHANNELS`**，这里是镜像；`packages/contracts/src/channel.test.ts` 会读 Python 源
+ * 做一致性校验，两边不一致时测试失败。
+ */
+export const HOST_OPS_CHANNELS: Record<string, NodeChannel> = {
+  version: 'ops-read',
+  status: 'observe',
+  snapshot: 'observe',
+  processes: 'ops-read',
+  'fw.show': 'ops-read',
+  'fw.apply': 'control',
+  'fw.confirm': 'control',
+  'keys.list': 'control',
+  'keys.add': 'control',
+  'keys.remove': 'control',
+  'svc.list': 'ops-read',
+  'svc.logs': 'control',
+  'svc.restart': 'control',
+  'svc.reset-failed': 'control',
+  'logs.errors': 'control',
+  'cron.list': 'ops-read',
+  'cron.set': 'control',
+  cleanup: 'control',
+};
+
+/** 取某个 host-ops 动词的通道类别；未知动词按 control 处理（最保守）。 */
+export function hostOpsChannel(verb: string): NodeChannel {
+  return HOST_OPS_CHANNELS[verb] ?? 'control';
+}

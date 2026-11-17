@@ -14,6 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from khc import live  # noqa: E402
 from khc.live import LiveServer, TicketVerifier  # noqa: E402
 
 TOKEN = "live-test-token"
@@ -348,3 +349,32 @@ class TicketVerifierTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TicketScopeBoundaryTests(unittest.TestCase):
+    """通道分类的安全兜底（ADR-0020 §5）：`control` 类数据不能有直连票据。
+
+    这条边界靠作用域白名单实现：控制面签票时只能签 `live`/`nudge`/`snap`，
+    而这三个作用域对应的都是观测数据。改防火墙、读公钥清单这类动作没有作用域可用，
+    所以「即使有人想开直连也开不了」。
+    """
+
+    def test_control_is_not_a_valid_ticket_scope(self) -> None:
+        self.assertNotIn("control", live.TICKET_SCOPES)
+        self.assertNotIn("ops-read", live.TICKET_SCOPES)  # C2 之前也不存在
+
+    def test_ticket_scopes_are_exactly_the_three_known(self) -> None:
+        """新增作用域等于新增一条直连通路，必须显式改这里。"""
+
+        self.assertEqual(set(live.TICKET_SCOPES), {"live", "nudge", "snap"})
+
+    def test_verifier_rejects_control_scope_ticket(self) -> None:
+        """即使伪造一张 s=control 的票，验票也必须拒绝。"""
+
+        verifier = TicketVerifier([TOKEN], node_id="hub_test")
+        # 复用文件里的 make_ticket，它用的编码方式与真实实现一致
+        ticket = make_ticket("control")
+
+        verified, error = verifier.verify(ticket, "http://console.test")
+        self.assertIsNone(verified)
+        self.assertEqual(error, "bad_scope")
