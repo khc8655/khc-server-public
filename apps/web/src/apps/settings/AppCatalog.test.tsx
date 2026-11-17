@@ -30,7 +30,7 @@ const node = {
 
 let requests: string[] = [];
 
-function stubApi() {
+function stubApi(opts?: { manifests?: Response }) {
   requests = [];
   vi.stubGlobal(
     'fetch',
@@ -39,6 +39,7 @@ function stubApi() {
       requests.push(url);
       if (url === '/api/v1/nodes' && (!init || !init.method)) return json({ nodes: [node] });
       if (url === '/api/v1/app-manifests' && (!init || !init.method)) {
+        if (opts?.manifests) return opts.manifests;
         return json({
           appManifests: [
             {
@@ -266,5 +267,18 @@ describe('应用目录（R1 运行时清单）', () => {
     renderCatalog();
     expect(await screen.findByText(/升级节点 Agent/)).toBeTruthy();
     expect(screen.queryByText(/清单不存在/)).toBeNull();
+  });
+
+  it('应用清单加载失败时显示加载失败与重试，而不是「目录为空」', async () => {
+    vi.unstubAllGlobals();
+    stubApi({
+      manifests: json({ error: { code: 'internal_error', message: '服务器内部错误' } }, 500),
+    });
+    renderCatalog();
+
+    expect((await screen.findAllByText('应用目录加载失败')).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('button', { name: '重试' })).toBeTruthy();
+    expect(screen.queryByText('目录为空')).toBeNull();
+    expect(screen.queryByText('Agent 包中没有可用的 recipe。')).toBeNull();
   });
 });

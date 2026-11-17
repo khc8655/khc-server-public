@@ -372,6 +372,15 @@ export function AppCatalog() {
         />
       ) : null}
 
+      {manifestsQuery.error ? (
+        <Banner
+          tone="danger"
+          title={zh.catalog.manifestsLoadFailed}
+          description={(manifestsQuery.error as Error).message}
+          action={<Button label={zh.common.retry} size="sm" onClick={() => void manifestsQuery.refetch()} />}
+        />
+      ) : null}
+
       <Card
         title={zh.catalog.installedTitle}
         action={
@@ -437,7 +446,15 @@ export function AppCatalog() {
         rowActions={() => [{ id: 'catalog.install', label: zh.catalog.install, icon: 'download' }]}
         onRowAction={(_ref, recipe) => openInstall(recipe)}
         onRowOpen={(recipe) => openInstall(recipe)}
-        empty={{ icon: 'box', title: zh.catalog.emptyTitle, description: zh.catalog.emptyDesc }}
+        empty={
+          manifestsQuery.isError
+            ? {
+                icon: 'alert',
+                title: zh.catalog.manifestsLoadFailed,
+                description: zh.catalog.manifestsLoadFailedDesc,
+              }
+            : { icon: 'box', title: zh.catalog.emptyTitle, description: zh.catalog.emptyDesc }
+        }
       />
 
       {target ? (
