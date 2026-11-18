@@ -47,9 +47,12 @@ export class MemoryNodeRepo implements NodeRepo {
   async update(id: string, patch: NodePatch): Promise<StoredNode | null> {
     const current = this.rows.get(id);
     if (!current) return null;
+    const defined = Object.fromEntries(
+      Object.entries(patch).filter(([, v]) => v !== undefined),
+    ) as NodePatch;
     const next: StoredNode = {
       ...current,
-      ...patch,
+      ...defined,
       updatedAt: now(),
     };
     this.rows.set(id, next);

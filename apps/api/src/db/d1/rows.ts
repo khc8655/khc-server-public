@@ -33,7 +33,7 @@ export function mapStoredNode(row: NodeRow): StoredNode {
     id: row.id,
     name: row.name,
     endpoint: row.endpoint,
-    tunnelEndpoint: row.tunnel_endpoint,
+    tunnelEndpoint: row.tunnel_endpoint ?? (row.tunnel_id ? row.endpoint : null),
     liveEndpoint: row.live_endpoint,
     domain: row.domain ?? null,
     accessMode: deriveAccessMode(row),
