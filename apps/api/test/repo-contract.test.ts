@@ -317,6 +317,30 @@ describe('D1 专属：事务、唯一约束与密文落库（真实 sqlite）', 
     }
   });
 
+  it('存量 tunnel_id 节点若 tunnel_endpoint 为空，读取时自动回填已推导的 endpoint；无 tunnel_id 的旧行保持 null', async () => {
+    const db = toD1(raw);
+    await db
+      .prepare(
+        `INSERT INTO nodes (id, name, endpoint, tunnel_endpoint, access_mode, tunnel_id, preferred_route, token_enc, rev_epoch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind('nd_tun', 't1', 'https://tokyo.example.com', null, 'tunnel', 'tn_1', 'tunnel', 'enc', 'ep1', 1, 1)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO nodes (id, name, endpoint, tunnel_endpoint, access_mode, tunnel_id, preferred_route, token_enc, rev_epoch, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind('nd_legacy', 't2', 'http://10.0.0.9:8880', null, null, null, 'tunnel', 'enc', 'ep2', 2, 2)
+      .run();
+
+    const nodes = new D1NodeRepo(db);
+    const tun = await nodes.get('nd_tun');
+    const legacy = await nodes.get('nd_legacy');
+    expect(tun?.tunnelEndpoint).toBe('https://tokyo.example.com');
+    expect(legacy?.tunnelEndpoint).toBeNull();
+  });
+
   it('app_configs.config_json 以 AES-GCM 密文落库，读回明文一致', async () => {
     const db = toD1(raw);
     const nodes = new D1NodeRepo(db);

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { HttpAgentClient } from '../src/lib/node-client';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { authHeaders, loginAsAdmin, makeTestContext } from './helpers/context';
 
@@ -191,6 +192,110 @@ describe('全局隧道配置', () => {
       ctx.env,
     );
     expect(res.status).toBe(400);
+  });
+
+  it('真实 HttpAgentClient：仅传 tunnelId 创建节点后 /state 正常连上隧道，改隧道域名与解绑均同步', async () => {
+    const calledUrls: string[] = [];
+    const client = new HttpAgentClient(async (url) => {
+      calledUrls.push(url);
+      return new Response(
+        JSON.stringify({ ok: true, host: { hostname: 'nat-nas' }, adapters: [], ports: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const ctx = makeTestContext(undefined, client);
+    const cookie = await loginAsAdmin(ctx);
+    const created = (await (await createTunnel(ctx, cookie)).json()) as {
+      tunnel: { id: string };
+    };
+
+    // 模拟真实前端 AccessForm：只带 accessMode + tunnelId，不传 endpoint / tunnelEndpoint
+    const nodeRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          name: '家里 NAS',
+          accessMode: 'tunnel',
+          tunnelId: created.tunnel.id,
+        }),
+      },
+      ctx.env,
+    );
+    expect(nodeRes.status).toBe(201);
+    const { node } = (await nodeRes.json()) as {
+      node: {
+        id: string;
+        endpoint: string;
+        tunnelEndpoint: string | null;
+        preferredRoute: string;
+      };
+    };
+    expect(node.endpoint).toBe('https://tokyo.example.com');
+    expect(node.tunnelEndpoint).toBe('https://tokyo.example.com');
+    expect(node.preferredRoute).toBe('tunnel');
+
+    const state1 = await ctx.app.request(
+      `/api/v1/nodes/${node.id}/state`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(state1.status).toBe(200);
+    const stateBody1 = (await state1.json()) as { reachable: boolean; route: string };
+    expect(stateBody1.reachable).toBe(true);
+    expect(stateBody1.route).toBe('tunnel');
+    expect(calledUrls).toEqual(['https://tokyo.example.com/state']);
+
+    // 修改隧道 hostname：引用该隧道的节点应同步更新连接地址
+    const patchTunnel = await ctx.app.request(
+      `/api/v1/tunnels/${created.tunnel.id}`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ hostname: 'osaka.example.com' }),
+      },
+      ctx.env,
+    );
+    expect(patchTunnel.status).toBe(200);
+
+    calledUrls.length = 0;
+    const state2 = await ctx.app.request(
+      `/api/v1/nodes/${node.id}/state`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    const stateBody2 = (await state2.json()) as { reachable: boolean; route: string };
+    expect(stateBody2.reachable).toBe(true);
+    expect(calledUrls).toEqual(['https://osaka.example.com/state']);
+
+    // 解绑切换为 domain 直连：清空旧 tunnelEndpoint 并走 direct
+    const detach = await ctx.app.request(
+      `/api/v1/nodes/${node.id}`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ accessMode: 'domain', endpoint: 'https://hub.example.com:8443' }),
+      },
+      ctx.env,
+    );
+    expect(detach.status).toBe(200);
+    const detached = (await detach.json()) as {
+      node: { endpoint: string; tunnelEndpoint: string | null; preferredRoute: string };
+    };
+    expect(detached.node.tunnelEndpoint).toBeNull();
+    expect(detached.node.preferredRoute).toBe('direct');
+
+    calledUrls.length = 0;
+    const state3 = await ctx.app.request(
+      `/api/v1/nodes/${node.id}/state`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    const stateBody3 = (await state3.json()) as { reachable: boolean; route: string };
+    expect(stateBody3.reachable).toBe(true);
+    expect(stateBody3.route).toBe('direct');
+    expect(calledUrls).toEqual(['https://hub.example.com:8443/state']);
   });
 });
 

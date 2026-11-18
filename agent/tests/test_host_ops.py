@@ -1997,8 +1997,9 @@ class AdapterCallTests(AdapterTestBase):
         self.assertEqual(result["data"], {"hostname": "hub"})
         self.assertEqual(result["v"], HOST_SCRIPT.SCRIPT_VERSION)
         self.assertFalse(result["updateRequired"])
-        # 进程内执行：不应出现起 python3 子进程的调用
-        self.assertEqual(self.runner.commands("python3"), [])
+        # 进程内执行：不应出现起 python 子进程的调用（macOS 下 basename 可能是 python3.14）
+        py_bin = os.path.basename(sys.executable)
+        self.assertEqual(self.runner.commands(py_bin), [])
         self.assertEqual(self.runner.calls[-1], ["khc-host-inproc", "status"])
         self.assertEqual(json.loads(self.runner.last_input()), {})
 
@@ -2029,7 +2030,7 @@ class AdapterCallTests(AdapterTestBase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["data"], {"via": "subprocess"})
         self.assertEqual(calls, ["status"])  # 进程内试过一次
-        self.assertTrue(self.runner.commands("python3"))  # 然后回退到子进程
+        self.assertTrue(self.runner.commands(os.path.basename(sys.executable)))  # 然后回退到子进程
 
     def test_call_self_does_not_fall_back_on_business_error(self) -> None:
         """业务错误不回退：子进程会给一样的答案，重跑只是白费时间。"""
@@ -2049,7 +2050,7 @@ class AdapterCallTests(AdapterTestBase):
         result = self.call({"target": "self", "verb": "status", "params": {}})
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "E_PROTECTED")
-        self.assertEqual(self.runner.commands("python3"), [])  # 没有回退
+        self.assertEqual(self.runner.commands(os.path.basename(sys.executable)), [])  # 没有回退
 
     def test_call_self_generates_missing_script(self) -> None:
         self.runner.self_result = {"ok": True, "v": HOST_SCRIPT.SCRIPT_VERSION, "data": {}}

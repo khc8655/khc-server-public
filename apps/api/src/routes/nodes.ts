@@ -82,22 +82,44 @@ async function resolveAccess(
   deps: AppDeps,
   input: {
     endpoint: string;
+    tunnelEndpoint?: string | null;
     accessMode: NodeAccessMode;
     tunnelId: string | null;
     allowInsecure: boolean;
   },
-): Promise<{ endpoint: string; tunnelId: string | null; allowInsecure: boolean }> {
+): Promise<{
+  endpoint: string;
+  tunnelEndpoint: string | null;
+  tunnelId: string | null;
+  allowInsecure: boolean;
+}> {
   if (input.accessMode === 'tunnel') {
     if (!input.tunnelId) throw badRequest('隧道模式必须选择一条隧道配置', { tunnelId: '必填' });
     const tunnel = await deps.tunnels.get(input.tunnelId);
     if (!tunnel) throw badRequest('所选隧道配置不存在', { tunnelId: '不存在' });
-    return { endpoint: `https://${tunnel.hostname}`, tunnelId: tunnel.id, allowInsecure: false };
+    const derived = `https://${tunnel.hostname}`;
+    return {
+      endpoint: derived,
+      tunnelEndpoint: derived,
+      tunnelId: tunnel.id,
+      allowInsecure: false,
+    };
   }
   if (input.accessMode === 'ip') {
     // 是否放行由 TLS 门禁决定：显式 allowInsecure=true 才允许生产环境明文入口。
-    return { endpoint: input.endpoint, tunnelId: null, allowInsecure: input.allowInsecure };
+    return {
+      endpoint: input.endpoint,
+      tunnelEndpoint: input.tunnelEndpoint ?? null,
+      tunnelId: null,
+      allowInsecure: input.allowInsecure,
+    };
   }
-  return { endpoint: input.endpoint, tunnelId: null, allowInsecure: false };
+  return {
+    endpoint: input.endpoint,
+    tunnelEndpoint: input.tunnelEndpoint ?? null,
+    tunnelId: null,
+    allowInsecure: false,
+  };
 }
 
 /**
@@ -152,6 +174,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     }
     const access = await resolveAccess(deps, {
       endpoint: body.endpoint ?? '',
+      tunnelEndpoint: body.tunnelEndpoint,
       accessMode,
       tunnelId: body.tunnelId ?? null,
       allowInsecure: body.allowInsecure ?? false,
@@ -170,7 +193,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     const node = await deps.nodes.create({
       name: body.name,
       endpoint: access.endpoint,
-      tunnelEndpoint: body.tunnelEndpoint ?? null,
+      tunnelEndpoint: access.tunnelEndpoint,
       liveEndpoint: body.liveEndpoint ?? null,
       domain: body.domain ?? null,
       accessMode,
@@ -216,6 +239,12 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     const accessMode = patch.accessMode ?? current.accessMode;
     const access = await resolveAccess(deps, {
       endpoint: patch.endpoint ?? current.endpoint,
+      tunnelEndpoint:
+        patch.tunnelEndpoint !== undefined
+          ? patch.tunnelEndpoint
+          : current.accessMode === 'tunnel' && accessMode !== 'tunnel'
+            ? null
+            : current.tunnelEndpoint,
       accessMode,
       tunnelId: patch.tunnelId !== undefined ? patch.tunnelId : current.tunnelId,
       allowInsecure: patch.allowInsecure ?? current.allowInsecure,
@@ -249,15 +278,22 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
         : undefined);
     const node = await deps.nodes.update(c.req.param('id'), {
       ...safePatch,
-      ...(access.endpoint !== current.endpoint ? { endpoint: access.endpoint } : {}),
-      ...(access.tunnelId !== current.tunnelId ? { tunnelId: access.tunnelId } : {}),
+      ...(access.endpoint !== current.endpoint || safePatch.endpoint !== undefined
+        ? { endpoint: access.endpoint }
+        : {}),
+      ...(access.tunnelEndpoint !== current.tunnelEndpoint || safePatch.tunnelEndpoint !== undefined
+        ? { tunnelEndpoint: access.tunnelEndpoint }
+        : {}),
+      ...(access.tunnelId !== current.tunnelId || safePatch.tunnelId !== undefined
+        ? { tunnelId: access.tunnelId }
+        : {}),
       ...(access.allowInsecure !== current.allowInsecure
         ? { allowInsecure: access.allowInsecure }
         : {}),
       ...(preferredRoute !== undefined && preferredRoute !== current.preferredRoute
         ? { preferredRoute }
         : {}),
-      tokenEnc,
+      ...(tokenEnc !== undefined ? { tokenEnc } : {}),
     });
     if (!node) throw notFound('节点不存在');
     await deps.audit.log({

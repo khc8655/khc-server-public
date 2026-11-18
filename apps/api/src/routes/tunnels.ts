@@ -91,6 +91,17 @@ export function tunnelRoutes(deps: AppDeps): Hono<AppBindings> {
         : {}),
     });
     if (!tunnel) throw notFound('隧道配置不存在');
+    if (tunnel.hostname !== current.hostname) {
+      const derived = `https://${tunnel.hostname}`;
+      const nodes = await deps.nodes.list();
+      await Promise.all(
+        nodes
+          .filter((node) => node.tunnelId === id)
+          .map((node) =>
+            deps.nodes.update(node.id, { endpoint: derived, tunnelEndpoint: derived }),
+          ),
+      );
+    }
     await deps.audit.log({
       actor: c.get('user').name,
       action: 'tunnel.update',
