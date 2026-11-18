@@ -1,19 +1,18 @@
-/** Hub 的“控制面 / 观测面”双通道模型。
+/** Hub 单控制面通道模型。
  *
  * 控制面（浏览器 -> Worker -> Hub）只在打开工作区时探测一次 `/state`
  * （判断可写 + 更新可达租约），不做周期轮询。
- * 观测面 = 10 秒快照轮询：有可信 HTTPS 域名时浏览器直连 Agent（同源多标签经
- * BroadcastChannel 共享一个计时器，只有 leader 发请求），否则经 Worker
- * `/nodes/:id/snapshot` 转发（2 秒去重为单 isolate 尽力而为，不保证跨标签页不放大）。
+ * 10 秒快照轮询统一经 Worker `/nodes/:id/snapshot` 转发（同源多标签经
+ * BroadcastChannel 共享一个计时器，只有 leader 发请求）。
  */
 import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { hubStateQueryOptions, useMarkHubReachable } from './queries';
 import { useHubSnapshot, type SnapshotObservation, type SnapshotStatus } from './snapshot';
 
-export type HubPresence = 'managed-online' | 'live-only' | 'offline' | 'unknown';
-/** 运维观测数据来源：直连 Agent、控制面转发快照，或没有。 */
-export type ObservationSource = 'direct' | 'forward' | 'none';
+export type HubPresence = 'managed-online' | 'offline' | 'unknown';
+/** 运维观测数据来源：统一经控制面转发快照，或尚未启动。 */
+export type ObservationSource = 'forward' | 'none';
 
 export interface HubChannels {
   control: {
@@ -42,22 +41,16 @@ export function deriveHubChannels(input: {
   knownStatus?: 'online' | 'offline' | 'unknown' | null;
 }): HubChannels {
   const { controlReachable, controlError = null, live, knownStatus = null } = input;
-  // stopped = 到上限但已有数据；fallback = 请求失败但可能仍有上一帧。
-  const liveLive =
-    (live.status === 'live' || live.status === 'stopped' || live.status === 'fallback') &&
-    live.snapshot !== null;
   // 控制面探测失败但节点列表仍标记在线（lastSeen 租约未过期）时属于「未确认」，
   // 不能直接宣称离线，否则会和概况页的「在线」互相矛盾。
   const presence: HubPresence =
     controlReachable === true
       ? 'managed-online'
-      : liveLive
-        ? 'live-only'
-        : controlReachable === false
-          ? knownStatus === 'online'
-            ? 'unknown'
-            : 'offline'
-          : 'unknown';
+      : controlReachable === false
+        ? knownStatus === 'online'
+          ? 'unknown'
+          : 'offline'
+        : 'unknown';
   return {
     control: { reachable: controlReachable, error: controlError },
     live: {
@@ -95,7 +88,6 @@ export function shouldRetryControlProbe(input: {
 
 export function useHubChannels(
   hubId: string,
-  liveEndpoint: string | null | undefined,
   options: { enabled?: boolean; knownStatus?: 'online' | 'offline' | 'unknown' | null } = {},
 ) {
   // 只在打开工作区时探测一次；手动重试由页面/提示条触发，不做周期轮询。
@@ -103,7 +95,7 @@ export function useHubChannels(
     ...hubStateQueryOptions(hubId),
     enabled: options.enabled ?? true,
   });
-  const live = useHubSnapshot(hubId, liveEndpoint);
+  const live = useHubSnapshot(hubId);
   useMarkHubReachable(hubId, stateQuery.data?.reachable);
   const channels = deriveHubChannels({
     controlReachable: stateQuery.data?.reachable ?? null,

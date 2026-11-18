@@ -304,7 +304,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         />
         <div className="ui-main">
           {match ? (
-            <HubChannelsProvider hubId={hubId} liveEndpoint={hubQuery.data?.liveEndpoint}>
+            <HubChannelsProvider hubId={hubId}>
               {topbar(<TaskCenter />)}
               <HubBarWithConnection
                 activeHub={activeHub}

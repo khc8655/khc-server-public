@@ -36,9 +36,7 @@ export interface AgentCommandOptions {
   port?: number;
   /** P0-1：安装命令可选组件（--with-caddy / --tls / --tls-cn；与 agent/install.sh 参数对齐） */
   install?: AgentInstallOptions;
-  /** A-4：观测层 Origin allowlist（面板域名），渲染进 systemd unit 的 KHC_LIVE_ORIGINS */
-  liveOrigins?: string[];
-  /** A-4：观测层票据绑定的节点 ID，渲染进 unit 的 KHC_NODE_ID */
+  /** 节点 ID，渲染进 unit 的 KHC_NODE_ID */
   nodeId?: string;
   /**
    * 节点入口协议（来自 node.endpoint）：
@@ -89,16 +87,9 @@ function transportFlags(options: AgentCommandOptions, kind: 'install' | 'upgrade
   return [];
 }
 
-/** A-4：观测层参数 → install.sh flags；Origin/ID 都过 shellQuote，不直接拼 shell。 */
-function liveFlags(options: { liveOrigins?: string[]; nodeId?: string }): string[] {
-  const flags: string[] = [];
-  if (options.liveOrigins?.length) {
-    flags.push('--live-origins', shellQuote(options.liveOrigins.join(',')));
-  }
-  if (options.nodeId) {
-    flags.push('--node-id', shellQuote(options.nodeId));
-  }
-  return flags;
+/** 节点身份参数 → install.sh flags；不再下发 --live-origins（浏览器直连观测已下线）。 */
+function nodeIdentityFlags(options: { nodeId?: string }): string[] {
+  return options.nodeId ? ['--node-id', shellQuote(options.nodeId)] : [];
 }
 
 /** P0-1：把安装选项拼成 install.sh 的额外 flags（CN 已被契约 regex 校验，无空白/引号，可直接插值）。 */
@@ -287,7 +278,7 @@ export function buildAgentInstallCommand(options: AgentCommandOptions): string {
   const extra = [
     ...installExtraFlags(options.install),
     ...transportFlags(options, 'install'),
-    ...liveFlags(options),
+    ...nodeIdentityFlags(options),
   ];
   const tlsPaths =
     options.endpointScheme === 'https'
@@ -317,10 +308,8 @@ export function buildAgentInstallCommand(options: AgentCommandOptions): string {
 /** 升级命令：同安装（写 token + 覆盖程序），`--no-start` 后显式重启服务。 */
 export function buildAgentUpgradeCommand(options: AgentCommandOptions): string {
   const { host, port } = commandHostPort(options);
-  // A-4：升级同样重渲染 unit——观测层 allowlist 必须随命令带上，否则重装后丢失
-  //（Agent 拉取式自升级只补沙箱行、不重渲染 unit，不受影响）。
   // https 节点不传证书路径：install.sh 从现有 unit 沿用，避免覆盖用户自定义的证书位置。
-  const extra = [...transportFlags(options, 'upgrade'), ...liveFlags(options)];
+  const extra = [...transportFlags(options, 'upgrade'), ...nodeIdentityFlags(options)];
   const lines = [
     ...downloadAndVerify(options.packageUrl, options.sha256),
     // 升级不需要重写 token：它已存在；也不再让长期 token 出现在升级命令里。

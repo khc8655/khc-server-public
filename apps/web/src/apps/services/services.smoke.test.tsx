@@ -233,7 +233,7 @@ describe('对外服务页（B4）', () => {
   it('两张表：网页服务与远程访问、后端与状态、底部跳转站点提示', async () => {
     await renderRoute('/hubs/tyo-1/services');
     expect(await screen.findByText('网页服务')).toBeTruthy();
-    expect(screen.getByText('远程访问')).toBeTruthy();
+    expect(await screen.findByText('远程访问')).toBeTruthy();
     expect((await screen.findAllByText('blog')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('blog.example.dev').length).toBeGreaterThan(0);
     expect(
@@ -298,6 +298,7 @@ describe('对外服务页（B4）', () => {
     window.dispatchEvent(new Event('resize'));
     await renderRoute('/hubs/tyo-1/services');
     await screen.findByText('网页服务');
+    await screen.findAllByText(/peer-a/);
     const narrow = document.querySelector('.ui-list-meta-narrow');
     expect(narrow?.textContent).toContain('内网 VM');
     expect(narrow?.textContent).toContain('peer-a');

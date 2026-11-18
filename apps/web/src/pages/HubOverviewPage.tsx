@@ -514,9 +514,6 @@ export default function HubOverviewPage() {
           }
         />
       ) : null}
-      {channels.presence === 'live-only' ? (
-        <Banner tone="warn" title={zh.channels.liveOnlyTitle} description={zh.channels.liveOnlyDesc} />
-      ) : null}
       {channels.presence === 'offline' ? (
         <Banner
           tone="danger"

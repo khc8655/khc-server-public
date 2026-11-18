@@ -385,26 +385,8 @@ describe('install-command', () => {
     }
   });
 
-  it('A-4：install/upgrade 命令带 --live-origins（面板 origin）与 --node-id（节点 ID），单引号包裹', async () => {
+  it('install/upgrade 命令带 --node-id（节点 ID）且不再下发 --live-origins', async () => {
     const value = await setup();
-    for (const kind of ['install', 'upgrade'] as const) {
-      const { status, body } = await generateCommand(value, kind, {
-        mode: 'system',
-        packageUrl: PACKAGE_URL,
-        sha256: SHA256,
-      });
-      expect(status, kind).toBe(200);
-      const command = agentCommandResponseSchema.parse(body).command;
-      // 未配置 LIVE_ORIGINS → 退回请求 origin（测试基址 http://localhost）；都经 shellQuote 单引号包裹
-      expect(command, kind).toContain(`--live-origins ${shellQuote('http://localhost')}`);
-      expect(command, kind).toContain(`--node-id ${shellQuote(value.node.id)}`);
-      await assertBashSyntax(command);
-    }
-  });
-
-  it('A-4：配置 LIVE_ORIGINS 时用它渲染 --live-origins，而不是回源 Host（workers.dev）', async () => {
-    const value = await setup();
-    // 生产：浏览器用 https://panel.example.com，而 Worker 看到的 c.req.url 是 *.workers.dev
     value.ctx.env.LIVE_ORIGINS = 'https://panel.example.com';
     for (const kind of ['install', 'upgrade'] as const) {
       const { status, body } = await generateCommand(value, kind, {
@@ -414,26 +396,10 @@ describe('install-command', () => {
       });
       expect(status, kind).toBe(200);
       const command = agentCommandResponseSchema.parse(body).command;
-      expect(command, kind).toContain(`--live-origins ${shellQuote('https://panel.example.com')}`);
-      expect(command, kind).not.toContain('http://localhost');
+      expect(command, kind).toContain(`--node-id ${shellQuote(value.node.id)}`);
+      expect(command, kind).not.toContain('--live-origins');
       await assertBashSyntax(command);
     }
-  });
-
-  it('A-4：LIVE_ORIGINS 多个 origin 逗号拼成一个参数，空白被裁剪', async () => {
-    const value = await setup();
-    value.ctx.env.LIVE_ORIGINS = ' https://panel.example.com , https://panel.example.com ';
-    const { status, body } = await generateCommand(value, 'install', {
-      mode: 'system',
-      packageUrl: PACKAGE_URL,
-      sha256: SHA256,
-    });
-    expect(status).toBe(200);
-    const command = agentCommandResponseSchema.parse(body).command;
-    expect(command).toContain(
-      `--live-origins ${shellQuote('https://panel.example.com,https://panel.example.com')}`,
-    );
-    await assertBashSyntax(command);
   });
 
   it('upgrade 命令忽略 installOptions（不出现 --with-caddy/--tls）', async () => {

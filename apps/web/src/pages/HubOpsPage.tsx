@@ -73,8 +73,8 @@ export default function HubOpsPage() {
   const uptime = live.snapshot?.host?.uptime ?? state?.host?.uptime ?? null;
   const hubName = hubQuery.data?.name ?? hubId;
   const opsDisabled = !channels.canApply;
-  // 没有快照，或实时流已断开（fallback）时都要给出「重新连接」入口。
-  const snapshotMissing = !live.snapshot || live.status === 'fallback';
+  // 快照拉取失败（fallback）且节点并非明确离线时，给出手动重试入口。
+  const snapshotMissing = live.status === 'fallback' && channels.control.reachable !== false;
 
   const [segment, setSegment] = useState<Segment>('services');
   const [processSort, setProcessSort] = useState<'cpu' | 'mem'>('cpu');
@@ -422,10 +422,7 @@ export default function HubOpsPage() {
           action={<Button label={zh.hostOps.liveReconnect} size="sm" onClick={live.reconnect} />}
         />
       ) : null}
-      {channels.presence === 'live-only' ? (
-        <Banner tone="warn" title={zh.channels.liveOnlyTitle} description={zh.channels.liveOnlyDesc} />
-      ) : null}
-      {channels.control.reachable === false && channels.control.error && channels.presence !== 'live-only' ? (
+      {channels.control.reachable === false && channels.control.error ? (
         <Banner tone="warn" title={channels.control.error} description={zh.channels.controlFailed} />
       ) : null}
       {opsDisabled ? <Banner tone="neutral" title={zh.hostOps.offlineBanner} /> : null}

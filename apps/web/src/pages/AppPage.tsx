@@ -256,9 +256,6 @@ export default function AppPage() {
         onAction={handleAction}
       />
 
-      {channels.presence === 'live-only' ? (
-        <Banner tone="warn" title={zh.channels.liveOnlyTitle} description={zh.channels.liveOnlyDesc} />
-      ) : null}
       {configQuery.isError ? (
         <Banner tone="danger" title={zh.apps.loadError} description={(configQuery.error as Error).message} />
       ) : null}

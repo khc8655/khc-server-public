@@ -5,7 +5,6 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../../app/router';
-import { makeLiveEventSource } from '../../test/liveMock';
 
 const NOW = Math.floor(Date.now() / 1000);
 const PEER_KEY = 'A'.repeat(43) + '=';
@@ -117,14 +116,6 @@ function mockApi(options: {
   state?: () => unknown;
 }) {
   const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
-  // 观测面：运行态只从浏览器直连的 state 事件读取。
-  vi.stubGlobal(
-    'EventSource',
-    makeLiveEventSource(() => {
-      const payload = options.state ? options.state() : wireGuardState(options.peers.length > 0);
-      return (payload as { state?: unknown }).state ?? payload;
-    }),
-  );
   // 有状态配置：PUT 保存后，后续 GET 返回最新 rev/peers（模拟 D1 写后读）
   const store = {
     peers: [...options.peers],
@@ -280,9 +271,6 @@ function mockApi(options: {
           ],
           adaptersError: null,
         });
-      }
-      if (url === '/api/v1/nodes/tyo-1/live-ticket') {
-        return json({ ticket: 'test-ticket', livePath: '/_live/', expiresAt: NOW });
       }
       if (url === '/api/v1/nodes/tyo-1/state') {
         return json(options.state ? options.state() : wireGuardState(options.peers.length > 0));
