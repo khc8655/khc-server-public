@@ -1,6 +1,6 @@
 # 发版与部署
 
-> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：ADR-0013、ADR-0016、ADR-0019
+> 状态：现行 ｜ 最后核验：2026-11-18 ｜ 关联：ADR-0013、ADR-0016、ADR-0019
 
 本文是版本规则、发版流程、Agent 发版与回滚的唯一来源。决策理由见 ADR，历史记录见 `docs/archive/2026-11/release-history.md`。
 
@@ -60,7 +60,7 @@
 | Guard deploy topology | 用 `/cdn-cgi/trace` 实测源站，与 `workers_dev` 交叉校验 | 阻断 |
 | Deploy | `wrangler deploy --tag <sha12>` | — |
 | Verify production entry | 生产入口健康，且 `commit` / `versionId` 等于本次部署 | 报错，**不自动回滚** |
-| Verify deployed agent package | 线上包 sha256 与本次构建一致 | 报错，**不自动回滚** |
+| Verify deployed agent package | 线上签名清单验签通过，且 `releases[0]` 的版本与 sha256、线上实际下发的包、本次构建三者一致；最多重试约 60 秒吸收传播延迟，每次不一致打印响应头 | 报错，**不自动回滚** |
 | Tag release | 打 `release-<khcRelease>[-N]`，注解记录面板版本、Agent 版本、Version ID、提交 | — |
 
 部署后校验失败时按 §5 人工回滚。
@@ -102,7 +102,7 @@ export CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=...
 
 ### 4.1 链条
 
-1. `agent/package.sh` 按 `VERSION` 打 `khc-agent-<VERSION>.tar.gz` 和 `.sha256`。
+1. `agent/package.sh` 按 `VERSION` 打 `khc-agent-<VERSION>.tar.gz` 和 `.sha256`。打包**可复现**：同一份源码、同一 `VERSION` 每次得到逐字节相同的包（条目排序、mtime 固定为 `SOURCE_DATE_EPOCH`，缺省 1980-01-01；属主 0、权限只分 0755/0644、gzip 头不含时间和文件名）。线上包路径只按版本命名，CI 每次部署都会重建当前版本，字节一变，线上返回的旧字节就会和新签清单对不上。由 `agent/tests/test_package.py` 守住。
 2. `scripts/build-agent-release.sh` 用 Ed25519 私钥签发布清单 `release-manifest.json`。私钥只接受**文件路径**（`SIGN_KEY_FILE`），不接受环境变量内容或命令行参数。
 3. 包与清单放进 `apps/web/public/agent/`，随 Worker assets 一起部署（ADR-0011）。公开仓库不入库这些产物，由 CI 在 build 前现场生成；本地 `verify.sh` 看到目录为空会打印 `SKIP`。
 4. Worker 只接受清单内的 `url + sha256`，清单外返回 400 `release_not_in_manifest`。Agent 拉取式升级，下载后自校验；同版本升级会被拒绝。
