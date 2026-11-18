@@ -1,6 +1,6 @@
 # 下线浏览器直连通道与收敛单控制面架构（提案）
 
-> 状态：草案 ｜ 最后核验：2026-11-18 ｜ 关联：ADR-0010、ADR-0020、`docs/live-observation.md`
+> 状态：已拍板（2026-11-18，按推荐值执行） ｜ 最后核验：2026-11-18 ｜ 关联：ADR-0010、ADR-0020、`docs/live-observation.md`
 
 ## 1. 背景与现状问题
 
@@ -56,9 +56,7 @@
 | **批次 1：面板单通道收敛** | ① `snapshot.ts` 删除 `directSnapshot` 与 `/live-ticket` 调用，全部节点统一走 `/nodes/:id/snapshot` 并开启 `BroadcastChannel` 多标签共享；<br>② 删除未被引用的 `apps/web/src/data/live.ts` 及单测；<br>③ `channels.ts` / `connectionState.ts` / `HubChannelsProvider.tsx` 移除 `live-only` 与通道分叉展示，统一在线/离线指示；<br>④ `SiteDrawer.tsx` 移除「启用观测入口」开关；<br>⑤ `agent-commands.ts` 生成安装/升级命令不再带 `--live-origins` | `apps/web/src/`、`apps/api/src/lib/agent-commands.ts` 及对应单测 | - `./scripts/verify.sh` 全绿；<br>- 浏览器打开域名节点与无域名节点均不再请求 `/live-ticket` 或 `/_live/snapshot`，仅请求 `/api/v1/nodes/:id/snapshot`；<br>- UI 改动附浅色、深色、390px 截图与四态说明 | 面板 minor（Agent 不改） |
 | **批次 2：Agent/契约清理与文档归档** | ① Agent 删除 `agent/khc/live.py`、`http.py` 的 `/_live/snapshot` 及 8899 监听启动；`khc_agent.py` 与 `install.sh` 对 `--live-*`/`--no-live` 保留 no-op 兼容；<br>② `caddy_site.py` 停止渲染 `/_live/*`，schema 忽略存量 `liveGateway`；`port_forward.py` 释放 8899 保留端口；<br>③ Worker 删除 `routes/live.ts`；`packages/contracts` 移除 `liveTicket*` 与 `HOST_OPS_CHANNELS`（同步移除 `khc_host.py` 的 `CHANNELS`）；<br>④ 新增 ADR-0021「统一单控制面通道」，更新 ADR-0009/0010/0020 状态；`git mv` 归档 `docs/live-observation.md`，归档 `docs/design-v3.md` §5A（`chisel`）并同步更新 `docs/README.md` 等现行文档 | `agent/`、`apps/api/`、`packages/contracts/`、`docs/` | - `./scripts/verify.sh`（含 `docs-lint --strict`）全绿；<br>- 存量含 `"liveGateway": true` 的 `caddy-site` 配置 plan/apply 正常且不生成 `/_live/*`；<br>- 带 `--live-origins` 的旧安装命令仍正常执行；<br>- 真机升级 1 台节点验证 `8899` 不再监听、`/state` 与 `/snapshot` 正常 | 面板 minor + Agent minor |
 
-## 6. 待拍板项
+## 6. 已拍板（2026-11-18，主人按推荐值批准）
 
-主人已于 2026-11-18 认可「方案 A（彻底下线浏览器直连）+ 归档 `chisel`」的总体方向。合并开工前仅确认两项细节：
-
-1. **快照轮询间隔**：统一经 Worker 转发后，维持现有 **10 秒**（隐藏即停、60 次封顶，月均 < 1,200 次请求），还是调整为 **15 秒**？（**推荐：维持 10 秒**）
-2. **批次拆分**：按 §5「批次 1（先面板切换）→ 批次 2（后清理 Agent/契约与归档文档）」执行是否同意？（**推荐：同意**）
+1. **快照轮询间隔**：维持现有 **10 秒**（页面隐藏即停、10 分钟 / 60 次封顶，与控制面长任务进度刷新保持同步）。
+2. **批次拆分**：按 §5「批次 1（先面板切换）→ 批次 2（后清理 Agent/契约与文档归档）」顺序执行，严格遵守「先面板、后 Agent」滚动升级规则。
