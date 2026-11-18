@@ -37,7 +37,7 @@
 |---|---|---|---|---|---|---|
 | 1 | 登录与会话 | 口令登录、session 过期、TOTP、限流 | `routes/auth.ts`、`lib/session|crypto` | L1/L2/L3 | 较全 | 中 |
 | 2 | 节点接入 | IP 直连 / 域名 HTTPS / Tunnel、探活、改接入、删除 | `routes/nodes.ts`、`AccessForm` | L1/L2/L3/L6 | 较全 | 高 |
-| 3 | 状态观测 | `/state` 一次性探测、10s 快照、直连/转发、停表手动刷新 | `routes/snapshot|live.ts`、`data/snapshot.ts` | L1/L2/L3/L6 | 中 | 高 |
+| 3 | 状态观测 | `/state` 一次性探测、10s 控制面快照转发、停表手动刷新 | `routes/snapshot.ts`、`data/snapshot.ts` | L1/L2/L3/L6 | 中 | 高 |
 | 4 | 应用配置 | 保存（纯 D1）、plan/apply/rollback、rev/appliedRev、失败回滚 | `routes/apps.ts`、`lib/agent-commands` | L2/L4/L6 | 中 | 高 |
 | 5 | Caddy 站点 | 反代/静态/重定向、TLS 四模式、端口、健康、启停/校验/重载、接管外部配置 | `adapters/caddy_site.py`、`apps/caddy/` | L1/L4/L3/L6 | 中 | 高 |
 | 6 | 证书 | 自签/ACME 签发、inspect、安装到 Agent TLS、续期、到期诊断 | `adapters/certificates.py`、`routes/certs.ts` | L1/L4/L2/L6 | 中 | 中 |

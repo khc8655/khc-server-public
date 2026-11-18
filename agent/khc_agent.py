@@ -32,8 +32,6 @@ from khc import VERSION, load_adapters  # noqa: E402
 from khc.adapters import Adapter  # noqa: E402
 from khc.auth import Auth  # noqa: E402
 from khc.http import create_server, reload_tls, serve_forever
-from khc.live import LiveServer
-from khc.state import build_snapshot, build_state  # noqa: E402
 from khc.upgrade import UpgradeService  # noqa: E402
 from khc.kernel import Kernel  # noqa: E402
 from khc.util import (  # noqa: E402
@@ -134,25 +132,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     except Exception:  # noqa: BLE001 - 启动恢复失败不能挡住 Agent 起来
         LOG.warning("升级残留恢复失败", exc_info=True)
     auth = Auth(tokens)
-    live: Optional[LiveServer] = None
-    origins = [item.strip() for item in str(args.live_origins or "").split(",") if item.strip()]
-    node_id = os.environ.get("KHC_NODE_ID") or None
-    if not args.no_live:
-        try:
-            live = LiveServer(
-                lambda: build_state(kernel),
-                tokens,
-                snapshot_provider=lambda: build_snapshot(kernel),
-                host=args.live_host,
-                port=args.live_port,
-                allowed_origins=origins,
-                node_id=node_id,
-                on_nudge=lambda rev: LOG.info("live nudge rev=%s", rev),
-            )
-            live.start()
-        except OSError as exc:
-            LOG.warning("观测层监听 %s:%s 失败（不影响控制 API）: %s", args.live_host, args.live_port, exc)
-            live = None
     try:
         server = create_server(
             kernel,
@@ -163,9 +142,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             upgrade=upgrade,
             tls_cert=args.tls_cert or None,
             tls_key=args.tls_key or None,
-            live_origins=origins,
-            node_id=node_id,
-            live_enabled=not args.no_live,
         )
     except OSError as exc:
         LOG.error("监听 %s:%s 失败: %s", args.host, args.port, exc)
@@ -179,8 +155,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         stop_event.set()
         LOG.info("收到信号 %s，正在停止", signum)
         threading.Thread(target=server.shutdown, daemon=True).start()
-        if live is not None:
-            threading.Thread(target=live.shutdown, daemon=True).start()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -214,8 +188,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             server.server_close()
         except Exception:  # noqa: BLE001
             pass
-        if live is not None:
-            live.shutdown()
         LOG.info("khc-agent stopped")
     return 0
 
@@ -255,23 +227,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--root", default=None, help="覆盖 KHC_ROOT（演练/测试）")
     run.add_argument("--data-dir", default=None, help="覆盖 KHC_DATA_DIR")
     run.add_argument("--log-level", default=os.environ.get("KHC_LOG_LEVEL", "INFO"))
-    run.add_argument(
-        "--live-host",
-        default=os.environ.get("KHC_LIVE_HOST", "127.0.0.1"),
-        help="6.4a 观测层监听地址（默认 127.0.0.1，只允许本机/Caddy 反代）",
-    )
-    run.add_argument(
-        "--live-port",
-        type=int,
-        default=int(os.environ.get("KHC_LIVE_PORT", "8899")),
-        help="6.4a 观测层监听端口（默认 8899）",
-    )
-    run.add_argument(
-        "--live-origins",
-        default=os.environ.get("KHC_LIVE_ORIGINS", ""),
-        help="允许的浏览器 Origin，逗号分隔；留空表示不校验（建议生产配置控制台域名）",
-    )
-    run.add_argument("--no-live", action="store_true", help="关闭 6.4a 观测层")
+    # 历史直连观测参数保留为空操作解析，确保旧 systemd unit / cron / 脚本升级后不报错（ADR-0021）。
+    run.add_argument("--live-host", default="", help=argparse.SUPPRESS)
+    run.add_argument("--live-port", type=int, default=0, help=argparse.SUPPRESS)
+    run.add_argument("--live-origins", default="", help=argparse.SUPPRESS)
+    run.add_argument("--no-live", action="store_true", help=argparse.SUPPRESS)
     run.add_argument(
         "--tls-cert",
         default=os.environ.get("KHC_TLS_CERT", ""),

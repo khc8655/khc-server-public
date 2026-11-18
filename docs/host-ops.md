@@ -65,7 +65,7 @@ restrict,command="sudo -n /usr/local/sbin/khc-host",from="<Hub 的 WG IP>" ssh-e
 |---|---|---|
 | 专用用户 `<ssh-user>` + sudoers 只放行 `/usr/local/sbin/khc-host` | root 权限只给这一个文件 | **默认** |
 | 直接 root + `PermitRootLogin forced-commands-only` | 少一个用户，但要改 sshd_config | 可选 |
-| 普通用户无 sudo（chisel 接入的非 root Peer） | 只能读，写动作返回 `E_NO_PRIV` | 自动降级 |
+| 普通用户无 sudo（无 root Peer） | 只能读，写动作返回 `E_NO_PRIV` | 自动降级 |
 
 sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 
@@ -190,7 +190,7 @@ apps/web/src/pages/hostops/          VM 卡片动作 + Peer「运维」Tab + 三
 ```
 
 - `render` 产出 Agent 数据目录下的 `host-ops/known_hosts`（0600）。
-- `host` 默认取 WireGuard 适配器里该 Peer 的地址，可手改（例如 chisel 隧道的本地端口）。
+- `host` 默认取 WireGuard 适配器里该 Peer 的地址，可手改（例如本机/内网转发端口地址）。
 
 ### 7.3 Hub 的 SSH 密钥
 

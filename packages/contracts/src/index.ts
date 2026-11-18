@@ -144,7 +144,7 @@ export const nodeSchema = z.object({
   name: z.string().min(1),
   endpoint: z.string().min(1),
   tunnelEndpoint: z.string().nullable(),
-  /** 6.4a 观测层入口（如 https://hub.example.com）；空表示不启用直连观测 */
+  /** 历史兼容保留字段（浏览器直连已下线，统一返回 null） */
   liveEndpoint: z.string().nullable(),
   /** 面板代建 DNS 时选定的域名（如 hub.example.com）；未绑定为 null */
   domain: z.string().nullable().optional(),
@@ -930,27 +930,6 @@ export const putSettingRequestSchema = z.object({
 export type PutSettingRequest = z.infer<typeof putSettingRequestSchema>;
 
 // ---------------------------------------------------------------------------
-// 6.4a：浏览器观测层票据（服务端凭证；浏览器只拿 ticket）
-// ---------------------------------------------------------------------------
-
-export const liveTicketRequestSchema = z.object({
-  /** snap：15 分钟可复用的快照轮询票（10s 轮询不重复换票） */
-  scope: z.enum(['live', 'nudge', 'snap']).default('live'),
-  /** 浏览器页面 Origin；Hub 用它校验观测请求来源 */
-  origin: z.string().trim().max(255).optional(),
-});
-export type LiveTicketRequest = z.infer<typeof liveTicketRequestSchema>;
-
-export const liveTicketResponseSchema = z.object({
-  ticket: z.string().min(1),
-  expiresAt: z.number().int().nonnegative(),
-  livePath: z.string().min(1),
-  /** 浏览器直连快照路径（scope=snap） */
-  snapshotPath: z.string().min(1).optional(),
-});
-export type LiveTicketResponse = z.infer<typeof liveTicketResponseSchema>;
-
-// ---------------------------------------------------------------------------
 // C4：诊断（只读；错误码目录 + 运行时检查）
 // 见 docs/diagnostics.md §4.1 / §4.2
 // ---------------------------------------------------------------------------
@@ -1555,55 +1534,3 @@ export const manifestActionParamsSchema = z
   })
   .passthrough();
 export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;
-
-// ---------------------------------------------------------------------------
-// 节点数据通道分类（ADR-0020）
-// ---------------------------------------------------------------------------
-
-/**
- * 通道类别：决定一份数据能不能由浏览器直连。
- *
- * - `observe`：周期性观测（指标、失败单元），优先直连
- * - `ops-read`：只读运维查询，优先直连
- * - `control`：改状态 / 含机密 / 跨节点汇总，**永不直连**
- */
-export const NODE_CHANNELS = ['observe', 'ops-read', 'control'] as const;
-export type NodeChannel = (typeof NODE_CHANNELS)[number];
-
-export const nodeChannelSchema = z.enum(NODE_CHANNELS);
-
-/** 是否允许浏览器直连。 */
-export function isDirectChannel(channel: NodeChannel): boolean {
-  return channel === 'observe' || channel === 'ops-read';
-}
-
-/**
- * host-ops 各动词的通道类别。**唯一权威在 `agent/adapters/host_ops/khc_host.py` 的
- * `CHANNELS`**，这里是镜像；`packages/contracts/src/channel.test.ts` 会读 Python 源
- * 做一致性校验，两边不一致时测试失败。
- */
-export const HOST_OPS_CHANNELS: Record<string, NodeChannel> = {
-  version: 'ops-read',
-  status: 'observe',
-  snapshot: 'observe',
-  processes: 'ops-read',
-  'fw.show': 'ops-read',
-  'fw.apply': 'control',
-  'fw.confirm': 'control',
-  'keys.list': 'control',
-  'keys.add': 'control',
-  'keys.remove': 'control',
-  'svc.list': 'ops-read',
-  'svc.logs': 'control',
-  'svc.restart': 'control',
-  'svc.reset-failed': 'control',
-  'logs.errors': 'control',
-  'cron.list': 'ops-read',
-  'cron.set': 'control',
-  cleanup: 'control',
-};
-
-/** 取某个 host-ops 动词的通道类别；未知动词按 control 处理（最保守）。 */
-export function hostOpsChannel(verb: string): NodeChannel {
-  return HOST_OPS_CHANNELS[verb] ?? 'control';
-}

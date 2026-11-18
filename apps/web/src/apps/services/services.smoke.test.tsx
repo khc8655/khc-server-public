@@ -363,6 +363,7 @@ describe('对外服务页 · 本机监听端口（T-C 批次 3）', () => {
         { proto: 'tcp', address: '0.0.0.0', port: 9000 },
         { proto: 'tcp6', address: '::', port: 9000 },
         { proto: 'tcp', address: '127.0.0.1', port: 22 },
+        { proto: 'tcp', address: '127.0.0.1', port: 8880 },
         { proto: 'tcp', address: '127.0.0.1', port: 8899 },
         { proto: 'tcp', address: '203.0.113.10', port: 9100 },
         { proto: 'tcp', address: '127.0.0.1', port: 9200 },
@@ -378,11 +379,12 @@ describe('对外服务页 · 本机监听端口（T-C 批次 3）', () => {
     expect(await screen.findByText('本机监听端口')).toBeTruthy();
     const card = within(listeningCard());
     expect((await card.findAllByText('9000')).length).toBeGreaterThan(0);
+    expect(card.getAllByText('8899').length).toBeGreaterThan(0);
     expect(card.getAllByText('9300').length).toBeGreaterThan(0);
     expect(card.queryByText('9100')).toBeNull();
     expect(card.queryByText('9200')).toBeNull();
     expect(card.queryByText('22')).toBeNull();
-    expect(card.queryByText('8899')).toBeNull();
+    expect(card.queryByText('8880')).toBeNull();
     expect(card.queryByText('没有待发布的本机端口')).toBeNull();
   });
 

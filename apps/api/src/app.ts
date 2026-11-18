@@ -14,7 +14,6 @@ import { nodeRoutes } from './routes/nodes';
 import { appRoutes } from './routes/apps';
 import { certificateRoutes } from './routes/certs';
 import { settingsRoutes } from './routes/settings';
-import { liveRoutes } from './routes/live';
 import { snapshotRoutes } from './routes/snapshot';
 import { diagnosticsRoutes } from './routes/diagnostics';
 import { modeRoutes } from './routes/mode';
@@ -66,7 +65,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/v1/version',
 ]);
 
-/** 面板对外入口白名单：LIVE_ORIGINS 逗号分隔（如 https://panel.example.com）；未配置时为空。 */
+/** 面板对外入口白名单（跨第三方边缘回源 CSRF Origin 校验，仅 Worker 使用）：LIVE_ORIGINS 逗号分隔；未配置时为空。 */
 function allowedOriginSet(raw: string | undefined): Set<string> {
   const set = new Set<string>();
   for (const part of (raw ?? '').split(',')) {
@@ -166,7 +165,6 @@ export function createApp(deps: AppDeps): Hono<AppBindings> {
   app.route('/api/v1', sshKeyRoutes(deps));
   app.route('/api/v1', appManifestRoutes(deps));
   app.route('/api/v1', tunnelRoutes(deps));
-  app.route('/api/v1', liveRoutes(deps));
   app.route('/api/v1', snapshotRoutes(deps));
   app.route('/api/v1', cfDnsRoutes(deps));
   app.route('/api/v1', backupRoutes(deps));

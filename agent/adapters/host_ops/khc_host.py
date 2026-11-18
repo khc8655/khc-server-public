@@ -171,67 +171,8 @@ WRITE_VERBS = (
     "cron.set",
     "cleanup",
 )
-# 通道类别（ADR-0020）：决定这个动词能不能由浏览器直连。
-#   observe   周期观测：优先直连，不通时经控制面
-#   ops-read  只读运维：优先直连，不通时经控制面
-#   control   改状态 / 含机密 / 跨节点汇总：只经控制面，永不直连
-#
-# **新增动词必须在这里填类别**，漏了 `channel_map()` 会直接抛错（单测会失败）。
-# `WRITE_VERBS` 里的动词只能是 control —— `channel_map()` 也校验这一点，双重保险。
-#
-# keys.list 与 svc.logs / logs.errors 刻意留作 control（ADR-0020 §3）：
-# 前者是「谁能登进这台机器」的完整清单，后者内容不可控、令牌泄漏最常见的途径。
-CHANNELS = {
-    "version": "ops-read",
-    "status": "observe",
-    "snapshot": "observe",
-    "processes": "ops-read",
-    "fw.show": "ops-read",
-    "fw.apply": "control",
-    "fw.confirm": "control",
-    "keys.list": "control",
-    "keys.add": "control",
-    "keys.remove": "control",
-    "svc.list": "ops-read",
-    "svc.logs": "control",
-    "svc.restart": "control",
-    "svc.reset-failed": "control",
-    "logs.errors": "control",
-    "cron.list": "ops-read",
-    "cron.set": "control",
-    "cleanup": "control",
-}
-CHANNEL_NAMES = ("observe", "ops-read", "control")
+# 所有动词统一经控制面（Worker HMAC -> Agent）转发，不再维护浏览器直连通道分类（ADR-0021）。
 INTERNAL_VERBS = ("__fw_rollback",)
-
-
-def channel_map() -> dict[str, str]:
-    """动词 -> 通道类别。唯一权威，导出给 contracts 与面板（ADR-0020 §4）。
-
-    两个不变量在这里强制，违反直接抛 `ValueError`（启动即失败，不会带病运行）：
-      1. `PUBLIC_VERBS` 里每个动词都必须声明类别；
-      2. `WRITE_VERBS` 里的动词只能是 `control` —— 写操作绝不能有直连通路。
-    """
-
-    missing = [verb for verb in PUBLIC_VERBS if verb not in CHANNELS]
-    if missing:
-        raise ValueError(f"这些动词没有声明通道类别（ADR-0020）：{', '.join(missing)}")
-    unknown = [verb for verb in CHANNELS if verb not in PUBLIC_VERBS]
-    if unknown:
-        raise ValueError(f"CHANNELS 里有不在 PUBLIC_VERBS 的动词：{', '.join(unknown)}")
-    bad = [verb for verb in WRITE_VERBS if CHANNELS.get(verb) != "control"]
-    if bad:
-        raise ValueError(f"写动词必须是 control 类别（ADR-0020）：{', '.join(bad)}")
-    invalid = sorted({value for value in CHANNELS.values() if value not in CHANNEL_NAMES})
-    if invalid:
-        raise ValueError(f"未知的通道类别：{', '.join(invalid)}")
-    return {verb: CHANNELS[verb] for verb in PUBLIC_VERBS}
-
-
-def is_direct_channel(verb: str) -> bool:
-    """该动词是否允许浏览器直连（observe / ops-read 才允许）。"""
-
-    return CHANNELS.get(verb) in ("observe", "ops-read")
 
 ERROR_CODES = (
     "E_NOT_ONBOARDED",

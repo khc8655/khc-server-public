@@ -1,6 +1,7 @@
 # 6.4a 观测层：服务端实现（v3 架构）
 
-> 状态：现行 ｜ 最后核验：2026-11-05 ｜ 关联：docs/data-layering.md、docs/engineering/adr/ADR-0010-snapshot-polling.md、agent/khc/live.py
+> 状态：历史 ｜ 最后核验：2026-11-18 ｜ 关联：docs/archive/README.md、docs/engineering/adr/ADR-0021-single-control-plane-channel.md
+> 本文件描述的浏览器直连观测层已在 2026-11-18 下线，决策依据见 `docs/engineering/adr/ADR-0021-single-control-plane-channel.md`。
 > 范围：观测层 10s 快照轮询、snap/live ticket；SSE 已停用，代码保留
 > **2026-11-01：观测通道曾由 WebSocket 改为 SSE。**
 > **2026-11-04：ADR-0010 拍板方案 A——页面可见时 10s 轮询轻量 `/snapshot`，

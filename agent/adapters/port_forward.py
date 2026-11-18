@@ -51,7 +51,7 @@ ACTIVE_STATES = ("active",)
 # 面板与 Agent 自身占用的端口：转发监听这些端口会顶掉 SSH/控制面/Caddy，
 # 或形成 8880 → 127.0.0.1:8880 这类自环转发。Agent 端口可被 KHC_PORT 覆盖，
 # 运行时再按环境补进来（见 reserved_listen_ports）。
-RESERVED_LISTEN_PORTS = frozenset({22, 80, 443, 8880, 8899})
+RESERVED_LISTEN_PORTS = frozenset({22, 80, 443, 8880})
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 UNIT_RE = re.compile(r"^khc-forward-[A-Za-z0-9_-]{1,32}\.service$")
@@ -166,15 +166,14 @@ def normalize_listen_host(value: Any, field: str = "listenHost") -> str:
 
 
 def reserved_listen_ports() -> set[int]:
-    """保留监听端口：静态名单 + 本次运行的 Agent API/观测端口（KHC_PORT/KHC_LIVE_PORT）。"""
+    """保留监听端口：静态名单 + 本次运行的 Agent API 端口（KHC_PORT）。"""
 
     ports = set(RESERVED_LISTEN_PORTS)
-    for env, default in (("KHC_PORT", 8880), ("KHC_LIVE_PORT", 8899)):
-        raw = _text(os.environ.get(env))
-        try:
-            ports.add(int(raw) if raw else default)
-        except ValueError:
-            ports.add(default)
+    raw = _text(os.environ.get("KHC_PORT"))
+    try:
+        ports.add(int(raw) if raw else 8880)
+    except ValueError:
+        ports.add(8880)
     return ports
 
 

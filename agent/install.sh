@@ -16,8 +16,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HOST="${KHC_HOST:-0.0.0.0}"
 PORT="${KHC_PORT:-8880}"
-# A-4：观测层 Origin allowlist 与票据节点绑定；留空 = 不校验（旧行为）。
-LIVE_ORIGINS="${KHC_LIVE_ORIGINS:-}"
 NODE_ID="${KHC_NODE_ID:-}"
 MODE="auto"
 START=1
@@ -70,8 +68,7 @@ usage() {
   --tls-self-signed 生成自签证书并在同端口启用 HTTPS（仅本机测试；控制面 Worker 不接受自签证书）
   --tls             --tls-self-signed 的旧名（已弃用）
   --tls-cn NAME     自签证书 CN（仅与 --tls-self-signed 配合；域名 + 可信证书请用 --tls-cert/--tls-key）
-  --live-origins O  6.4a 观测层允许的浏览器 Origin，逗号分隔（建议面板域名；留空 = 不校验）
-  --node-id ID      观测层票据绑定的节点 ID（面板生成安装命令时自动带上）
+  --node-id ID      节点 ID（面板生成安装命令时自动带上）
   --no-start        安装后不启动服务
   --check           只做安装前置检查（PASS/WARN/FAIL），不安装、不启动
   -h, --help        显示帮助
@@ -118,8 +115,14 @@ while [ $# -gt 0 ]; do
     --insecure-http) INSECURE_HTTP=1 ;;
     --tls-cn) TLS_CN="${2:?--tls-cn 需要一个参数}"; shift ;;
     --tls-cn=*) TLS_CN="${1#*=}" ;;
-    --live-origins) LIVE_ORIGINS="${2:?--live-origins 需要一个参数}"; shift ;;
-    --live-origins=*) LIVE_ORIGINS="${1#*=}" ;;
+    # 历史直连观测参数保留为空操作解析，保证旧安装脚本/命令重跑不失败（ADR-0021）。
+    --live-origins) : "${2:?--live-origins 需要一个参数}"; shift ;;
+    --live-origins=*) ;;
+    --live-host) : "${2:?--live-host 需要一个参数}"; shift ;;
+    --live-host=*) ;;
+    --live-port) : "${2:?--live-port 需要一个参数}"; shift ;;
+    --live-port=*) ;;
+    --no-live) ;;
     --node-id) NODE_ID="${2:?--node-id 需要一个参数}"; shift ;;
     --node-id=*) NODE_ID="${1#*=}" ;;
     --no-start) START=0 ;;
@@ -393,11 +396,8 @@ compute_paths() {
 
 compute_paths
 
-# A-4：未显式指定时从现有 unit 继承观测层配置——复制粘贴升级/手动重装不丢 allowlist。
+# 未显式指定时从现有 unit 继承节点 ID 与 TLS 证书路径。
 if [ -f "$UNIT_PATH" ]; then
-  if [ -z "$LIVE_ORIGINS" ]; then
-    LIVE_ORIGINS="$(sed -n 's/^Environment=KHC_LIVE_ORIGINS=//p' "$UNIT_PATH" | tail -n 1 || true)"
-  fi
   if [ -z "$NODE_ID" ]; then
     NODE_ID="$(sed -n 's/^Environment=KHC_NODE_ID=//p' "$UNIT_PATH" | tail -n 1 || true)"
   fi
@@ -800,7 +800,6 @@ render_unit() {
   KHC_TPL_APPS_OPT="$OPT_DIR/khc" \
   KHC_TPL_TLS_CERT="$TLS_CERT_PATH" \
   KHC_TPL_TLS_KEY="$TLS_KEY_PATH" \
-  KHC_TPL_LIVE_ORIGINS="$LIVE_ORIGINS" \
   KHC_TPL_NODE_ID="$NODE_ID" \
   "$PYTHON" - "$SCRIPT_DIR/khc-agent.service" "$out" <<'PY'
 import os
@@ -826,7 +825,6 @@ mapping = {
     "@APPS_OPT_DIR@": os.environ["KHC_TPL_APPS_OPT"],
     "@TLS_CERT@": os.environ["KHC_TPL_TLS_CERT"],
     "@TLS_KEY@": os.environ["KHC_TPL_TLS_KEY"],
-    "@LIVE_ORIGINS@": os.environ["KHC_TPL_LIVE_ORIGINS"],
     "@NODE_ID@": os.environ["KHC_TPL_NODE_ID"],
 }
 with open(template_path, "r", encoding="utf-8") as handle:
@@ -915,13 +913,13 @@ if [ "$START" = "1" ]; then
         KHC_DATA_DIR="$DATA_DIR" KHC_CONFIG_DIR="$CONFIG_DIR" \
         KHC_UNIT_DIR="$UNIT_DIR" KHC_CADDY_DIR="$CADDY_DIR" KHC_CADDYFILE="$CADDYFILE" \
         KHC_TLS_CERT="$TLS_CERT_PATH" KHC_TLS_KEY="$TLS_KEY_PATH" \
-        KHC_LIVE_ORIGINS="$LIVE_ORIGINS" KHC_NODE_ID="$NODE_ID" \
+        KHC_NODE_ID="$NODE_ID" \
         "$PYTHON" "$PREFIX/khc_agent.py" run \
         --host "$HOST" --port "$PORT" --token-file "$TOKEN_FILE" --adapters-dir "$PREFIX/adapters" \
         >>"$DATA_DIR/agent.log" 2>&1 &
       health_check || fail "nohup 启动失败，请查看: $DATA_DIR/agent.log"
       if command -v crontab >/dev/null 2>&1; then
-        CRON_LINE="@reboot KHC_PROFILE=$PROFILE KHC_ETC_DIR=$ETC_DIR KHC_OPT_DIR=$OPT_DIR KHC_DATA_DIR=$DATA_DIR KHC_CONFIG_DIR=$CONFIG_DIR KHC_UNIT_DIR=$UNIT_DIR KHC_CADDY_DIR=$CADDY_DIR KHC_CADDYFILE=$CADDYFILE KHC_TLS_CERT=$TLS_CERT_PATH KHC_TLS_KEY=$TLS_KEY_PATH KHC_LIVE_ORIGINS=$LIVE_ORIGINS KHC_NODE_ID=$NODE_ID $PYTHON $PREFIX/khc_agent.py run --host $HOST --port $PORT --token-file $TOKEN_FILE --adapters-dir $PREFIX/adapters >>$DATA_DIR/agent.log 2>&1"
+        CRON_LINE="@reboot KHC_PROFILE=$PROFILE KHC_ETC_DIR=$ETC_DIR KHC_OPT_DIR=$OPT_DIR KHC_DATA_DIR=$DATA_DIR KHC_CONFIG_DIR=$CONFIG_DIR KHC_UNIT_DIR=$UNIT_DIR KHC_CADDY_DIR=$CADDY_DIR KHC_CADDYFILE=$CADDYFILE KHC_TLS_CERT=$TLS_CERT_PATH KHC_TLS_KEY=$TLS_KEY_PATH KHC_NODE_ID=$NODE_ID $PYTHON $PREFIX/khc_agent.py run --host $HOST --port $PORT --token-file $TOKEN_FILE --adapters-dir $PREFIX/adapters >>$DATA_DIR/agent.log 2>&1"
         ( crontab -l 2>/dev/null | grep -vF "$PREFIX/khc_agent.py"; echo "$CRON_LINE" ) | crontab -
         log "已添加 crontab @reboot 自启"
       fi
@@ -943,9 +941,6 @@ else
   log "  WARN     : http://<IP 或域名>:$PORT   (明文，--insecure-http；仅测试，生产禁用)"
 fi
 log "  token    : $TOKEN_FILE"
-if [ -n "$LIVE_ORIGINS" ]; then
-  log "  live     : 观测层 Origin allowlist = ${LIVE_ORIGINS}（未知 Origin 的 SSE 连接将被 403）"
-fi
 echo
 echo "节点 token（填入 Worker / 面板，仅显示这一次）："
 cat "$TOKEN_FILE"

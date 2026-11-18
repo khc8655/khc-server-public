@@ -18,7 +18,6 @@ from adapters.caddy_site import (
     APP_NAME,
     CADDY_UNIT,
     DEFAULT_INDEX,
-    LIVE_GATEWAY_UPSTREAM,
     NO_SITES_COMMENT,
     CaddySite,
     _find_process_uid,
@@ -1464,14 +1463,11 @@ class ProxyKindTests(RenderTestBase):
         self.assertIn("    handle {\n        reverse_proxy 10.99.0.2:8080\n    }", snippet)
         self.assertLess(snippet.index("handle /api/*"), snippet.index("    handle {"))
 
-    def test_live_gateway_adds_handle_before_fallback(self) -> None:
+    def test_legacy_live_gateway_field_ignored_on_render(self) -> None:
         snippet = self.snippet(config(site(liveGateway=True)))
-        self.assertIn(
-            f"    handle /_live/* {{\n        reverse_proxy {LIVE_GATEWAY_UPSTREAM}\n    }}",
-            snippet,
-        )
-        self.assertIn("    handle {\n        reverse_proxy 10.99.0.2:8080\n    }", snippet)
-        self.assertLess(snippet.index("/_live/*"), snippet.rindex("    handle {"))
+        self.assertNotIn("/_live/*", snippet)
+        self.assertNotIn("8899", snippet)
+        self.assertIn("    reverse_proxy 10.99.0.2:8080", snippet)
 
     def test_live_gateway_does_not_add_port_claim(self) -> None:
         merged, errors = validate_config(CaddySite.schema, config(site(liveGateway=True)))
@@ -1492,16 +1488,17 @@ class ProxyKindTests(RenderTestBase):
             with self.assertRaises(ValidationFailed, msg=routes):
                 self.render(config(site(pathRoutes=routes)))
 
-    def test_live_gateway_path_route_conflict(self) -> None:
-        with self.assertRaises(ValidationFailed):
-            self.render(
-                config(
-                    site(
-                        liveGateway=True,
-                        pathRoutes=[{"path": "/_live/*", "upstreams": ["10.0.0.1:9000"]}],
-                    )
+    def test_legacy_live_gateway_allows_custom_live_path_route(self) -> None:
+        snippet = self.snippet(
+            config(
+                site(
+                    liveGateway=True,
+                    pathRoutes=[{"path": "/_live/*", "upstreams": ["10.0.0.1:9000"]}],
                 )
             )
+        )
+        self.assertIn("    handle /_live/* {\n        reverse_proxy 10.0.0.1:9000\n    }", snippet)
+        self.assertNotIn("8899", snippet)
 
     def test_invalid_lb_policy_and_health_uri(self) -> None:
         with self.assertRaises(ValidationFailed):
@@ -1550,13 +1547,10 @@ class StaticKindTests(RenderTestBase):
         snippet = self.snippet(config(static_site(root="/var/www/blog/")))
         self.assertIn("    root * /var/www/blog\n", snippet)
 
-    def test_static_with_live_gateway_wraps_file_server(self) -> None:
+    def test_static_ignores_legacy_live_gateway(self) -> None:
         snippet = self.snippet(config(static_site(liveGateway=True)))
-        self.assertIn("    handle /_live/* {\n        reverse_proxy 127.0.0.1:8899\n    }", snippet)
-        self.assertIn(
-            "    handle {\n        root * /var/www/blog\n        file_server\n    }",
-            snippet,
-        )
+        self.assertNotIn("/_live/*", snippet)
+        self.assertIn("    root * /var/www/blog\n    file_server", snippet)
 
     def test_static_root_validation(self) -> None:
         for bad in ("", "relative/www", "/", "/var/www/{x}", '/var/www/"x"', "/var/www/../etc"):
@@ -1591,10 +1585,10 @@ class RedirectKindTests(RenderTestBase):
         )
         self.assertIn("    redir /new/{uri} 308", snippet)
 
-    def test_redirect_with_live_gateway(self) -> None:
+    def test_redirect_ignores_legacy_live_gateway(self) -> None:
         snippet = self.snippet(config(redirect_site(liveGateway=True)))
-        self.assertIn("    handle /_live/* {", snippet)
-        self.assertIn("    handle {\n        redir https://new.example.com{uri} 301\n    }", snippet)
+        self.assertNotIn("/_live/*", snippet)
+        self.assertIn("    redir https://new.example.com{uri} 301", snippet)
 
     def test_redirect_target_validation(self) -> None:
         for bad in (

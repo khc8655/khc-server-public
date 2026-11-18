@@ -1,10 +1,7 @@
-"""控制通道传输加固单测：主端口 /_live/snapshot、TLS 证书热重载、/state 证书信息、看门狗 TLS 自检。"""
+"""控制通道传输加固单测：下线 /_live/snapshot 后鉴权封闭、TLS 证书热重载、/state 证书信息、看门狗 TLS 自检。"""
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import http.client
 import json
 import os
@@ -24,33 +21,12 @@ from khc.upgrade import UpgradeService
 
 from .support import TEST_TOKEN, make_kernel, make_paths, signed_headers
 
-ORIGIN = "https://panel.example.test"
-
 
 def _copy_bytes(src: str, dst: str) -> None:
     """与 shutil.copyfile 等价；本机沙箱会拦截 shutil 的 broker 读取临时 .key 文件，
     改用原生 open 读写绕开，复制语义与断言不变（CI 无此限制）。"""
     with open(src, "rb") as reader, open(dst, "wb") as writer:
         writer.write(reader.read())
-
-
-def make_snap_ticket(
-    *,
-    scope: str = "snap",
-    origin: Optional[str] = ORIGIN,
-    exp: Optional[float] = None,
-) -> str:
-    payload: dict[str, Any] = {
-        "v": 1,
-        "n": "hub_test",
-        "s": scope,
-        "e": exp if exp is not None else time.time() + 900,
-        "j": "jti-1",
-        "o": origin,
-    }
-    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    sig = hmac.new(TEST_TOKEN.encode(), body.encode(), hashlib.sha256).hexdigest()
-    return f"{body}.{sig}"
 
 
 def make_cert(directory: str, name: str, cn: str, days: int = 30) -> tuple[str, str]:
@@ -120,118 +96,28 @@ def get(
         conn.close()
 
 
-class LiveSnapshotOnMainPortTests(unittest.TestCase):
-    """浏览器直连入口并入主端口：票据鉴权 + Origin 严格绑定，不回显 '*'。"""
+class MainPortChannelTests(unittest.TestCase):
+    """浏览器直连入口下线后，仅 /health 匿名开放；/_live/snapshot 与其余路径一律要求 HMAC。"""
 
-    def test_valid_ticket_returns_snapshot_with_origin_echo(self) -> None:
+    def test_live_snapshot_requires_hmac_and_returns_not_found(self) -> None:
         served = _Served(self)
-        status, headers, body = get(
+        status, headers, _ = get(served.port, "/_live/snapshot?ticket=legacy")
+        self.assertEqual(status, 401)
+        self.assertNotIn("access-control-allow-origin", headers)
+
+        status, _, body = get(
             served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket()}",
-            headers={"Origin": ORIGIN},
+            "/_live/snapshot",
+            headers=signed_headers(TEST_TOKEN, "GET", "/_live/snapshot"),
+        )
+        self.assertEqual(status, 404)
+        self.assertFalse(body["ok"])
+
+        status, _, body = get(
+            served.port, "/snapshot", headers=signed_headers(TEST_TOKEN, "GET", "/snapshot")
         )
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
-        self.assertIn("ops", body)
-        self.assertEqual(headers["access-control-allow-origin"], ORIGIN)
-        self.assertEqual(headers["vary"], "Origin")
-        self.assertNotEqual(headers["access-control-allow-origin"], "*")
-
-    def test_no_hmac_headers_needed_but_other_paths_still_need_them(self) -> None:
-        served = _Served(self)
-        status, _, _ = get(served.port, "/state")
-        self.assertEqual(status, 401)
-        status, _, _ = get(
-            served.port, "/state", headers=signed_headers(TEST_TOKEN, "GET", "/state")
-        )
-        self.assertEqual(status, 200)
-
-    def test_request_without_origin_is_rejected(self) -> None:
-        served = _Served(self)
-        status, headers, body = get(served.port, f"/_live/snapshot?ticket={make_snap_ticket()}")
-        self.assertEqual(status, 401)
-        self.assertEqual(body["error"]["details"]["reason"], "origin_missing")
-        self.assertNotIn("access-control-allow-origin", headers)
-
-    def test_ticket_without_origin_binding_is_rejected(self) -> None:
-        served = _Served(self)
-        status, headers, body = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket(origin=None)}",
-            headers={"Origin": ORIGIN},
-        )
-        self.assertEqual(status, 401)
-        self.assertEqual(body["error"]["details"]["reason"], "origin_unbound")
-        # 401 带 CORS 头，前端才能读到状态码并换票重试
-        self.assertEqual(headers["access-control-allow-origin"], ORIGIN)
-
-    def test_origin_mismatch_is_rejected(self) -> None:
-        served = _Served(self)
-        status, _, body = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket()}",
-            headers={"Origin": "https://evil.example.test"},
-        )
-        self.assertEqual(status, 401)
-        self.assertEqual(body["error"]["details"]["reason"], "bad_origin")
-
-    def test_allow_list_blocks_unlisted_origin_without_cors(self) -> None:
-        served = _Served(self, live_origins=[ORIGIN])
-        other = "https://other.example.test"
-        status, headers, _ = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket(origin=other)}",
-            headers={"Origin": other},
-        )
-        self.assertEqual(status, 403)
-        self.assertNotIn("access-control-allow-origin", headers)
-        status, _, _ = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket()}",
-            headers={"Origin": ORIGIN},
-        )
-        self.assertEqual(status, 200)
-
-    def test_non_snap_scope_and_expired_ticket_rejected(self) -> None:
-        served = _Served(self)
-        for ticket, reason in (
-            (make_snap_ticket(scope="live"), "bad_scope"),
-            (make_snap_ticket(exp=time.time() - 5), "expired"),
-        ):
-            status, _, body = get(
-                served.port, f"/_live/snapshot?ticket={ticket}", headers={"Origin": ORIGIN}
-            )
-            self.assertEqual(status, 401)
-            self.assertEqual(body["error"]["details"]["reason"], reason)
-
-    def test_preflight_returns_204_without_body(self) -> None:
-        served = _Served(self)
-        status, headers, body = get(
-            served.port, "/_live/snapshot", method="OPTIONS", headers={"Origin": ORIGIN}
-        )
-        self.assertEqual(status, 204)
-        self.assertEqual(body, {})
-        self.assertEqual(headers["access-control-allow-origin"], ORIGIN)
-        self.assertEqual(headers["access-control-max-age"], "600")
-
-    def test_live_disabled_returns_404(self) -> None:
-        served = _Served(self, live_enabled=False)
-        status, _, _ = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket()}",
-            headers={"Origin": ORIGIN},
-        )
-        self.assertEqual(status, 404)
-
-    def test_node_binding_is_enforced_when_configured(self) -> None:
-        served = _Served(self, node_id="hub_other")
-        status, _, body = get(
-            served.port,
-            f"/_live/snapshot?ticket={make_snap_ticket()}",
-            headers={"Origin": ORIGIN},
-        )
-        self.assertEqual(status, 401)
-        self.assertEqual(body["error"]["details"]["reason"], "wrong_node")
 
 
 @unittest.skipIf(shutil.which("openssl") is None, "openssl 不可用")

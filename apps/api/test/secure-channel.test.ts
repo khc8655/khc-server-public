@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { AppError } from '../src/lib/errors';
 import { assertSecureChannelForSecrets, containsSecretRefs } from '../src/lib/secure-channel';
-import { deriveLiveEndpoint } from '../src/routes/helpers';
 import { authHeaders, loginAsAdmin, makeTestContext, type TestContext } from './helpers/context';
 
 beforeEach(() => resetRateLimitForTests());
@@ -113,45 +112,5 @@ describe('apply 路由：明文通道不下发密钥材料', () => {
     const res = await apply();
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).not.toBe('insecure_channel_secret');
-  });
-});
-
-describe('deriveLiveEndpoint', () => {
-  it('显式配置优先', () => {
-    expect(
-      deriveLiveEndpoint({
-        liveEndpoint: 'https://live.example.com',
-        endpoint: 'https://h.example.com:9443',
-        domain: 'h.example.com',
-      }),
-    ).toBe('https://live.example.com');
-  });
-
-  it('https 控制入口：同源同端口（9443 不再被错推成 443）', () => {
-    expect(
-      deriveLiveEndpoint({
-        liveEndpoint: null,
-        endpoint: 'https://h.example.com:9443',
-        domain: 'h.example.com',
-      }),
-    ).toBe('https://h.example.com:9443');
-  });
-
-  it('https 控制入口无显式端口时是 origin 本身', () => {
-    expect(
-      deriveLiveEndpoint({ liveEndpoint: null, endpoint: 'https://h.example.com', domain: null }),
-    ).toBe('https://h.example.com');
-  });
-
-  it('明文入口 + 绑定域名：沿用旧的 Caddy 443 推导', () => {
-    expect(
-      deriveLiveEndpoint({ liveEndpoint: null, endpoint: 'http://1.2.3.4:8880', domain: 'h.example.com' }),
-    ).toBe('https://h.example.com');
-  });
-
-  it('明文入口且无域名：null（走 Worker 转发）', () => {
-    expect(
-      deriveLiveEndpoint({ liveEndpoint: null, endpoint: 'http://1.2.3.4:8880', domain: null }),
-    ).toBeNull();
   });
 });

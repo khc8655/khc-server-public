@@ -15,27 +15,6 @@ export async function requireNode(deps: AppDeps, nodeId: string): Promise<Stored
 const ONLINE_WINDOW_SEC = 300;
 
 /**
- * 浏览器直连观测入口，优先级：
- * 1. 显式配置的 liveEndpoint；
- * 2. 控制通道本身是 HTTPS（Agent 自己监听 TLS）→ 同源同端口。Agent 在主端口提供
- *    `/_live/snapshot`，无需 Caddy，也不会再把 9443 之类的非标端口错推成 443；
- * 3. 兼容旧部署：绑定了域名且入口是明文 → `https://<域名>`（Caddy 443 的 /_live 反代）；
- * 4. 否则 null（走 Worker 转发快照）。
- */
-export function deriveLiveEndpoint(
-  node: Pick<StoredNode, 'liveEndpoint' | 'endpoint' | 'domain'>,
-): string | null {
-  if (node.liveEndpoint) return node.liveEndpoint;
-  try {
-    const url = new URL(node.endpoint);
-    if (url.protocol === 'https:') return url.origin;
-  } catch {
-    // endpoint 非法时退回下面的域名推导
-  }
-  return node.domain ? `https://${node.domain}` : null;
-}
-
-/**
  * 列表里的 status 只表达「最近一次成功探测」的结果：
  * - online：窗口内有人成功拉过 /state（lastSeen 新鲜）
  * - unknown：从未探测过，或最后一次成功探测已超出窗口（老租约≠离线）
@@ -55,7 +34,7 @@ export function toPublicNode(node: StoredNode, now = nowSec()): Node {
     name: node.name,
     endpoint: node.endpoint,
     tunnelEndpoint: node.tunnelEndpoint,
-    liveEndpoint: deriveLiveEndpoint(node),
+    liveEndpoint: null,
     domain: node.domain,
     accessMode: node.accessMode,
     tunnelId: node.tunnelId,
