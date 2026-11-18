@@ -36,8 +36,6 @@ export function assertHubWriteAllowed(path: string, init: RequestInit = {}): voi
   if (!isMutating(init.method ?? 'GET')) return;
   const prefix = `/api/v1/nodes/${encodeURIComponent(active.hubId)}/`;
   if (!path.startsWith(prefix)) return;
-  // ticket 是只读观测的入口，必须允许。
-  if (path.includes('/live-ticket')) return;
   // 保存类只写 D1（rev+1，applied_rev 保持），离线时仍然允许。
   if (isSavePut(path, init.method ?? 'GET')) return;
   // 生成安装/卸载命令是纯文本产出，不下发到 Hub，离线时必须可用。

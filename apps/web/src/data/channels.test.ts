@@ -3,7 +3,7 @@ import { deriveHubChannels, shouldRetryControlProbe } from './channels';
 
 const liveSnapshot = { ts: 123 };
 
-describe('Hub 双通道状态派生', () => {
+describe('Hub 单控制面通道状态派生', () => {
   it('控制面可达时，节点可管理；快照只读不改变可写能力', () => {
     const channels = deriveHubChannels({
       controlReachable: true,
@@ -13,21 +13,20 @@ describe('Hub 双通道状态派生', () => {
     expect(channels.canApply).toBe(true);
     expect(channels.canMutate).toBe(true);
     expect(channels.canSave).toBe(true);
-    // 无域名时读通道是控制面转发快照。
     expect(channels.readSource).toBe('forward');
   });
 
-  it('控制面不可达但直连快照成功时，执行类禁用但保存配置仍允许', () => {
+  it('控制面不可达且列表非在线时判定离线，保存配置仍允许（纯 D1 写）', () => {
     const channels = deriveHubChannels({
       controlReachable: false,
       controlError: 'Hub 不可达',
-      live: { status: 'live', snapshot: liveSnapshot, error: null, mode: 'direct' },
+      live: { status: 'live', snapshot: liveSnapshot, error: null, mode: 'forward' },
     });
-    expect(channels.presence).toBe('live-only');
+    expect(channels.presence).toBe('offline');
     expect(channels.canApply).toBe(false);
     expect(channels.canMutate).toBe(false);
     expect(channels.canSave).toBe(true);
-    expect(channels.readSource).toBe('direct');
+    expect(channels.readSource).toBe('forward');
     expect(channels.live.lastFrameAt).toBe(123);
   });
 
@@ -52,12 +51,12 @@ describe('Hub 双通道状态派生', () => {
     expect(channels.canSave).toBe(true);
   });
 
-  it('达到自动刷新上限后仍算已有数据，不提前宣称离线', () => {
+  it('达到自动刷新上限后保留已有快照帧与 stopped 状态', () => {
     const channels = deriveHubChannels({
-      controlReachable: false,
-      live: { status: 'stopped', snapshot: liveSnapshot, error: null, mode: 'direct' },
+      controlReachable: true,
+      live: { status: 'stopped', snapshot: liveSnapshot, error: null, mode: 'forward' },
     });
-    expect(channels.presence).toBe('live-only');
+    expect(channels.presence).toBe('managed-online');
     expect(channels.live.status).toBe('stopped');
   });
 

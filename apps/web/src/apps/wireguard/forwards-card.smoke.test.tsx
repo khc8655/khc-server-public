@@ -5,7 +5,6 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../../app/router';
-import { makeLiveEventSource } from '../../test/liveMock';
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -169,7 +168,6 @@ function mockApi() {
   pfInstalled = true;
   currentApp = app();
   requests = [];
-  vi.stubGlobal('EventSource', makeLiveEventSource(() => state(emptyMode).state));
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -178,9 +176,6 @@ function mockApi() {
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
       if (url === '/api/v1/nodes') return json({ nodes: [node] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node });
-      if (url === '/api/v1/nodes/tyo-1/live-ticket') {
-        return json({ ticket: 'test-ticket', livePath: '/_live/', expiresAt: NOW });
-      }
       if (url === '/api/v1/nodes/tyo-1/mode') {
         return json({
           nodeId: 'tyo-1',

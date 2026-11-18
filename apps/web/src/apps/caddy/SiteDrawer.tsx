@@ -703,21 +703,6 @@ export function SiteDrawer({
             />
           </Field>
         </GroupCard>
-
-        <GroupCard title={zh.sites.groupObserve}>
-          <Field
-            id="site-live"
-            label={zh.sites.liveGateway}
-            help={zh.sites.liveGatewayHelp}
-            variant="row"
-          >
-            <Toggle
-              checked={form.liveGateway}
-              label={zh.sites.liveGateway}
-              onChange={(checked) => onChange({ liveGateway: checked })}
-            />
-          </Field>
-        </GroupCard>
         </AdvancedSection>
 
         {saveError ? <InlineError message={saveError} /> : null}

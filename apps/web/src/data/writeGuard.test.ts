@@ -11,7 +11,6 @@ describe('浏览器侧写闸门：保存类放行、执行类拦截', () => {
     expect(() => assertHubWriteAllowed('/api/v1/nodes/hub_a/apps/caddy-site/apply', { method: 'POST' })).toThrow('只读');
     expect(() => assertHubWriteAllowed('/api/v1/nodes/hub_a/apps/wireguard/plan', { method: 'POST' })).toThrow('只读');
     expect(() => assertHubWriteAllowed('/api/v1/nodes/hub_a/apps/caddy-site', { method: 'GET' })).not.toThrow();
-    expect(() => assertHubWriteAllowed('/api/v1/nodes/hub_a/live-ticket', { method: 'POST' })).not.toThrow();
     expect(() => assertHubWriteAllowed('/api/v1/certs', { method: 'POST' })).not.toThrow();
   });
 

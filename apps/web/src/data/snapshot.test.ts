@@ -119,34 +119,4 @@ describe('SnapshotLoop：10s 节奏 / 可见性 / 上限 / 环形缓冲', () => 
     expect(h.last()?.status).toBe('live');
     expect(h.last()?.error).toBeNull();
   });
-
-  it('readForward 只显式读取一次控制面快照，不改变模式也不重启自动循环', async () => {
-    let forwardCalls = 0;
-    const h = makeLoop({
-      mode: 'direct',
-      fetchSnapshot: async () => {
-        throw new Error('直连观测入口不可达');
-      },
-      fetchForward: async () => {
-        forwardCalls += 1;
-        return SNAP;
-      },
-    });
-    h.loop.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.last()?.status).toBe('fallback');
-    expect(h.last()?.mode).toBe('direct');
-
-    h.loop.readForward();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(forwardCalls).toBe(1);
-    expect(h.last()?.receivedAt).not.toBeNull();
-    expect(h.last()?.status).toBe('fallback');
-    expect(h.last()?.mode).toBe('direct');
-
-    // 自动循环仍按 10s 继续尝试直连；不会因为手动读取而改成转发模式。
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(h.last()?.mode).toBe('direct');
-    expect(h.last()?.pollCount).toBe(2);
-  });
 });

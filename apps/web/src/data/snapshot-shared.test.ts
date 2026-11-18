@@ -73,7 +73,7 @@ function makeTab(bus: FakeBus, tabId: string, initiallyVisible = true) {
   let calls = 0;
   const updates: SnapshotState[] = [];
   const loop = new SnapshotLoop({
-    mode: 'direct',
+    mode: 'forward',
     initiallyVisible,
     shared: {
       hubId: 'hub-1',

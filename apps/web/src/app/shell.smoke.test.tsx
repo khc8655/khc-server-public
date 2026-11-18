@@ -147,14 +147,21 @@ describe('AppShell 与页面渲染', () => {
     expect(urls.some((url) => url.includes('/state') || url.includes('/apps'))).toBe(false);
   });
 
-  it('节点概况页展示作用域与实时状态', async () => {
+  it('节点概况页展示作用域与实时状态，且不再请求 live-ticket / _live', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
     await renderRoute('/hubs/tyo-1');
     expect(await screen.findByRole('heading', { name: 'tyo-1' })).toBeTruthy();
-    expect(await screen.findByText('在线')).toBeTruthy();
+    expect((await screen.findAllByText('在线')).length).toBeGreaterThan(0);
     // 无任何已配置应用时「应用与发布」整卡不渲染（page-specs §2.1）
     expect(screen.queryByText('应用与发布')).toBeNull();
     expect(await screen.findByText('主机与服务')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Peer' })).toBeNull();
+
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls).toContain('/api/v1/nodes/tyo-1/snapshot');
+      expect(urls.some((url) => url.includes('/live-ticket') || url.includes('/_live/'))).toBe(false);
+    });
   });
 
   it('旧 /apps 路由 302 到站点页，扩展应用分段可打开应用', async () => {

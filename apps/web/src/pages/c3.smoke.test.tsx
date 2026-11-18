@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../app/router';
-import { makeLiveEventSource } from '../test/liveMock';
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -159,9 +158,6 @@ function mockApi() {
       if (url === '/api/v1/nodes/tyo-1/apps/caddy-site') {
         return json({ app: caddyConfig });
       }
-      if (url === '/api/v1/nodes/tyo-1/live-ticket') {
-        return json({ ticket: 'test-ticket', livePath: '/_live/', expiresAt: NOW });
-      }
       if (url === '/api/v1/nodes/tyo-1/state') {
         return json({
           reachable: true,
@@ -179,7 +175,6 @@ function mockApi() {
 beforeEach(() => {
   window.scrollTo = vi.fn();
   serviceActive = true;
-  vi.stubGlobal('EventSource', makeLiveEventSource(agentState));
   mockApi();
 });
 
@@ -237,6 +232,13 @@ describe('C3 页面', () => {
     expect((await screen.findAllByText('已同步')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('反代').length).toBeGreaterThan(0);
     expect(screen.getAllByText('手动证书').length).toBeGreaterThan(0);
+    // 即使节点带 liveEndpoint，也统一经 Worker /snapshot，不再发 /live-ticket 或 /_live/。
+    await waitFor(() => {
+      expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/snapshot')).toBe(true);
+    });
+    expect(
+      requests.some((item) => item.url.includes('/live-ticket') || item.url.includes('/_live/')),
+    ).toBe(false);
   });
 
   it('自签签发流程：Agent ISO 到期时间转 epoch 后入库', async () => {
@@ -344,8 +346,9 @@ describe('C3 页面', () => {
     expect(within(drawer).getByLabelText('证书')).toBeTruthy();
     expect(within(drawer).getAllByText(/blog.example.dev · 5 天后/).length).toBeGreaterThan(0);
 
-    // 安全分组收进抽屉「高级」折叠区（ui-redesign ⑤）
+    // 安全分组收进抽屉「高级」折叠区（ui-redesign ⑤）；已移除「启用观测入口」开关
     await userEvent.click(within(drawer).getByRole('button', { name: '高级' }));
+    expect(within(drawer).queryByText('启用观测入口')).toBeNull();
     await userEvent.click(within(drawer).getByRole('button', { name: '添加请求头' }));
     expect(within(drawer).getByLabelText('请求头名称')).toBeTruthy();
     await userEvent.click(within(drawer).getByRole('button', { name: '添加路径' }));

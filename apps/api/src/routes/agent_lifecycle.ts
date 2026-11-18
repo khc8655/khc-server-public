@@ -129,29 +129,6 @@ async function commandTarget(
   };
 }
 
-/**
- * A-4：观测层渲染参数。面板前端用 `window.location.origin` 取票并作为 EventSource
- * 的 Origin 直连节点观测层——两者都等于**用户在浏览器里看到的**面板地址。
- *
- * 注意不能直接用 `c.req.url` 的 origin：生产入口是第三方边缘（回源 Host 为
- * `*.workers.dev`），Worker 看到的 origin 是 workers.dev，而浏览器用的是
- * `https://panel.example.com` → 装完节点后浏览器直连观测会被 CORS 拒（2026-11-07 真机：
- * 页面顶部报「实时观测不可用 … Agent 的 KHC_LIVE_ORIGINS 未包含当前面板域名」）。
- * 因此优先用显式配置的 `LIVE_ORIGINS`（对外入口白名单），没有配置才退回请求 origin。
- * 旧节点（unit 无 KHC_LIVE_ORIGINS）留空不校验，升级/重装命令会顺带补上。
- */
-function liveObservationOptions(
-  c: { req: { url: string }; env: { LIVE_ORIGINS?: string } },
-  nodeId: string,
-) {
-  const configured = (c.env.LIVE_ORIGINS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const origins = configured.length > 0 ? configured : [new URL(c.req.url).origin];
-  return { liveOrigins: origins, nodeId };
-}
-
 export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
   const router = new Hono<AppBindings>();
 
@@ -184,7 +161,7 @@ export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
       endpointScheme: target.scheme,
       endpointHost: target.hostName,
       tunnelToken: target.tunnelToken,
-      ...liveObservationOptions(c, node.id),
+      nodeId: node.id,
     });
     await deps.audit.log({
       actor: c.get('user').name,
@@ -220,7 +197,7 @@ export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
       host: target.host,
       port: target.port,
       endpointScheme: target.scheme,
-      ...liveObservationOptions(c, node.id),
+      nodeId: node.id,
     });
     await deps.audit.log({
       actor: c.get('user').name,
