@@ -185,6 +185,26 @@ jobs:
             echo "ERROR: wrangler.ci.toml 仍含本地默认值，阻断部署"; exit 1
           fi
 
+      # 一次性补齐 0013 迁移（主人 2026-11-18 授权，PR #87）：迁移先于构建/部署执行。
+      # 0013 为 CREATE TABLE IF NOT EXISTS，幂等，重复执行无害；执行前后各打印一次
+      # 表清单（迁移前快照 + 迁移后复核），日志可审计。凭据只来自 repository secrets。
+      # 后续 0014+ 迁移是否常态化走 CI 由主人拍板（见 PR 描述待拍板项）。
+      - name: D1 migration 0013 (snapshot + apply + verify)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          echo "== 迁移前表清单（快照）=="
+          npx wrangler d1 execute DB --config wrangler.ci.toml --remote \
+            --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+          echo "== 执行 migrations/0013_app_manifests.sql =="
+          npx wrangler d1 execute DB --config wrangler.ci.toml --remote \
+            --file=migrations/0013_app_manifests.sql
+          echo "== 迁移后复核（应输出 app_manifests）=="
+          npx wrangler d1 execute DB --config wrangler.ci.toml --remote \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name='app_manifests'"
+
       # 签名产物必须在 pnpm build **之前**就位：构建会把 apps/web/public/agent/ 打进 Worker assets。
       # 私钥只从 repository secret 落到 mktemp 的 0600 文件，步骤结束即删除；
       # 不把私钥内容作为参数传给脚本（只传文件路径），日志里也不会出现 PEM。

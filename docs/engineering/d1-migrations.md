@@ -26,7 +26,7 @@
 | 0010 | `0010_node_access.sql` | `nodes` 加 `access_mode` / `tunnel_id` / `allow_insecure` 列；新增 `tunnels` 表 | 全局接入配置（域名/Tunnel/IP 直连）与隧道配置（Token 密文；2026-11-07 已对生产执行） |
 | 0011 | `0011_cert_acme_meta.sql` | `certificates` 加 `acme_provider` / `acme_credential_key` / `acme_ca` / `acme_key_type` 列 | 证书一键续期的 ACME 元数据（2026-11-07 新增；**生产已应用**，2026-11-10 用 `PRAGMA table_info(certificates)` 复核四列存在） |
 | 0012 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json` 列 | 明文摘要（只含模式与计数）供 `GET /nodes` 零解密派生；旧行 NULL 时回退解密，一次性回填后不再发生（2026-11-11 新增；**生产已应用**） |
-| 0013 | `0013_app_manifests.sql` | 新增 `app_manifests` 表 | 全局应用清单（脚本正文 + 元数据，只存配置；2026-11-15 新增） |
+| 0013 | `0013_app_manifests.sql` | 新增 `app_manifests` 表 | 全局应用清单（脚本正文 + 元数据，只存配置；2026-11-15 新增；**经 CI 部署 job 执行**（`ci.yml`，`CREATE TABLE IF NOT EXISTS` 幂等，执行前后打印表清单复核），合并即应用） |
 
 ## 执行命令
 
