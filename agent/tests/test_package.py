@@ -171,11 +171,8 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(wireguard_line, "wireguard 目录必须单独 install -d（0700）")
         self.assertIn("-m 0700", wireguard_line[0], "wireguard 目录含私钥，需 0700")
 
-    def test_install_renders_live_env_and_inherits(self) -> None:
-        """A-4：--live-origins/--node-id 渲染进 unit；未显式指定时从现有 unit 继承。
-
-        用隔离 HOME 跑真实 install.sh --user --no-start（不启动服务、不碰系统目录）。
-        """
+    def test_install_accepts_legacy_live_flags_as_noop_and_inherits_node_id(self) -> None:
+        """旧命令带 --live-origins 仍可正常安装；unit 不再写 KHC_LIVE_ORIGINS，--node-id 照常继承。"""
 
         with tempfile.TemporaryDirectory() as home:
             env = dict(os.environ, HOME=home)
@@ -187,7 +184,7 @@ class PackageTests(unittest.TestCase):
                     os.path.join(AGENT_DIR, "install.sh"),
                     "--user",
                     "--no-start",
-                    "--insecure-http",  # 本用例测观测层配置继承，与传输策略无关
+                    "--insecure-http",
                     "--live-origins",
                     "https://panel.example,https://alt.example",
                     "--node-id",
@@ -203,13 +200,10 @@ class PackageTests(unittest.TestCase):
             unit_path = os.path.join(home, ".config/systemd/user/khc-agent.service")
             with open(unit_path, "r", encoding="utf-8") as handle:
                 unit = handle.read()
-            self.assertIn(
-                "Environment=KHC_LIVE_ORIGINS=https://panel.example,https://alt.example",
-                unit,
-            )
+            self.assertNotIn("KHC_LIVE_ORIGINS", unit)
             self.assertIn("Environment=KHC_NODE_ID=node_abc123", unit)
 
-            # 重装不带 flags：从现有 unit 继承，allowlist 不丢（复制粘贴升级路径）。
+            # 重装不带 flags：--node-id 从现有 unit 继承。
             rerun = subprocess.run(
                 ["bash", os.path.join(AGENT_DIR, "install.sh"), "--user", "--no-start", "--insecure-http"],
                 cwd=AGENT_DIR,
@@ -221,11 +215,31 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(rerun.returncode, 0, rerun.stderr + rerun.stdout)
             with open(unit_path, "r", encoding="utf-8") as handle:
                 unit_again = handle.read()
-            self.assertIn(
-                "Environment=KHC_LIVE_ORIGINS=https://panel.example,https://alt.example",
-                unit_again,
-            )
             self.assertIn("Environment=KHC_NODE_ID=node_abc123", unit_again)
+
+    def test_cli_accepts_legacy_live_flags_as_noop(self) -> None:
+        """khc_agent.py run 对旧 --live-host/--live-port/--live-origins/--no-live 保持 no-op 解析。"""
+
+        import khc_agent
+
+        parsed = khc_agent.build_parser().parse_args(
+            [
+                "run",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8880",
+                "--live-host",
+                "127.0.0.1",
+                "--live-port",
+                "8899",
+                "--live-origins",
+                "https://panel.example",
+                "--no-live",
+            ]
+        )
+        self.assertEqual(parsed.host, "127.0.0.1")
+        self.assertEqual(parsed.port, 8880)
 
     def test_install_renders_tls_cert_and_inherits_on_upgrade(self) -> None:
         """--tls-cert/--tls-key 渲染进 unit；升级（不带证书参数、监听 0.0.0.0）沿用，不退回明文。

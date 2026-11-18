@@ -27,8 +27,8 @@
 - `listenHost`：对外监听的本机 IP，默认 `0.0.0.0`；`127.0.0.1` 只允许本机访问。
 - `listenPort` / `targetPort`：1–65535；`targetHost` 允许域名或 IP；禁止空白/控制字符/shell 特殊字符。
 - `enabled=false` 不生成 unit、不登记端口。
-- 保留端口不可用于 `listenPort`：22（SSH）、80/443（Caddy）、8880（Agent API）、8899（观测层）；
-  Agent 端口被 `KHC_PORT`/`KHC_LIVE_PORT` 覆盖时按运行时值拦截。
+- 保留端口不可用于 `listenPort`：22（SSH）、80/443（Caddy）、8880（Agent API）；
+  Agent 端口被 `KHC_PORT` 覆盖时按运行时值拦截。
 - 拒绝自环：`targetPort == listenPort` 且目标是本机（回环/未指定地址/`localhost`/同 `listenHost`）。
 - 无应用层鉴权：UI 固定安全警示。
 

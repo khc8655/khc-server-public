@@ -1,6 +1,6 @@
 # 文档索引
 
-> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：`AGENTS.md` §5
+> 状态：现行 ｜ 最后核验：2026-11-18 ｜ 关联：`AGENTS.md` §5
 
 这里只列现行文档，每类信息只有一个权威来源。目录规则见 `AGENTS.md` §5：`docs/plans/` 是提案，`docs/verification/` 是证据，`docs/archive/` 是历史，三者都不登记在这里，也不能作为规范依据。
 
@@ -20,8 +20,7 @@
 |---|---|
 | `docs/design-v3.md` | 冻结核心、适配器、连接、数据模型 |
 | `docs/engineering/adr/` | 架构决策记录 |
-| `docs/data-layering.md` | D1 只存配置，运行快照不落库 |
-| `docs/live-observation.md` | 10s 快照轮询与观测票据 |
+| `docs/data-layering.md` | D1 只存配置，10s 快照经控制面转发 |
 | `docs/dual-mode.md` | 节点双模式（wg / caddy） |
 | `docs/diagnostics.md` | 7 个核心诊断码与 API |
 | `docs/security-boundaries.md` | 沙箱、写盘白名单、鉴权、签名 |

@@ -60,7 +60,7 @@
 - `sourcePeer`/`sourcePort`（可选，D-09）：从 WireGuard Peer 发布站点时由前端记录来源 Peer 名与发布时端口；改 Peer 地址时据此列出受影响站点并一键同步上游。旧站点没有这两个字段，按「上游主机 = Peer 旧地址」文本匹配兜底，不强制重录。
 - 同步只替换上游主机、保留站点当前端口；若端口或主机已被手工改过，确认框会明确列出并跳过/保留，不静默覆盖。
 - `kind=proxy`：reverse_proxy（支持多上游/负载均衡/健康检查/路径路由）；`static`：root + file_server（browse/SPA/index）；`redirect`：redir。
-- `liveGateway=true`：站点内加 `handle /_live/* { reverse_proxy 127.0.0.1:8899 }`（6.4a 观测入口）。
+- `liveGateway`（历史字段兼容）：schema 保留可读不报错，渲染时忽略，不再生成 `/_live/*` 反代（ADR-0021）。
 - TLS：`auto`（Caddy 自动 HTTPS，无 tls 指令）、`manual`（`tls cert key`）、`internal`（`tls internal`）、`off`（http:// 地址）。
 - `manual` 的证书文件写在 `<caddy 目录父级>/khc-certs/<域名>.crt|.key`，权限 0600；**属主跟随 Caddy 进程的实际运行用户**（先读 `/proc/<pid>`，再读 `systemctl show caddy.service -p User`，最后回退发行版常用的 `caddy` 用户）。取不到就保持 root——root 进程能读任意属主，回退不会引入新故障。Caddy 以非 root 运行时若不 chown，reload 会因私钥不可读直接失败。
 - HSTS/securityHeaders/compression/maxBodyBytes 生成对应 Caddy 指令；`headers` 原样注入（严格校验）。
@@ -141,7 +141,7 @@
 
 ## 4. UI（变更单 #006）
 
-- 站点抽屉分组：基础（类型/域名/端口/启用）、上游（多上游/负载均衡/健康检查/路径路由）、静态/跳转、TLS/证书、认证与安全（BasicAuth/headers/HSTS/安全头/压缩/限流/IP）、日志、观测入口。
+- 站点抽屉分组：基础（类型/域名/端口/启用）、上游（多上游/负载均衡/健康检查/路径路由）、静态/跳转、TLS/证书、认证与安全（BasicAuth/headers/HSTS/安全头/压缩/限流/IP）、日志。
 - 站点表格：域名/类型/端口/上游或根目录/TLS/健康状态/同步状态/操作。
 - 页头操作：添加站点、清空站点（L2，apply 空列表）、Caddy 服务（状态/校验/重载/导出配置）。
 - 站点表下方「外部 Caddy 配置」卡片：只读扫描主 Caddyfile 里已存在但未托管的站点块，
@@ -154,7 +154,7 @@
 ## 5. 验收
 
 - 旧配置（domain/upstream/tls auto/manual/off）渲染行为不变；
-- 三种 kind、多上游、BasicAuth、headers/HSTS/压缩、IP 规则、限流、日志、liveGateway 均能 `caddy validate`；
+- 三种 kind、多上游、BasicAuth、headers/HSTS/压缩、IP 规则、限流、日志均能 `caddy validate`；
 - 坏配置不 reload、旧文件不变；
 - 健康探测四态显示；
 - Caddy 服务动作可用；

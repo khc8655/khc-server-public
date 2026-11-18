@@ -118,7 +118,7 @@ export function forwardStatusBadge(
 }
 
 /** 与 Agent 适配器保持一致：SSH/Caddy/Agent 自身端口不允许被转发监听占用。 */
-const RESERVED_LISTEN_PORTS = new Set([22, 80, 443, 8880, 8899]);
+const RESERVED_LISTEN_PORTS = new Set([22, 80, 443, 8880]);
 
 /** 目标是否指向本机（与后端 _host_is_local 同口径）。 */
 function isLocalForwardTarget(targetHost: string, listenHost: string): boolean {

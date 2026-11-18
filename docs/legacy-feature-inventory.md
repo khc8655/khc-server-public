@@ -62,7 +62,7 @@ v3 的「核心冻结 + 适配器」方向正确，但 **C1 只覆盖了 nodes/a
 ## 2. v3 归属原则
 
 - **核心（冻结）**：认证、节点/端点、配置仓库（app_configs/revisions/audit）、传输（fetch + TCP socket）、任务、备份导出、诊断错误码、Agent 安装/升级、UI 外壳与组件库。
-- **适配器**：`wireguard`、`caddy-site`、`certificates`、`port-forward`、`chisel`/`wireproxy`（后续）、其它应用。
+- **适配器**：`wireguard`、`caddy-site`、`certificates`、`port-forward`、其它应用。
 - **需要破例扩表**（当前 4 表不够）：
   - `certificates`：跨 Hub 证书库（域名、签发方式、到期、加密 PEM/KEY、来源节点）；
   - `cert_assignments` 或站点配置里引用 cert id；

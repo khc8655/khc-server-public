@@ -279,9 +279,7 @@ udp/51820 端口登记、客户端配置、无损换钥全状态机（PENDING→
 - 未实现：接口私钥的“新接口迁移”流程（design §5.4 的 Hub 自身换钥，需在 `wg1` 上逐个迁移 peer）。
 
 
-## 6.4a 观测层（只读）
+## 6.4a 控制面通道与旧参数兼容（ADR-0021）
 
-- `run` 默认在 `127.0.0.1:8899` 启动只读 WS（`--live-host/--live-port`，`--no-live` 关闭）。
-- 浏览器经 Caddy `/_live/` 反代接入，首条消息提交控制面签发的 60 秒一次性 ticket。
-- `KHC_LIVE_ORIGINS` 配置允许的控制台 Origin（逗号分隔）；生产必须配置。
-- 只读；唯一操作 nudge 仅 ack（v3 暂无 desired 拉取）。详见 `docs/live-observation.md`。
+- 浏览器直连观测（`127.0.0.1:8899`、`/_live/*` 与 `/_live/snapshot`）已于 Agent `0.6.0` 下线，10s 快照由 Worker 签名转发 `GET /snapshot`。
+- `khc_agent.py run` 与 `install.sh` 保留 `--live-host` / `--live-port` / `--live-origins` / `--no-live` 为空操作参数，确保旧安装命令与旧 unit 升级不报错。

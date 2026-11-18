@@ -1,9 +1,9 @@
 # ADR-0010: 可见时 10s 快照轮询（收敛 SSE）
 
-- 状态：已接受（验证分支 `feat/snapshot-polling`；未合并、未部署）
+- 状态：已接受（直连分支被 ADR-0021 取代：2026-11-18 起保留 10s 可见轮询与 60 次上限，统一经控制面 `/nodes/:id/snapshot` 转发）
 - 日期：2026-11-04
 - 决策者：主人
-- 关联：`docs/live-observation.md`、`docs/data-layering.md`、`docs/ui-redesign/page-specs.md`
+- 关联：`docs/archive/2026-11/live-observation.md`、`docs/data-layering.md`、`docs/ui-redesign/page-specs.md`
 - 取代：ADR-0009 中「观测面只能直连、任何轮询都不允许」的约束（其余结论保留）
 
 ## 背景

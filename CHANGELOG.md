@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.19.0] - 2026-11-18
+### Changed
+- 下线浏览器直连（批次 2，Agent 0.6.0）：删除 `live-ticket`、Agent `live.py`/8899、`HOST_OPS_CHANNELS` 与 `/_live/snapshot`，保留旧参数与 `liveGateway` 兼容并释放 8899 端口。
+
 ## [0.18.1] - 2026-11-18
 ### Fixed
 - 同一 Agent 版本重复发版时，线上包可能与签名清单的 sha256 对不上，导致安装/升级报校验失败；打包改为可复现（Agent 0.5.5）。

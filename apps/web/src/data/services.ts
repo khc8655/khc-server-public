@@ -180,7 +180,7 @@ export interface ForwardListenView {
 export const MIN_PUBLISH_PORT = 1024;
 
 /** 面板自身、Caddy 管理口等高位保留端口，不提供「发布为站点」。 */
-export const RESERVED_PUBLISH_PORTS = new Set([22, 80, 443, 2019, 8880, 8899]);
+export const RESERVED_PUBLISH_PORTS = new Set([22, 80, 443, 2019, 8880]);
 
 /** 本机/回环监听地址：通配 0.0.0.0 / :: 也算（进程监听在本机所有网卡）。 */
 export function isLocalListenAddress(address: string): boolean {

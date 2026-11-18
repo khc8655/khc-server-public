@@ -21,8 +21,6 @@ Environment=KHC_CADDYFILE=@CADDYFILE@
 # TLS（install.sh --tls 生成自签证书后填写；留空 = 保持 HTTP）
 Environment=KHC_TLS_CERT=@TLS_CERT@
 Environment=KHC_TLS_KEY=@TLS_KEY@
-# A-4：观测层 Origin allowlist（逗号分隔面板域名）与票据节点绑定；留空 = 不校验（旧行为）
-Environment=KHC_LIVE_ORIGINS=@LIVE_ORIGINS@
 Environment=KHC_NODE_ID=@NODE_ID@
 Environment=KHC_LOG_LEVEL=INFO
 # acme.sh --reloadcmd "systemctl reload khc-agent"：SIGHUP 让 Agent 就地重载 TLS 证书

@@ -283,11 +283,12 @@ class NormalizeTests(AdapterTestBase):
             normalize_forward(forward(protocol="icmp"), 0)
 
     def test_reserved_listen_port_rejected(self) -> None:
-        # SSH/Caddy/Agent 自身端口不允许被转发监听顶掉。
-        for port in (22, 80, 443, 8880, 8899):
+        # SSH/Caddy/Agent 自身端口不允许被转发监听顶掉；8899 已随下线 8899 观测端口释放。
+        for port in (22, 80, 443, 8880):
             with self.assertRaises(ValidationFailed, msg=str(port)) as caught:
                 normalize_forward(forward(listenPort=port), 0)
             self.assertIn("保留端口", caught.exception.message)
+        self.assertEqual(normalize_forward(forward(listenPort=8899), 0)["listenPort"], 8899)
 
     def test_self_loop_forward_rejected(self) -> None:
         # 监听 8880 再转发到 127.0.0.1:8880 会自己连自己，必须拒绝。

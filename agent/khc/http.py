@@ -5,8 +5,8 @@
 - ``GET /health``（无鉴权） -> ``{"ok": true, "version": "0.1.0", "minPanelVersion": "0.4.0"}``
 - 其余全部要求 HMAC 头 ``X-Khc-Ts`` / ``X-Khc-Nonce`` / ``X-Khc-Sig``
 - 其余全部要求面板版本头 ``X-Khc-Panel-Version`` >= ``MIN_PANEL_VERSION``（版本协商，
-  不满足返回 426 ``panel_too_old``）；``/health`` 与浏览器直连观测豁免
-- ``GET /state`` / ``GET /adapters`` / ``GET /tasks/<id>``
+  不满足返回 426 ``panel_too_old``）；``/health`` 豁免
+- ``GET /state`` / ``GET /snapshot`` / ``GET /adapters`` / ``GET /tasks/<id>``
 - ``POST /apps/<app>/<action>``
 - 错误统一：``{"ok": false, "error": {"code", "message", "details"}}``
 """
@@ -25,7 +25,6 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .auth import Auth, _header
 from .kernel import Kernel
-from .live import TicketVerifier
 from .state import build_snapshot, build_state
 from .upgrade import UpgradeService
 from .util import (
@@ -46,36 +45,11 @@ LOG = logging.getLogger("khc.http")
 
 MAX_BODY_BYTES = 1 << 20  # 1 MiB，配置 JSON 远小于此
 
-#: 浏览器直连观测入口（票据鉴权，不走 HMAC）。与 8899 的 LiveServer 同路径，
-#: 这样监听 TLS 的节点不装 Caddy 也能被浏览器直连观测。
-LIVE_SNAPSHOT_PATH = "/_live/snapshot"
-
 #: 本机回环来源：升级看门狗、安装自检都在节点本机发请求，它们不是面板、没有面板版本，
 #: 因此跳过「面板版本协商」。注意 HMAC 仍照验——只有持节点 token 的本机进程能过来。
 #: 为什么必须按来源豁免而不是只认 X-Khc-Self-Check 头：升级看门狗脚本由**旧版本**在升级前
 #: 生成，旧模板不带该头，新版本若不豁免回环就会被自己的看门狗判成 426 → 升级永远自动回滚。
 DEFAULT_SELF_CHECK_SOURCES: tuple[str, ...] = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
-
-
-def _live_cors_headers(origin: Optional[str]) -> dict[str, str]:
-    """只回显请求自带的 Origin，绝不回 ``*``；不开启 credentials（票据在 URL）。"""
-
-    headers = {"Referrer-Policy": "no-referrer"}
-    if origin:
-        headers.update(
-            {
-                "Access-Control-Allow-Origin": origin,
-                "Vary": "Origin",
-                "Access-Control-Max-Age": "600",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
-    return headers
-
-
-def _live_error(status_code: int, code: str, reason: str) -> dict[str, Any]:
-    return {"ok": False, "error": {"code": code, "message": reason, "details": {"reason": reason}}}
 
 
 class _CertInfoCache:
@@ -119,9 +93,6 @@ class ApiApp:
         version: str = VERSION,
         upgrade: Optional[UpgradeService] = None,
         tls_cert: Optional[str] = None,
-        live_origins: Iterable[str] = (),
-        node_id: Optional[str] = None,
-        live_enabled: bool = True,
         self_check_sources: Iterable[str] = DEFAULT_SELF_CHECK_SOURCES,
     ) -> None:
         self.kernel = kernel
@@ -129,48 +100,10 @@ class ApiApp:
         self.version = version
         self.self_check_sources = tuple(self_check_sources)
         self._upgrade = upgrade
-        self.live_enabled = bool(live_enabled)
         self._cert_info = _CertInfoCache(tls_cert) if tls_cert else None
-        self.live_origins = frozenset(item.strip() for item in live_origins if item and item.strip())
-        self.tickets = TicketVerifier(auth.tokens, node_id=node_id)
 
     def tls_info(self) -> dict[str, Any]:
         return self._cert_info.get() if self._cert_info is not None else {"enabled": False}
-
-    # -- 浏览器直连观测（票据鉴权） -------------------------------------------
-    def handle_live_snapshot(
-        self, method: str, raw_path: str, headers: Any
-    ) -> tuple[int, dict[str, Any], dict[str, str]]:
-        """``GET /_live/snapshot?ticket=``：scope=snap 的短时票据，返回轻量快照。
-
-        与 8899 LiveServer 的差异（收紧 Origin 绑定）：
-        - 票据必须带 Origin 绑定（``o``），请求必须带相同的 Origin 头；
-        - 配置了 ``KHC_LIVE_ORIGINS`` 时 Origin 还必须在白名单内；
-        - 响应只回显该 Origin，不再回显 ``*``。
-        Origin 不被允许时返回 403 且不带 CORS 头；票据错误返回 401 并带 CORS 头，
-        以便前端读到状态码后换票重试。
-        """
-
-        method = method.upper()
-        if not self.live_enabled:  # --no-live：观测层整体关闭
-            return 404, _live_error(404, "not_found", "live_disabled"), {}
-        origin = (_header(headers, "Origin") or "").strip() or None
-        if self.live_origins and origin not in self.live_origins:
-            return 403, _live_error(403, "forbidden", "origin_not_allowed"), {}
-        cors = _live_cors_headers(origin)
-        if method == "OPTIONS":
-            return 204, {}, cors
-        if method != "GET":
-            return 405, _live_error(405, "method_not_allowed", "only_get"), cors
-        ticket = (parse_qs(urlsplit(raw_path).query).get("ticket") or [""])[0]
-        payload, reason = self.tickets.verify(ticket, origin, require_origin=True)
-        if payload is None or payload.get("s") != "snap":
-            return 401, _live_error(401, "unauthorized", reason or "bad_scope"), cors
-        try:
-            return 200, build_snapshot(self.kernel), cors
-        except Exception as exc:  # noqa: BLE001 - 采集失败让前端下轮重试
-            LOG.warning("snapshot failed: %s", exc)
-            return 503, _live_error(503, "snapshot_failed", "snapshot_failed"), cors
 
     def upgrade_service(self) -> UpgradeService:
         """惰性构造：/upgrade 之外完全不触碰安装目录/网络。"""
@@ -394,13 +327,6 @@ class _Handler(BaseHTTPRequestHandler):
         app: ApiApp = self.server.khc_app  # type: ignore[attr-defined]
         try:
             path = urlsplit(self.path).path or "/"
-            if path == LIVE_SNAPSHOT_PATH:
-                # 票据鉴权的浏览器直连入口：不走 HMAC，不读 body。
-                live_status, live_payload, live_headers = app.handle_live_snapshot(
-                    method, self.path, self.headers
-                )
-                self._send_json(live_status, live_payload, extra_headers=live_headers)
-                return
             # 先验 HMAC 信封再读 body，避免未鉴权连接用大 Content-Length 阻塞线程。
             if path != "/health":
                 app.auth.precheck(method, path, self.headers)
@@ -569,9 +495,6 @@ def create_server(
     upgrade: Optional[UpgradeService] = None,
     tls_cert: Optional[str] = None,
     tls_key: Optional[str] = None,
-    live_origins: Iterable[str] = (),
-    node_id: Optional[str] = None,
-    live_enabled: bool = True,
     self_check_sources: Iterable[str] = DEFAULT_SELF_CHECK_SOURCES,
 ) -> ThreadingHTTPServer:
     """构造（但不启动）HTTP 服务；调用方负责 serve_forever()/shutdown()。
@@ -589,9 +512,6 @@ def create_server(
         version=version,
         upgrade=upgrade,
         tls_cert=str(tls_cert) if tls_cert else None,
-        live_origins=live_origins,
-        node_id=node_id,
-        live_enabled=live_enabled,
         self_check_sources=self_check_sources,
     )
     context: Optional[ssl.SSLContext] = None
@@ -645,7 +565,6 @@ def serve_forever(server: ThreadingHTTPServer) -> None:
 
 __all__ = [
     "ApiApp",
-    "LIVE_SNAPSHOT_PATH",
     "MAX_BODY_BYTES",
     "create_server",
     "reload_tls",
