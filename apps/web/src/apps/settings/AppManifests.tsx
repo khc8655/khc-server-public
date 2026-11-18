@@ -188,12 +188,20 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
           if (ref.id === 'appManifest.delete' && item) setDeleteTarget(item);
         }}
         onRowOpen={openUpdate}
-        empty={{
-          icon: 'box',
-          title: '还没有应用',
-          description: '添加第一份应用定义，之后就能在节点应用页里安装。',
-          action: <Button label="添加应用" variant="primary" icon="plus" onClick={openCreate} />,
-        }}
+        empty={
+          query.isError
+            ? {
+                icon: 'alert',
+                title: '应用清单加载失败',
+                description: '读取应用定义失败，请用上方「重试」重新加载；若持续失败请检查控制面日志或 D1 迁移是否已应用。',
+              }
+            : {
+                icon: 'box',
+                title: '还没有应用',
+                description: '添加第一份应用定义，之后就能在节点应用页里安装。',
+                action: <Button label="添加应用" variant="primary" icon="plus" onClick={openCreate} />,
+              }
+        }
       />
 
       <Row>

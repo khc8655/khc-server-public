@@ -66,4 +66,15 @@ describe('应用管理（R1 架子）', () => {
     expect(screen.getByText('root')).toBeTruthy();
     expect(calls).toContain('/api/v1/app-manifests');
   });
+
+  it('清单加载失败时显示错误空态，不再显示「还没有应用」', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ error: { code: 'internal_error', message: '服务器内部错误' } }, 500)),
+    );
+    renderPage();
+    expect(await screen.findByText('加载失败')).toBeTruthy();
+    expect(await screen.findByText('应用清单加载失败')).toBeTruthy();
+    expect(screen.queryByText('还没有应用')).toBeNull();
+  });
 });
