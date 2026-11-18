@@ -55,13 +55,20 @@ export function sha256File(file) {
 export function readPackageVersion(archive) {
   const list = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' });
   if (list.status !== 0) throw new Error(`无法列出包内容：${list.stderr}`);
-  const entry = list.stdout.split('\n').find((line) => /^[\w.-]+\/khc\/(util|__init__)\.py$/.test(line.trim()));
-  if (!entry) throw new Error('包内缺少 khc/(util|__init__).py');
-  const text = spawnSync('tar', ['-xzOf', archive, entry.trim()], { encoding: 'utf8' });
-  if (text.status !== 0) throw new Error(`无法读取包内 ${entry.trim()}：${text.stderr}`);
-  const match = VERSION_RE.exec(text.stdout);
-  if (!match) throw new Error(`包内 ${entry.trim()} 未声明 VERSION 字面量`);
-  return match[1];
+  const lines = list.stdout.split('\n').map((line) => line.trim());
+  // 与 readRepoVersion 同一优先级（util.py 先于 __init__.py），不依赖包内条目顺序：
+  // 可复现打包按路径排序后 __init__.py 排在 util.py 前面，而它只做 re-export、没有字面量。
+  const entries = ['util', '__init__']
+    .map((stem) => lines.find((line) => new RegExp(`^[\\w.-]+/khc/${stem}\\.py$`).test(line)))
+    .filter(Boolean);
+  if (entries.length === 0) throw new Error('包内缺少 khc/(util|__init__).py');
+  for (const entry of entries) {
+    const text = spawnSync('tar', ['-xzOf', archive, entry], { encoding: 'utf8' });
+    if (text.status !== 0) throw new Error(`无法读取包内 ${entry}：${text.stderr}`);
+    const match = VERSION_RE.exec(text.stdout);
+    if (match) return match[1];
+  }
+  throw new Error(`包内 ${entries.join(' / ')} 未声明 VERSION 字面量`);
 }
 
 /** 单包校验；返回问题列表（空 = 通过） */

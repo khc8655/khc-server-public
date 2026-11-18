@@ -394,26 +394,51 @@ jobs:
           fi
 
 
-      # 部署后一致性校验：线上下发的 Agent 包 sha256 必须等于本次部署携带的包。
-      # 使用固定的生产入口（repository variable KHC_PANEL_ORIGIN，不再从 deploy.log 解析 URL）。
+      # 部署后一致性校验（三方一致）：线上签名清单 releases[0] 的 version/sha256、
+      # 线上实际下发的包字节、本次构建的包，三者必须完全一致，且清单验签通过。
+      # 使用固定的生产入口（repository secret KHC_PANEL_ORIGIN，不从 deploy.log 解析 URL）。
+      # 包由 agent/package.sh 可复现构建：同版本重复部署字节不变，旧缓存也返回同一份字节。
+      # 最多重试 ~60s 只为吸收传播延迟，判定标准不放宽；每次不一致都打印响应头留证。
       - name: Verify deployed agent package
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PROD_ORIGIN: ${{ secrets.KHC_PANEL_ORIGIN }}
         run: |
+          set -uo pipefail
           VERSION="$(python3 agent/khc_agent.py version | awk '{print $2}')"
           EXPECTED="$(awk '{print $1}' "apps/web/public/agent/khc-agent-${VERSION}.tar.gz.sha256")"
           URL="${PROD_ORIGIN}"
-          # 与签名清单同款 cache-buster：同名包重建时避免 CDN 命中旧字节
           V="${EXPECTED:0:12}"
-          CODE="$(curl -sSL -o /tmp/deployed-agent.tar.gz -w '%{http_code}' --max-time 60 "$URL/agent/khc-agent-${VERSION}.tar.gz?v=$V" || echo 000)"
-          ACTUAL="$(sha256sum /tmp/deployed-agent.tar.gz | awk '{print $1}')"
-          if [ "$CODE" != "200" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "ERROR: 线上包校验失败 http=${CODE} sha256=${ACTUAL} 期望=${EXPECTED}（版本 ${VERSION}）"
+          DL_DIR="$(mktemp -d)"
+          PKG="${DL_DIR}/khc-agent-${VERSION}.tar.gz"
+          MANIFEST="${DL_DIR}/release-manifest.json"
+          PUBKEY="$(node --input-type=module -e \
+            "import { readBuiltinPubkey } from 'file://${GITHUB_WORKSPACE}/scripts/verify-agent-release.mjs'; process.stdout.write(readBuiltinPubkey());")"
+          OK=0
+          for i in $(seq 1 10); do
+            M_CODE="$(curl -sS -o "$MANIFEST" -w '%{http_code}' --max-time 30 "$URL/agent/release-manifest.json?cb=${i}-${RANDOM}" || echo 000)"
+            M_HEAD="$(python3 -c 'import json,sys;r=json.load(open(sys.argv[1]))["payload"]["releases"][0];print(r["version"]+" "+r["sha256"].lower())' "$MANIFEST" 2>/dev/null || echo "<无法解析>")"
+            CODE="$(curl -sSL -D "${DL_DIR}/headers.txt" -o "$PKG" -w '%{http_code}' --max-time 60 "$URL/agent/khc-agent-${VERSION}.tar.gz?v=$V" || echo 000)"
+            ACTUAL="$(sha256sum "$PKG" | awk '{print $1}')"
+            SIZE="$(wc -c < "$PKG" | tr -d ' ')"
+            if [ "$M_CODE" = "200" ] && [ "$M_HEAD" = "${VERSION} ${EXPECTED}" ] \
+               && [ "$CODE" = "200" ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+              OK=1
+              echo "OK: 线上清单 releases[0]=${M_HEAD}，线上包与本次构建一致（第 ${i} 次探测，${SIZE} 字节）"
+              break
+            fi
+            echo "WARN: 第 ${i} 次不一致：清单 http=${M_CODE} releases[0]=${M_HEAD}；包 http=${CODE} sha256=${ACTUAL} size=${SIZE}；期望 ${VERSION} ${EXPECTED}"
+            grep -iE '^(cf-cache-status|age|etag|last-modified|content-length|cache-control|server):' "${DL_DIR}/headers.txt" | sed 's/^/       /' || true
+            sleep 6
+          done
+          if [ "$OK" -ne 1 ]; then
+            echo "ERROR: 线上包校验失败 http=${CODE} sha256=${ACTUAL} 期望=${EXPECTED}（版本 ${VERSION}，线上清单 releases[0]=${M_HEAD}）"
             exit 1
           fi
-          echo "OK: 线上 khc-agent-${VERSION} 与仓库一致 ($ACTUAL)"
+          # 线上清单验签 + 包内 VERSION 与文件名一致（伴生 .sha256 由实测 sha 生成，仅为满足单包校验格式）
+          printf '%s  %s\n' "$ACTUAL" "khc-agent-${VERSION}.tar.gz" > "${PKG}.sha256"
+          node scripts/verify-agent-release.mjs --archive "$PKG" --manifest "$MANIFEST" --pubkey "$PUBKEY" || {
+            echo "ERROR: 线上清单验签或线上包内容校验失败（版本 ${VERSION}）"; exit 1; }
+          echo "OK: 线上 khc-agent-${VERSION}、线上签名清单与本次构建三方一致 ($ACTUAL)"
 
       # 发布锚点（ADR-0013 L1）：每次成功的生产部署打一个 release-YYYY-MM-DD 标签，
       # 标签注解同时记录「面板版本 / Agent 版本 / Worker Version ID / 提交」，

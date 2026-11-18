@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +37,78 @@ class PackageTests(unittest.TestCase):
             self.assertFalse([name for name in names if "/._" in name], "AppleDouble 进入了发布包")
             self.assertTrue(any(name.endswith("/khc_agent.py") for name in names))
             self.assertTrue(any("/adapters/" in name for name in names))
+
+    def test_package_is_reproducible_across_rebuilds(self) -> None:
+        """同一源码 + 同一 VERSION 重复打包必须逐字节相同（2026-11-18 部署校验失败的回归）。
+
+        线上包路径只按版本命名，同版本每次 CI 重建若 sha 不同，线上返回上一次部署的
+        字节时就与新签清单对不上。这里在两次打包之间改动源文件 mtime 并跨过秒边界，
+        模拟「不同提交 / 不同 checkout 时间、Agent 代码未变」的两次 CI 部署。
+        """
+        with tempfile.TemporaryDirectory() as work:
+            src = os.path.join(work, "agent")
+            shutil.copytree(
+                AGENT_DIR,
+                src,
+                ignore=shutil.ignore_patterns("__pycache__", "._*", "dist", "tests", ".DS_Store"),
+            )
+            first = self._build(src, os.path.join(work, "out1"))
+            time.sleep(1.1)
+            for current, dirs, files in os.walk(src):
+                for item in dirs + files:
+                    path = os.path.join(current, item)
+                    os.utime(path, (time.time() + 3600, time.time() + 3600), follow_symlinks=False)
+            second = self._build(src, os.path.join(work, "out2"))
+            with open(first, "rb") as a, open(second, "rb") as b:
+                self.assertEqual(
+                    hashlib.sha256(a.read()).hexdigest(),
+                    hashlib.sha256(b.read()).hexdigest(),
+                    "同版本两次打包 sha256 不同：打包不可复现",
+                )
+            with tarfile.open(first, "r:gz") as handle:
+                members = handle.getmembers()
+            names = [member.name for member in members]
+            self.assertEqual(names, sorted(names), "包内条目必须按路径排序")
+            self.assertEqual({member.mtime for member in members}, {315532800})
+            self.assertEqual({(member.uid, member.gid, member.uname, member.gname) for member in members},
+                             {(0, 0, "", "")})
+            modes = {member.name.split("/", 1)[-1]: member.mode for member in members}
+            # 升级解包按「有无可执行位」决定 0755/0644，可执行位必须保留
+            self.assertEqual(modes["install.sh"], 0o755)
+            self.assertEqual(modes["khc/util.py"], 0o644)
+
+    def test_package_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            src = os.path.join(work, "agent")
+            shutil.copytree(
+                AGENT_DIR,
+                src,
+                ignore=shutil.ignore_patterns("__pycache__", "._*", "dist", "tests", ".DS_Store"),
+            )
+            os.symlink("/etc/passwd", os.path.join(src, "khc", "evil"))
+            result = self._run(src, os.path.join(work, "out"))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("符号链接", result.stderr)
+
+    @staticmethod
+    def _run(agent_dir: str, out_dir: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, OUT_DIR=out_dir)
+        env.pop("SOURCE_DATE_EPOCH", None)
+        return subprocess.run(
+            ["bash", os.path.join(agent_dir, "package.sh")],
+            cwd=agent_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def _build(self, agent_dir: str, out_dir: str) -> str:
+        result = self._run(agent_dir, out_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archives = [name for name in os.listdir(out_dir) if name.endswith(".tar.gz")]
+        self.assertEqual(len(archives), 1)
+        return os.path.join(out_dir, archives[0])
 
     def test_system_unit_keeps_sandbox_and_allows_root_ssh_write(self) -> None:
         """P0-1：ProtectHome=read-only + ReadWritePaths 白名单 /root/.ssh（keys.* 可用）。"""
