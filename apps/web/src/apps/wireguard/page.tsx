@@ -77,6 +77,7 @@ import {
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatRelativeTime, shortFingerprint } from '../../i18n/format';
 import { PeerOpsPanel } from '../host-ops/PeerOpsPanel';
+import { installTaskText } from '../installTaskText';
 import { ForwardsCard } from './ForwardsCard';
 import { nodeModeQueryOptions } from '../../data/mode';
 
@@ -1291,11 +1292,7 @@ export default function WireGuardPage() {
       tone: wireguardMissing ? 'neutral' : 'info',
       title: wireguardMissing ? zh.wireguard.notInstalledTitle : zh.wireguard.notConfiguredTitle,
       description: installTask
-        ? fmt(zh.wireguard.installTaskState, {
-            id: installTask.task.id,
-            state: installTask.task.state,
-            progress: String(installTask.task.progress),
-          })
+        ? installTaskText(installTask, zh.wireguard.installTaskState)
         : wireguardMissing
           ? zh.wireguard.notInstalledDesc
           : status?.running

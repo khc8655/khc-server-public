@@ -29,6 +29,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -89,6 +90,20 @@ _FORBIDDEN_CHARS = ("\x00", "\r", "\n")
 # ---------------------------------------------------------------------------
 # 纯函数：文本/解析/渲染
 # ---------------------------------------------------------------------------
+
+
+def which_wg_quick() -> Optional[str]:
+    """``wg-quick`` 可执行文件（``shutil.which``；测试可 patch）。
+
+    **不要用 ``wg-quick --version`` 探存在性。** ``wg-quick`` 没有 ``--version``
+    选项，会把它当成错误的子命令，打印用法后退出 1；``wg`` 则正常返回 0。
+    所以「``wg --version`` 成功 + ``wg-quick --version`` 返回 1」是**工具已正确
+    安装**时的正常状态，不能拿它当缺工具的判据 —— 2026-11-20 的 wireguard
+    安装恒失败就是踩了这个（详见 docs/verification/2026-11-20/）。
+    """
+
+    found = shutil.which("wg-quick")
+    return os.path.abspath(found) if found else None
 
 
 def _text(value: Any) -> str:
@@ -2446,24 +2461,31 @@ class WireGuard(Adapter):
 
     def install(self, ctx: Ctx, config: Mapping[str, Any]) -> dict[str, Any]:
         wg = ctx.run(["wg", "--version"], check=False)
-        wg_quick = ctx.run(["wg-quick", "--version"], check=False)
-        if (wg.rc != 0 or wg_quick.rc != 0) and ctx.paths.is_system:
+        wg_quick_path = which_wg_quick()
+        if (wg.rc != 0 or wg_quick_path is None) and ctx.paths.is_system:
             # P1：受控装包（白名单 wireguard-tools；自动识别包管理器）。
             ensure_packages(ctx, ["wireguard-tools"])
             wg = ctx.run(["wg", "--version"], check=False)
-            wg_quick = ctx.run(["wg-quick", "--version"], check=False)
-        if wg.rc != 0 or wg_quick.rc != 0:
+            wg_quick_path = which_wg_quick()
+        missing = []
+        if wg.rc != 0:
+            missing.append("wg")
+        if wg_quick_path is None:
+            missing.append("wg-quick")
+        if missing:
             raise CommandFailed(
-                "未检测到 WireGuard 工具链（wg / wg-quick）。请先安装 wireguard-tools"
+                "未检测到 WireGuard 工具链（缺："
+                + "、".join(missing)
+                + "）。请先安装 wireguard-tools"
                 "（Debian/Ubuntu：apt-get install -y wireguard-tools）后重试",
                 details={
+                    "missing": missing,
                     "wgRc": wg.rc,
-                    "wgQuickRc": wg_quick.rc,
+                    "wgQuickPath": wg_quick_path,
                     "wgStderr": tail(wg.stderr),
-                    "wgQuickStderr": tail(wg_quick.stderr),
                 },
             )
-        version = (_text(wg.stdout) or _text(wg_quick.stdout) or "unknown").splitlines()[0]
+        version = (_text(wg.stdout) or "unknown").splitlines()[0]
         return {
             "version": version,
             "cards": [{"title": "WireGuard", "value": version, "copy": False}],

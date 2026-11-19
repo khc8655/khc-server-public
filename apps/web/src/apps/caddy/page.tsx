@@ -80,6 +80,7 @@ import {
 } from './siteTransfer';
 import { AppsSegment } from './AppsSegment';
 import { SiteDrawer } from './SiteDrawer';
+import { installTaskText } from '../installTaskText';
 import {
   buildSite,
   createForm,
@@ -1196,11 +1197,7 @@ export default function SitesPage() {
       tone: caddyMissing ? 'warn' : 'info',
       title: caddyMissing ? zh.sites.notInstalledTitle : zh.sites.notInstalled,
       description: installTask
-        ? fmt(zh.sites.installTaskState, {
-            id: installTask.task.id,
-            state: installTask.task.state,
-            progress: String(installTask.task.progress),
-          })
+        ? installTaskText(installTask, zh.sites.installTaskState)
         : caddyMissing
           ? zh.sites.notInstalledDescInstall
           : zh.sites.notInstalledDesc,
