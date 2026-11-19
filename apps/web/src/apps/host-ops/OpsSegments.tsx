@@ -45,6 +45,11 @@ import {
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatBytes, formatPercent } from '../../i18n/format';
 import { businessProcesses, countSystemProcesses } from './processFilter';
+
+/** 一次抓取的进程条数上限（够覆盖业务视图，又不至于让快照过重）。 */
+const PROCESS_FETCH_LIMIT = 200;
+/** 表格实际展示条数。 */
+const PROCESS_DISPLAY_LIMIT = 20;
 import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
 import { refreshAfterWrite } from './refreshAfterWrite';
 
@@ -618,7 +623,10 @@ export function ProcessesSegment({
       const snapshot = await callHostOps(hubId, 'self', 'snapshot', {
         processes: true,
         sort: nextSort,
-        limit: 20,
+        // 取比展示上限更多的进程：先按 CPU/内存排序再去掉系统进程，
+        // 若只取 20 条，满载机器上业务进程（如 caddy，CPU≈0）会被内核线程挤掉，
+        // 「只看业务进程」于是显示「当前没有业务进程」——2026-11-20 走查在 aws-hui-us 复现。
+        limit: PROCESS_FETCH_LIMIT,
       });
       if (snapshot.ok) {
         const status = normalizeStatus(snapshot.data);
@@ -640,11 +648,12 @@ export function ProcessesSegment({
 
   // 系统进程数是真实计数：业务视图下即真实隐藏数；「显示全部」时隐藏数为 0。
   const systemCount = processes ? countSystemProcesses(processes) : 0;
-  const visibleProcesses = processes
+  const scopedProcesses = processes
     ? scope === 'business'
       ? businessProcesses(processes)
       : processes
     : undefined;
+  const visibleProcesses = scopedProcesses?.slice(0, PROCESS_DISPLAY_LIMIT);
 
   const columns: ColumnDef<HostOpsProcess>[] = [
     {

@@ -84,6 +84,16 @@ export default function SettingsPage() {
     if (tab) setActiveTab(tab);
   }, [search.tab]);
 
+  // 分段控件与页内跳转（如应用目录空态「去应用管理添加」）共用一个入口，保证 URL 同步。
+  const selectTab = (tab: SettingsTab) => {
+    setActiveTab(tab);
+    void navigate({
+      to: '/settings',
+      search: { tab },
+      replace: true,
+    });
+  };
+
   const [searchText, setSearchText] = useState('');
   const [form, setForm] = useState<SettingForm | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -224,15 +234,7 @@ export default function SettingsPage() {
           { value: 'keys', label: zh.sshKeys.tab },
           { value: 'system', label: '系统变量' },
         ]}
-        onChange={(val) => {
-          const tab = val as SettingsTab;
-          setActiveTab(tab);
-          void navigate({
-            to: '/settings',
-            search: { tab },
-            replace: true,
-          });
-        }}
+        onChange={(val) => selectTab(val as SettingsTab)}
       />
 
       {activeTab === 'certs' ? (
@@ -244,7 +246,7 @@ export default function SettingsPage() {
       ) : activeTab === 'manifests' ? (
         <AppManifests />
       ) : activeTab === 'catalog' ? (
-        <AppCatalog />
+        <AppCatalog onOpenManifests={() => selectTab('manifests')} />
       ) : activeTab === 'keys' ? (
         <SshKeys createSignal={sshCreateSignal} />
       ) : (

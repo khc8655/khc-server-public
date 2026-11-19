@@ -61,7 +61,8 @@ export function ProcessDrawer({
       const snapshot = await callHostOps(hubId, target, 'snapshot', {
         processes: true,
         sort: nextSort,
-        limit: 20,
+        // 同 OpsSegments：先抓够再过滤，避免业务进程被内核线程挤出前 20。
+        limit: 200,
       });
       if (snapshot.ok) {
         setVersion(normalizeVersion(snapshot.data));
@@ -83,11 +84,12 @@ export function ProcessDrawer({
 
   // 系统进程数是真实计数：业务视图下即真实隐藏数；「显示全部」时隐藏数为 0。
   const systemCount = processes ? countSystemProcesses(processes) : 0;
-  const visibleProcesses = processes
+  const scopedProcesses = processes
     ? scope === 'business'
       ? businessProcesses(processes)
       : processes
     : undefined;
+  const visibleProcesses = scopedProcesses?.slice(0, 20);
 
   const columns: ColumnDef<HostOpsProcess>[] = [
     {

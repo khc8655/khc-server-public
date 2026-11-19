@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { hostFwMessages } from '../../data/apps';
+import { fetchTask, hostFwMessages } from '../../data/apps';
+import type { TaskResponse } from '@khc/contracts';
 import { hubAppsQueryOptions } from '../../data/queries';
 import {
   PORT_FORWARD_APP,
@@ -41,6 +42,7 @@ import { zh, fmt } from '../../i18n/zh';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { paths } from '../../registry/routes';
 import { nodeModeQueryOptions } from '../../data/mode';
+import { installTaskText } from '../installTaskText';
 import {
   ForwardDrawer,
   buildForward,
@@ -123,6 +125,9 @@ export function ForwardsCard({
   const [applyError, setApplyError] = useState<ForwardError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ForwardRule | null>(null);
   const [applyConfirm, setApplyConfirm] = useState<ApplyConfirm | null>(null);
+  // socat 缺失时的安装任务回执（与 WireGuard / Caddy 的安装卡同一范式：手动刷新，不轮询）
+  const [socatTask, setSocatTask] = useState<TaskResponse | null>(null);
+  const [socatBusy, setSocatBusy] = useState(false);
 
   // Peer 抽屉打开时让位（全页唯一抽屉）
   useEffect(() => {
@@ -131,6 +136,41 @@ export function ForwardsCard({
       setSaveError(null);
     }
   }, [peerDrawerActive]);
+
+  const installSocat = async () => {
+    setSocatBusy(true);
+    try {
+      const envelope = await runForwardAction(hubId, 'install');
+      if (envelope.taskId) {
+        setSocatTask(await fetchTask(hubId, envelope.taskId));
+      } else {
+        await stateQuery.refetch();
+      }
+      toast.show({ message: zh.forwards.installSocatSubmitted });
+    } catch (error) {
+      toast.show({
+        message: `${zh.forwards.installSocatFailed}：${forwardApiError(error, zh.forwards.installSocatFailed).message}`,
+      });
+    } finally {
+      setSocatBusy(false);
+    }
+  };
+
+  const refreshSocat = async () => {
+    if (!socatTask) return;
+    setSocatBusy(true);
+    try {
+      const task = await fetchTask(hubId, socatTask.task.id);
+      setSocatTask(task);
+      if (task.task.state === 'done') await stateQuery.refetch();
+    } catch (error) {
+      toast.show({
+        message: `${zh.forwards.installSocatFailed}：${forwardApiError(error, zh.forwards.installSocatFailed).message}`,
+      });
+    } finally {
+      setSocatBusy(false);
+    }
+  };
 
   const openCreate = () => {
     if (caddyMode) return;
@@ -384,8 +424,35 @@ export function ForwardsCard({
         {status?.error ? (
           <Banner tone="danger" title={zh.forwards.statusError} description={status.error} />
         ) : null}
-        {status && status.installed === false && !caddyMode ? (
-          <Banner tone="neutral" title={zh.forwards.notInstalled} description={zh.forwards.notInstalledDesc} />
+        {status?.socatAvailable === false && !caddyMode ? (
+          <Banner
+            tone="neutral"
+            title={zh.forwards.socatMissing}
+            description={
+              socatTask
+                ? installTaskText(socatTask, zh.forwards.installSocatTaskState)
+                : zh.forwards.socatMissingDesc
+            }
+            action={
+              socatTask ? (
+                <Button
+                  label={zh.forwards.installSocatRefresh}
+                  size="sm"
+                  loading={socatBusy}
+                  onClick={() => void refreshSocat()}
+                />
+              ) : (
+                <Button
+                  label={zh.forwards.installSocat}
+                  size="sm"
+                  loading={socatBusy}
+                  disabled={nodeOffline}
+                  disabledReason={writeDisabledReason}
+                  onClick={() => void installSocat()}
+                />
+              )
+            }
+          />
         ) : null}
         {unapplied ? (
           <Banner

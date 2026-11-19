@@ -25,6 +25,7 @@ from typing import Any, Mapping, Optional
 
 from khc import Adapter, Ctx, Unit
 from khc.adapters import validate_config
+from khc.pkg import ensure_packages
 from khc.util import (
     CommandFailed,
     LOG,
@@ -402,6 +403,8 @@ class PortForward(Adapter):
     version = VERSION
     api = 1
     requires_root = True
+    # 与 wireguard / caddy 一致：声明能力后，面板才展示「安装 socat」按钮；旧面板无视该字段。
+    capabilities = {"pkgInstall": True}
     description = "端口转发（Hub 上 socat 监听 → WireGuard Peer 服务；无应用层鉴权）"
 
     # 端口由内核 ``port_claims(config)`` 钩子按 forwards[].listenPort 动态展开。
@@ -742,10 +745,16 @@ class PortForward(Adapter):
     # ------------------------------------------------------------------
     def install(self, ctx: Ctx, config: Mapping[str, Any]) -> dict[str, Any]:
         result = ctx.run(["socat", "-V"], check=False)
+        if result.rc != 0 and ctx.paths.is_system:
+            # P1：受控装包（白名单 socat；自动识别包管理器）。非 system profile 不装，
+            # 落到下面的明确报错，由用户自行处理。
+            ensure_packages(ctx, ["socat"])
+            result = ctx.run(["socat", "-V"], check=False)
         if result.rc != 0:
             raise CommandFailed(
                 "未检测到 socat，端口转发需要先安装 socat"
                 "（Debian/Ubuntu：apt-get install -y socat；RHEL：dnf install -y socat）",
+                code="socat_missing",
                 details={
                     "rc": result.rc,
                     "stderr": tail(result.stderr),

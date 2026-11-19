@@ -54,6 +54,8 @@ export interface ForwardStatusRule {
 
 export interface ForwardStatus {
   installed: boolean | null;
+  /** socat 是否在节点上（`null` = 旧 Agent 未上报，不能据此提示安装）。 */
+  socatAvailable: boolean | null;
   running: boolean | null;
   socatVersion: string | null;
   rules: ForwardStatusRule[];
@@ -209,6 +211,8 @@ export function normalizeForwardStatus(
     .filter((item): item is ForwardStatusRule => item !== null);
   return {
     installed: asBoolean(status.installed),
+    // 只有 Agent 明确上报 true/false 才采信：旧 Agent 无该字段时保持 null，避免误报「没装 socat」。
+    socatAvailable: asBoolean(status.socatAvailable),
     running: asBoolean(status.running ?? status.active),
     socatVersion:
       asString(status.socatVersion) ||
@@ -259,7 +263,7 @@ export async function saveForwardConfig(
   return saveAppConfig(hubId, PORT_FORWARD_APP, { forwards } as unknown as Record<string, unknown>);
 }
 
-export type ForwardActionName = 'plan' | 'apply';
+export type ForwardActionName = 'plan' | 'apply' | 'install';
 
 export async function runForwardAction(
   hubId: string,
