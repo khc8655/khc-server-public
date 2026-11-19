@@ -2306,8 +2306,12 @@ class WireGuard(Adapter):
             )
 
         rotations = self._rotation_view(ctx, self._rotation_handshakes(parsed, handshakes))
-        installed = os.path.isfile(conf_path) or dump_ok
-        running = installed and (ctx.unit_active(unit) or dump_ok)
+        # installed 只表示「工具链已安装」，不能拿「conf 存在 / 接口已起」代替：
+        # 有配置但还没 Apply（appliedRev 落后于 rev）是常态，若这里把 installed 算成 False，
+        # 面板会一边显示「已装好」的任务成功、一边继续弹「尚未安装 WireGuard + 安装按钮」，
+        # 诱导用户重复点安装（2026-11-20 aws-hui-us 实测踩到）。
+        installed = _tools_installed(ctx)
+        running = dump_ok or (os.path.isfile(conf_path) and ctx.unit_active(unit))
         return {
             "installed": installed,
             "enabled": True,
