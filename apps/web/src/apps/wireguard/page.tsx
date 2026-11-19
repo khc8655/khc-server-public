@@ -766,6 +766,23 @@ export default function WireGuardPage() {
       | undefined;
     const stagedNow =
       fresh == null ? unapplied : fresh.rev !== null && fresh.appliedRev !== fresh.rev;
+    // 没有公网地址时不打 Agent：客户端配置必然生成失败，直接把可操作的原因摆出来
+    // （否则用户看到的是 Agent 的原始报错，还得自己猜要去「接口设置」填）。
+    if (!config.interface.publicEndpoint.trim()) {
+      setExportState({
+        peer,
+        loading: false,
+        text: '',
+        error: zh.wireguard.exportNeedsEndpoint,
+        tab: 'conf',
+        script: '',
+        scriptError: null,
+        uninstall: '',
+        uninstallError: null,
+        staged: false,
+      });
+      return;
+    }
     if (stagedNow) {
       setExportState({
         peer,
@@ -2256,7 +2273,6 @@ function InterfaceDrawer({
           label={zh.wireguard.publicEndpoint}
           help={zh.wireguard.publicEndpointHelp}
           error={errors.publicEndpoint}
-          optional
         >
           <TextInput
             id="iface-endpoint"

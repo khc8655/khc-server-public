@@ -529,6 +529,15 @@ describe('主机运维页（ui-redesign §4：状态带 + 分段对象表 + 唯�
     await renderRoute('/hubs/tyo-1/ops');
     await userEvent.click(await screen.findByRole('button', { name: /^CPU/ }));
     expect(await screen.findByText('已隐藏 2 个系统进程')).toBeTruthy();
+    // 抓取上限要大于展示上限：否则业务视图会被内核线程挤空（2026-11-20 走查）。
+    const snapshot = requests.find((item) =>
+      String(item.init?.body ?? '').includes('"verb":"snapshot"'),
+    );
+    const sent = JSON.parse(String(snapshot?.init?.body)) as {
+      params: { params: { processes: boolean; limit: number } };
+    };
+    expect(sent.params.params.processes).toBe(true);
+    expect(sent.params.params.limit).toBe(200);
     expect(screen.queryByText('[kthreadd]')).toBeNull();
 
     await userEvent.click(screen.getByText('显示全部'));

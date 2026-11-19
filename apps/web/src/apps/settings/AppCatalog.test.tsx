@@ -110,12 +110,12 @@ function stubApi(opts?: { manifests?: Response }) {
   );
 }
 
-function renderCatalog() {
+function renderCatalog(onOpenManifests?: () => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <ToastContextProvider value={{ show: vi.fn() }}>
-        <AppCatalog />
+        <AppCatalog onOpenManifests={onOpenManifests} />
       </ToastContextProvider>
     </QueryClientProvider>,
   );
@@ -278,7 +278,19 @@ describe('应用目录（R1 运行时清单）', () => {
 
     expect((await screen.findAllByText('应用目录加载失败')).length).toBeGreaterThan(0);
     expect(await screen.findByRole('button', { name: '重试' })).toBeTruthy();
-    expect(screen.queryByText('目录为空')).toBeNull();
+    expect(screen.queryByText('还没有发布应用清单')).toBeNull();
+  });
+
+  it('清单为空时指向「应用管理」，不再说 Agent 包里没有 recipe', async () => {
+    vi.unstubAllGlobals();
+    stubApi({ manifests: json({ appManifests: [] }) });
+    const onOpenManifests = vi.fn();
+    renderCatalog(onOpenManifests);
+
+    expect(await screen.findByText('还没有发布应用清单')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '去应用管理添加' }));
+    expect(onOpenManifests).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: '去应用管理添加' })).toBeTruthy();
     expect(screen.queryByText('Agent 包中没有可用的 recipe。')).toBeNull();
   });
 });

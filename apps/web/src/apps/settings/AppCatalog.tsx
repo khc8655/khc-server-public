@@ -190,7 +190,7 @@ function validateValues(
   return errors;
 }
 
-export function AppCatalog() {
+export function AppCatalog({ onOpenManifests }: { onOpenManifests?: () => void } = {}) {
   const hubsQuery = useQuery(hubsQueryOptions());
   const manifestsQuery = useQuery(appManifestsQueryOptions());
   const toast = useToast();
@@ -453,7 +453,14 @@ export function AppCatalog() {
                 title: zh.catalog.manifestsLoadFailed,
                 description: zh.catalog.manifestsLoadFailedDesc,
               }
-            : { icon: 'box', title: zh.catalog.emptyTitle, description: zh.catalog.emptyDesc }
+            : {
+                icon: 'box',
+                title: zh.catalog.emptyTitle,
+                description: zh.catalog.emptyDesc,
+                action: onOpenManifests ? (
+                  <Button label={zh.catalog.goManifests} size="sm" onClick={onOpenManifests} />
+                ) : undefined,
+              }
         }
       />
 

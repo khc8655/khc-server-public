@@ -16,7 +16,14 @@ function json(body: unknown): Response {
   });
 }
 
-const configRecord = (rev: number, appliedRev: number, peers: unknown[]) => ({
+const DEFAULT_ENDPOINT = 'vpn.example.dev:51820';
+
+const configRecord = (
+  rev: number,
+  appliedRev: number,
+  peers: unknown[],
+  publicEndpoint: string = DEFAULT_ENDPOINT,
+) => ({
   app: 'wireguard',
   schemaVersion: 1,
   config: {
@@ -28,7 +35,7 @@ const configRecord = (rev: number, appliedRev: number, peers: unknown[]) => ({
       publicKey: 'SERVERPUBLICKEY',
       mtu: 1420,
       extIface: 'eth0',
-      publicEndpoint: 'vpn.example.dev:51820',
+      publicEndpoint,
       postUp: '',
       postDown: '',
     },
@@ -114,6 +121,8 @@ function mockApi(options: {
   rev: number;
   appliedRev: number;
   state?: () => unknown;
+  /** 接口公网地址；空串用于验证「没填公网地址时导出只给引导，不打 Agent」。 */
+  publicEndpoint?: string;
 }) {
   const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
   // 有状态配置：PUT 保存后，后续 GET 返回最新 rev/peers（模拟 D1 写后读）
@@ -132,7 +141,9 @@ function mockApi(options: {
         const body = JSON.parse(String(init.body)) as { config?: { peers?: unknown[] } };
         if (body.config?.peers) store.peers = body.config.peers;
         store.rev += 1;
-        return json({ app: configRecord(store.rev, store.appliedRev, store.peers) });
+        return json({
+          app: configRecord(store.rev, store.appliedRev, store.peers, options.publicEndpoint),
+        });
       }
       if (url.endsWith('/apps/wireguard/apply')) {
         return json({ ok: true, appliedRev: options.rev + 1 });
@@ -227,7 +238,9 @@ function mockApi(options: {
         });
       }
       if (url === '/api/v1/nodes/tyo-1/apps/wireguard') {
-        return json({ app: configRecord(store.rev, store.appliedRev, store.peers) });
+        return json({
+          app: configRecord(store.rev, store.appliedRev, store.peers, options.publicEndpoint),
+        });
       }
       if (url === '/api/v1/nodes/tyo-1/apps/port-forward') {
         return json({
@@ -363,6 +376,21 @@ describe('WireGuard 页', () => {
     expect(await screen.findByText('导出 Peer 配置')).toBeTruthy();
     expect(await screen.findByText(/PrivateKey = PRIVATEKEY/)).toBeTruthy();
     expect(screen.getAllByText(/请勿通过不安全渠道发送/).length).toBeGreaterThan(0);
+  });
+
+  // 2026-11-20 走查：没填公网地址时导出必然失败，先把原因摆出来，不要等 Agent 报原始错误。
+  it('缺公网地址时导出：只给引导，不调用 Agent 生成配置', async () => {
+    const calls = mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1, publicEndpoint: '' });
+    await renderWireGuard();
+    await screen.findAllByText('pixel-8');
+
+    await userEvent.click(screen.getAllByRole('button', { name: '更多操作' })[0] as HTMLElement);
+    await userEvent.click(await screen.findByRole('menuitem', { name: '导出配置' }));
+
+    expect(await screen.findByText(/还没有填公网地址/)).toBeTruthy();
+    await waitFor(() => {
+      expect(calls.some((call) => call.url.includes('/apps/wireguard/client_config'))).toBe(false);
+    });
   });
 
   // B-1：暂存态（有未应用的改动）导出不走 Agent，显示引导而不是「peer 不存在」。

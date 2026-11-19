@@ -1015,6 +1015,91 @@ class DiagnosticProblemsTests(AdapterTestBase):
         )
         self.assertEqual(self.adapter._problems({"installed": True, "forwards": []}), [])
 
+class PkgAwareRunner(FakeRunner):
+    """模拟「socat 缺失 → 受控装包 → socat 可用」的包管理器交互。
+
+    只覆盖 install() 走到的几条命令：``<binary> --version`` 探测、包管理器探测、
+    ``apt-get update``、``apt-get install``，以及 ``socat -V``。argv 先剥掉
+    ``systemd-run --quiet --collect --wait --pipe ...`` 前缀再判断。
+    """
+
+    PREFIX = ("systemd-run", "--quiet", "--collect", "--wait", "--pipe")
+
+    def __init__(self, *, socat: bool = False, manager: str = "apt-get") -> None:
+        super().__init__()
+        self.socat = socat
+        self.manager = manager
+        self.installs: list[str] = []
+
+    @classmethod
+    def _unwrap(cls, cmd: list[str]) -> list[str]:
+        if list(cmd[: len(cls.PREFIX)]) != list(cls.PREFIX):
+            return list(cmd)
+        index = len(cls.PREFIX)
+        while index < len(cmd) and cmd[index].startswith("-"):
+            index += 1
+        return list(cmd[index:])
+
+    def _default(self, cmd: list[str], input: str | None = None) -> RunResult:
+        inner = self._unwrap(cmd)
+        head = inner[0] if inner else ""
+        sub = inner[1] if len(inner) > 1 else ""
+        if head == "socat":
+            stdout = "socat version 1.8.0.0\n" if self.socat else ""
+            return RunResult(cmd=cmd, rc=0 if self.socat else 127, stdout=stdout)
+        if sub == "--version" and head in ("apt-get", "dnf", "yum", "apk"):
+            return RunResult(cmd=cmd, rc=0 if head == self.manager else 127)
+        if head == "apt-get" and sub == "update":
+            return RunResult(cmd=cmd, rc=0)
+        if sub == "install":
+            package = inner[-1]
+            self.installs.append(package)
+            self.socat = True
+            return RunResult(cmd=cmd, rc=0)
+        return super()._default(cmd, input)
+
+
+class InstallPackageTests(AdapterTestBase):
+    """socat 缺失时由 Agent 受控装包（与 wireguard / caddy 同一通道）。
+
+    2026-11-20 走查：端口转发只在文案里让人「先到节点上装 socat」，面板没有入口；
+    而 ``ALLOWED_PACKAGES`` 里早就有 socat，install() 却只检测不安装。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.socat_missing()  # 覆盖基类 which->SOCAT，模拟真的没装
+        self.runner = PkgAwareRunner(socat=False)
+        self.ctx = Ctx(self.paths, command_runner=self.runner)
+        self.kernel = make_kernel(self.paths, [self.adapter], runner=self.runner)
+
+    def task(self, action: str, body: dict) -> dict:
+        payload = self.kernel.handle_action(APP_NAME, action, body)
+        return wait_task(self.kernel, payload["taskId"])
+
+    def test_capabilities_declare_pkg_install(self) -> None:
+        self.assertTrue(self.adapter.capabilities.get("pkgInstall"))
+
+    def test_install_pulls_socat_when_missing(self) -> None:
+        status = self.task("install", {"config": {}, "idempotencyKey": "pkg-1"})
+        self.assertEqual(status["state"], "done", status)
+        self.assertEqual(self.runner.installs, ["socat"])
+        self.assertEqual(status["result"]["version"], "1.8.0.0")
+
+    def test_install_skips_package_manager_when_socat_present(self) -> None:
+        self.runner.socat = True
+        status = self.task("install", {"config": {}, "idempotencyKey": "pkg-2"})
+        self.assertEqual(status["state"], "done", status)
+        self.assertEqual(self.runner.installs, [])
+
+    def test_install_reports_when_package_manager_missing(self) -> None:
+        self.runner.manager = "absent"
+        status = self.task("install", {"config": {}, "idempotencyKey": "pkg-3"})
+        self.assertEqual(status["state"], "error")
+        payload = json.dumps(status, ensure_ascii=False)
+        self.assertIn("socat", payload)
+
+
 class InstallUninstallTests(AdapterTestBase):
     def setUp(self) -> None:
         super().setUp()

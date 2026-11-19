@@ -48,6 +48,7 @@ function state(empty = false) {
           version: '1.0.0',
           status: {
             installed: pfInstalled,
+            socatAvailable: socatOk,
             running: true,
             socatVersion: '1.8.0.0',
             forwards: empty
@@ -157,8 +158,10 @@ const wireguardApp = {
 
 let emptyMode = false;
 let applyFails = false;
-/** 端口转发组件实装状态：未安装时只给中性说明，不出现告警横幅。 */
+/** 端口转发组件实装状态：有转发配置时为真。 */
 let pfInstalled = true;
+/** socat 是否在节点上；false 时给出「安装 socat」入口。 */
+let socatOk = true;
 let currentApp = app();
 let requests: { url: string; init?: RequestInit }[] = [];
 
@@ -166,6 +169,7 @@ function mockApi() {
   emptyMode = false;
   applyFails = false;
   pfInstalled = true;
+  socatOk = true;
   currentApp = app();
   requests = [];
   vi.stubGlobal(
@@ -266,13 +270,24 @@ describe('内网穿透页 · 端口转发卡', () => {
     expect((await screen.findAllByText('待应用')).length).toBeGreaterThan(0);
   });
 
-  it('端口转发未安装：中性说明，不是告警横幅', async () => {
-    pfInstalled = false;
+  it('缺 socat：中性说明 + 安装入口，不是告警横幅', async () => {
+    socatOk = false;
     await renderWireGuard();
-    const title = await screen.findByText('转发服务尚未就绪');
+    const title = await screen.findByText('节点上还没有 socat');
     const banner = title.closest('.ui-banner');
     expect(banner?.className).toContain('ui-banner-neutral');
     expect(banner?.className).not.toContain('ui-banner-warn');
+    expect(screen.getByRole('button', { name: '安装 socat' })).toBeTruthy();
+  });
+
+  it('socat 已装但没有转发规则：不误报「服务未就绪」', async () => {
+    pfInstalled = false;
+    emptyMode = true;
+    currentApp = app(true);
+    await renderWireGuard();
+    expect(await screen.findByText('还没有转发规则')).toBeTruthy();
+    expect(screen.queryByText('节点上还没有 socat')).toBeNull();
+    expect(screen.queryByRole('button', { name: '安装 socat' })).toBeNull();
   });
 
   it('空状态显示添加入口', async () => {
