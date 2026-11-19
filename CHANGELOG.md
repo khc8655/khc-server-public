@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.19.1] - 2026-11-20
+### Fixed
+- 修复 WireGuard 安装必然失败：探测工具链时用了 `wg-quick --version`，而 `wg-quick` 没有这个选项、恒返回 1，导致无论是否已安装都报「未检测到 WireGuard 工具链」（Agent 0.6.1）。
+- 安装任务失败时，安装卡片直接显示失败原因，不再只显示「error · 1%」而必须另开任务抽屉。
+
 ## [0.19.0] - 2026-11-18
 ### Changed
 - 下线浏览器直连（批次 2，Agent 0.6.0）：删除 `live-ticket`、Agent `live.py`/8899、`HOST_OPS_CHANNELS` 与 `/_live/snapshot`，保留旧参数与 `liveGateway` 兼容并释放 8899 端口。

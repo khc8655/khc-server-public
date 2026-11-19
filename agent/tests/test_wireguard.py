@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from adapters.wireguard import (
     DEFAULT_ROUTE,
@@ -2267,15 +2268,43 @@ class PureHelpersTests(unittest.TestCase):
 class InstallUninstallTests(WireGuardTestBase):
     def test_install_reports_toolchain_version(self) -> None:
         ctx = self.ctx()
-        result = self.adapter.install(ctx, self.config())
+        with mock.patch("adapters.wireguard.which_wg_quick", return_value="/usr/bin/wg-quick"):
+            result = self.adapter.install(ctx, self.config())
         self.assertIn("wireguard-tools", result["version"])
         self.assertTrue(result["cards"])
-        self.assertTrue(self.runner.called("wg-quick", "--version"))
+        # 回归（2026-11-20）：**绝不能**再用 `wg-quick --version` 探存在性。
+        self.assertFalse(self.runner.called("wg-quick", "--version"))
+
+    def test_install_succeeds_when_wg_quick_rejects_version_flag(self) -> None:
+        """真实机器的形状：``wg --version`` 返回 0，``wg-quick --version`` 返回 1。
+
+        ``wg-quick`` 没有 ``--version`` 选项，会按错误参数打印用法后退出 1。
+        工具**装好**时就是这个状态，所以不能拿它当「缺工具」的判据 ——
+        修复前这里必然抛「未检测到 WireGuard 工具链」，安装在任何机器上都失败。
+        """
+
+        self.runner.fail(
+            lambda cmd: cmd[:2] == ["wg-quick", "--version"],
+            rc=1,
+            stderr="Usage: wg-quick [ up | down | save | strip ] ...",
+        )
+        with mock.patch("adapters.wireguard.which_wg_quick", return_value="/usr/bin/wg-quick"):
+            result = self.adapter.install(self.ctx(), self.config())
+        self.assertIn("wireguard-tools", result["version"])
+        self.assertFalse(self.runner.called("wg-quick", "--version"))
+
+    def test_install_missing_wg_quick_names_the_binary(self) -> None:
+        with mock.patch("adapters.wireguard.which_wg_quick", return_value=None):
+            with self.assertRaises(CommandFailed) as caught:
+                self.adapter.install(self.ctx(), self.config())
+        self.assertIn("wg-quick", caught.exception.message)
+        self.assertEqual(caught.exception.details["missing"], ["wg-quick"])
 
     def test_install_missing_toolchain_clear_error(self) -> None:
         self.runner.fail(lambda cmd: cmd[:2] == ["wg", "--version"], stderr="wg: not found")
-        with self.assertRaises(CommandFailed) as caught:
-            self.adapter.install(self.ctx(), self.config())
+        with mock.patch("adapters.wireguard.which_wg_quick", return_value=None):
+            with self.assertRaises(CommandFailed) as caught:
+                self.adapter.install(self.ctx(), self.config())
         self.assertIn("wireguard-tools", caught.exception.message)
         self.assertIn("not found", caught.exception.details["wgStderr"])
 
