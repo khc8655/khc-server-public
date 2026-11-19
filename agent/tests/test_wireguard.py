@@ -82,6 +82,10 @@ class WgRunner(FakeRunner):
         # 加载、syncconf 按新 conf 覆盖、wg set peer 增删；conf_path 由测试基类注入。
         self.kernel_peers: dict[str, list[str]] = {}
         self.conf_path = None
+        # 接口是否真的在跑：False 时 wg show <iface> 返回非 0（模拟「没 apply 过」）。
+        self.iface_up = True
+        # 工具链缺失：wg --version 返回非 0（模拟 wireguard-tools 未安装）。
+        self.wg_missing = False
 
     def _default(self, cmd: list[str], input: str | None = None) -> RunResult:
         base = os.path.basename(cmd[0])
@@ -107,14 +111,18 @@ class WgRunner(FakeRunner):
             return RunResult(cmd=cmd, rc=0)
         if base == "wg":
             sub = cmd[1] if len(cmd) > 1 else ""
+            if sub == "--version":
+                if self.wg_missing:
+                    return RunResult(cmd=cmd, rc=127, stderr="wg: command not found\n")
+                return RunResult(cmd=cmd, rc=0, stdout="wireguard-tools v1.0.20210914\n")
+            if self.wg_missing:
+                return RunResult(cmd=cmd, rc=127, stderr="wg: command not found\n")
             if sub == "genkey":
                 self.genkey_counter += 1
                 return RunResult(cmd=cmd, rc=0, stdout=make_key(f"generated-{self.genkey_counter}") + "\n")
             if sub == "pubkey":
                 seed = (input or "").strip()
                 return RunResult(cmd=cmd, rc=0, stdout=make_key("pub:" + seed) + "\n")
-            if sub == "--version":
-                return RunResult(cmd=cmd, rc=0, stdout="wireguard-tools v1.0.20210914\n")
             if sub == "syncconf":
                 iface = cmd[2] if len(cmd) > 2 else ""
                 keys = self._peer_keys_from_file(cmd[3] if len(cmd) > 3 else "")
@@ -135,6 +143,12 @@ class WgRunner(FakeRunner):
                 iface = cmd[2] if len(cmd) > 2 else ""
                 kind = cmd[3] if len(cmd) > 3 else ""
                 if kind == "dump":
+                    if not self.iface_up:
+                        return RunResult(
+                            cmd=cmd,
+                            rc=1,
+                            stderr=f"Unable to access interface: No such device ({iface})\n",
+                        )
                     return RunResult(cmd=cmd, rc=0, stdout=self.dumps.get(iface, ""))
                 if kind == "latest-handshakes":
                     rows = self.handshakes.get(iface, {})
@@ -867,6 +881,64 @@ class ApplyTests(WireGuardTestBase):
         self.assertEqual(caught.exception.details["proto"], "udp")
         self.assertEqual(caught.exception.details["port"], 51820)
         self.assertEqual(caught.exception.details["occupiedBy"], "wireguard")
+
+
+# ---------------------------------------------------------------------------
+# 状态语义：installed = 工具链是否装了，不能由 conf 存在 / 接口在跑推断
+# ---------------------------------------------------------------------------
+
+
+class StatusInstalledSemanticsTests(WireGuardTestBase):
+    """``installed`` 只表示「工具链已安装」，是面板是否显示「安装」按钮的唯一依据。
+
+    2026-11-20 线上（aws-hui-us）：安装任务 100% 成功，但配置已保存、尚未 Apply，
+    旧实现 ``installed = conf 存在 or dump 成功`` 于是得到 False，面板继续显示
+    「节点上尚未安装 WireGuard + 安装按钮」，诱导用户反复点安装。
+    """
+
+    def save_config_only(self, config: dict) -> None:
+        """模拟「配置已保存、尚未 appliedRev 追平」：只有 state.json 快照，没有 conf 文件。"""
+
+        os.makedirs(os.path.dirname(self.paths.state_file), exist_ok=True)
+        with open(self.paths.state_file, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"apps": {"wireguard": {"config": config, "rev": 9, "appliedRev": 3}}},
+                handle,
+            )
+        self.assertFalse(os.path.exists(self.conf_path("wg0")))
+
+    def status(self) -> dict:
+        entries = self.kernel.adapter_state_entries()
+        return next(item for item in entries if item["name"] == "wireguard")["status"]
+
+    def test_installed_true_when_config_saved_but_not_applied(self) -> None:
+        self.save_config_only(self.config())
+        self.runner.iface_up = False
+        self.runner.unit_active = False
+
+        status = self.status()
+
+        self.assertTrue(status["installed"])
+        self.assertFalse(status["running"])
+
+    def test_installed_false_when_toolchain_missing(self) -> None:
+        self.save_config_only(self.config())
+        self.runner.wg_missing = True
+        self.runner.iface_up = False
+
+        status = self.status()
+
+        self.assertFalse(status["installed"])
+
+    def test_running_follows_interface_not_conf_file(self) -> None:
+        self.save_config_only(self.config())
+        self.runner.iface_up = True
+        self.runner.unit_active = False
+
+        status = self.status()
+
+        self.assertTrue(status["installed"])
+        self.assertTrue(status["running"])
 
 
 # ---------------------------------------------------------------------------
