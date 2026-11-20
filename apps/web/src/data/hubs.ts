@@ -2,6 +2,7 @@
 import {
   appConfigListResponseSchema,
   nodeListResponseSchema,
+  nodeOverviewResponseSchema,
   nodeProbeResponseSchema,
   nodeResponseSchema,
   nodeStateResponseSchema,
@@ -9,6 +10,7 @@ import {
   type AppConfigListResponse,
   type CreateNodeRequest,
   type Node,
+  type NodeOverviewResponse,
   type NodeProbeResponse,
   type UpdateNodeRequest,
   type NodeStateResponse,
@@ -64,4 +66,14 @@ export async function probeHubs(): Promise<NodeProbeResponse> {
 export async function fetchHubApps(hubId: string): Promise<AppConfigListResponse> {
   const body = await apiRequest(`/api/v1/nodes/${encodeURIComponent(hubId)}/apps`);
   return appConfigListResponseSchema.parse(body);
+}
+
+/** 节点详情概况单请求聚合（D1 投影 + 一次 /state；离线仍返回 D1 部分）。 */
+export async function fetchHubOverview(
+  hubId: string,
+  options: { force?: boolean } = {},
+): Promise<NodeOverviewResponse> {
+  const query = options.force ? '?force=1' : '';
+  const body = await apiRequest(`/api/v1/nodes/${encodeURIComponent(hubId)}/overview${query}`);
+  return nodeOverviewResponseSchema.parse(body);
 }

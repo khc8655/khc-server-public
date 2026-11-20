@@ -1,9 +1,14 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import type { NodeStateResponse } from '@khc/contracts';
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from '@tanstack/react-query';
+import type { NodeOverviewResponse, NodeStateResponse } from '@khc/contracts';
 import type { SnapshotObservation } from '../data/snapshot';
-import { useHubChannels, type HubChannels } from '../data/channels';
-import { hubQueryOptions } from '../data/queries';
+import { deriveHubChannels, useHubChannels, type HubChannels } from '../data/channels';
+import { fetchHubOverview } from '../data/hubs';
+import { hubOverviewQueryOptions, hubQueryOptions } from '../data/queries';
 import { setHubWriteGuard } from '../data/writeGuard';
 import { Banner, Button, Row } from '../ui';
 import { zh, fmt } from '../i18n/zh';
@@ -12,7 +17,9 @@ import { channelRows, connectionState } from '../apps/host-ops/connectionState';
 
 interface HubChannelsContextValue {
   hubId: string;
+  useOverview: boolean;
   stateQuery: UseQueryResult<NodeStateResponse, Error>;
+  overviewQuery: UseQueryResult<NodeOverviewResponse, Error>;
   live: SnapshotObservation;
   channels: HubChannels;
 }
@@ -21,18 +28,73 @@ const HubChannelsContext = createContext<HubChannelsContextValue | null>(null);
 
 export function HubChannelsProvider({
   hubId,
+  useOverview = false,
   children,
 }: {
   hubId: string;
+  /** 概况页（/hubs/:id）走单请求聚合 /overview，并把 node 与 /state 回填进共享缓存 */
+  useOverview?: boolean;
   children: ReactNode;
 }) {
+  const queryClient = useQueryClient();
   // 节点列表状态只作为「探测未出结果时的参考」：控制面探测失败但列表仍在线时
   // 保持 unknown，不能把未确认直接当成离线（否则与概况页状态互相矛盾）。
-  const hubQuery = useQuery(hubQueryOptions(hubId));
-  const value = useHubChannels(hubId, {
-    knownStatus: hubQuery.data?.status ?? null,
+  const hubQuery = useQuery({
+    ...hubQueryOptions(hubId),
+    enabled: Boolean(hubId) && !useOverview,
   });
-  const { canApply, control } = value.channels;
+
+  const baseOverviewOptions = hubOverviewQueryOptions(hubId);
+  const overviewQuery = useQuery({
+    ...baseOverviewOptions,
+    queryFn: async () => {
+      const data = await fetchHubOverview(hubId);
+      queryClient.setQueryData(['hubs', hubId], data.node);
+      queryClient.setQueryData<NodeStateResponse>(['hubs', hubId, 'state'], {
+        reachable: data.reachable,
+        route: data.route,
+        via: data.via,
+        error: data.error,
+        ...(data.epochStale ? { epochStale: data.epochStale } : {}),
+        tls: data.tls,
+        state: data.state,
+      });
+      return data;
+    },
+    enabled: Boolean(hubId) && useOverview,
+  });
+
+  useEffect(() => {
+    const data = overviewQuery.data;
+    if (!useOverview || !data) return;
+    queryClient.setQueryData(['hubs', hubId], data.node);
+    queryClient.setQueryData<NodeStateResponse>(['hubs', hubId, 'state'], {
+      reachable: data.reachable,
+      route: data.route,
+      via: data.via,
+      error: data.error,
+      ...(data.epochStale ? { epochStale: data.epochStale } : {}),
+      tls: data.tls,
+      state: data.state,
+    });
+  }, [hubId, overviewQuery.data, queryClient, useOverview]);
+
+  const knownStatus = (overviewQuery.data?.node ?? hubQuery.data)?.status ?? null;
+  const baseChannels = useHubChannels(hubId, {
+    enabled: !useOverview,
+    knownStatus,
+  });
+
+  const channels = useOverview
+    ? deriveHubChannels({
+        controlReachable: overviewQuery.data?.reachable ?? baseChannels.stateQuery.data?.reachable ?? null,
+        controlError: overviewQuery.data?.error ?? baseChannels.stateQuery.data?.error ?? null,
+        live: baseChannels.live,
+        knownStatus,
+      })
+    : baseChannels.channels;
+
+  const { canApply, control } = channels;
 
   useEffect(() => {
     setHubWriteGuard(
@@ -47,7 +109,20 @@ export function HubChannelsProvider({
     return () => setHubWriteGuard(null);
   }, [canApply, control.reachable, hubId]);
 
-  return <HubChannelsContext.Provider value={{ hubId, ...value }}>{children}</HubChannelsContext.Provider>;
+  return (
+    <HubChannelsContext.Provider
+      value={{
+        hubId,
+        useOverview,
+        stateQuery: baseChannels.stateQuery,
+        overviewQuery,
+        live: baseChannels.live,
+        channels,
+      }}
+    >
+      {children}
+    </HubChannelsContext.Provider>
+  );
 }
 
 export function useHubChannelsContext(): HubChannelsContextValue {
@@ -99,8 +174,9 @@ export function HubSnapshotNotice() {
 
 /** Hub 工作区顶部的只读提示；只在明确离线时出现，避免把「探测中」误报成离线。 */
 export function HubReadOnlyNotice() {
-  const { channels, stateQuery } = useHubChannelsContext();
+  const { useOverview, channels, stateQuery, overviewQuery } = useHubChannelsContext();
   if (channels.presence !== 'offline') return null;
+  const activeQuery = useOverview ? overviewQuery : stateQuery;
   return (
     <Banner
       tone="danger"
@@ -110,8 +186,8 @@ export function HubReadOnlyNotice() {
         <Button
           label={zh.channels.retryControl}
           size="sm"
-          loading={stateQuery.isFetching}
-          onClick={() => void stateQuery.refetch()}
+          loading={activeQuery.isFetching}
+          onClick={() => void activeQuery.refetch()}
         />
       }
     />

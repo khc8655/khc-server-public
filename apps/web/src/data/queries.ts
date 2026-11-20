@@ -4,7 +4,7 @@ import { queryOptions, useQueryClient } from '@tanstack/react-query';
 import type { Node } from '@khc/contracts';
 import { fetchAppConfig, fetchRevisions } from './apps';
 import { meQueryOptions } from './auth';
-import { fetchHub, fetchHubApps, fetchHubState, fetchHubs } from './hubs';
+import { fetchHub, fetchHubApps, fetchHubOverview, fetchHubState, fetchHubs } from './hubs';
 
 export { meQueryOptions };
 
@@ -27,6 +27,14 @@ export const hubStateQueryOptions = (hubId: string) =>
   queryOptions({
     queryKey: ['hubs', hubId, 'state'],
     queryFn: () => fetchHubState(hubId),
+    staleTime: 5_000,
+    enabled: Boolean(hubId),
+  });
+
+export const hubOverviewQueryOptions = (hubId: string) =>
+  queryOptions({
+    queryKey: ['hubs', hubId, 'overview'],
+    queryFn: () => fetchHubOverview(hubId),
     staleTime: 5_000,
     enabled: Boolean(hubId),
   });

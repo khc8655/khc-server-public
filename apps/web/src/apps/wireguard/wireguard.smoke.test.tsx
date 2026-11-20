@@ -123,6 +123,7 @@ function mockApi(options: {
   state?: () => unknown;
   /** 接口公网地址；空串用于验证「没填公网地址时导出只给引导，不打 Agent」。 */
   publicEndpoint?: string;
+  mode?: 'wg' | 'caddy';
 }) {
   const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
   // 有状态配置：PUT 保存后，后续 GET 返回最新 rev/peers（模拟 D1 写后读）
@@ -255,10 +256,11 @@ function mockApi(options: {
         });
       }
       if (url === '/api/v1/nodes/tyo-1/mode') {
+        const mode = options.mode ?? 'wg';
         return json({
           nodeId: 'tyo-1',
-          mode: 'wg',
-          target: 'caddy',
+          mode,
+          target: mode === 'wg' ? 'caddy' : 'wg',
           reachable: true,
           blockers: [],
           warnings: [],
@@ -319,7 +321,7 @@ describe('WireGuard 页', () => {
     mockApi({ peers: [peerConfig], rev: 2, appliedRev: 1 });
     await renderWireGuard();
 
-    expect(await screen.findByRole('heading', { name: '内网穿透' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '网络' })).toBeTruthy();
     expect((await screen.findAllByText('pixel-8')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('有未应用的改动').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '添加 Peer' })).toBeTruthy();
@@ -563,11 +565,34 @@ describe('WireGuard 页', () => {
     expect(await screen.findByText('已删除 pixel-8')).toBeTruthy();
   });
 
-  it('旧 /peers 暗路由 302 到内网穿透页', async () => {
+  it('旧 /peers 暗路由 302 到网络页', async () => {
     mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
     const router = await renderWireGuard('/hubs/tyo-1/peers');
 
-    expect(await screen.findByRole('heading', { name: '内网穿透' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '网络' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/hubs/tyo-1/wireguard');
+  });
+
+  it('未启用 WG 且无 Peer 时（caddy 模式）：页面不出现任何 Peer/WireGuard 文案，仍保留端口转发卡', async () => {
+    mockApi({ peers: [], rev: 1, appliedRev: 1, mode: 'caddy' });
+    const { container } = await (async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const router = createAppRouter(
+        queryClient,
+        createMemoryHistory({ initialEntries: ['/hubs/tyo-1/wireguard'] }),
+      );
+      const utils = render(
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>,
+      );
+      return utils;
+    })();
+    expect(await screen.findByRole('heading', { name: '网络' })).toBeTruthy();
+    expect(await screen.findByText('端口转发')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '添加 Peer' })).toBeNull();
+    const content = container.querySelector('.ui-hub-content')?.textContent ?? '';
+    expect(content).not.toMatch(/peer/i);
+    expect(content).not.toMatch(/wireguard/i);
   });
 });

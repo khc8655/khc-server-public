@@ -4759,3 +4759,183 @@ button.ui-statusbar-tile:hover {
 }
 
 
+
+/* ------------------------------------- 节点概况与组件列表（U3） */
+.ui-host-meters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s25);
+}
+
+.ui-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.ui-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: var(--fs-sm);
+}
+
+.ui-meter-label {
+  color: var(--text-2);
+  font-weight: var(--fw-medium);
+}
+
+.ui-meter-val {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+.ui-meter-detail {
+  color: var(--text-3);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-xs);
+}
+
+.ui-meter-track {
+  height: var(--s15);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.ui-meter-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width var(--t-base) var(--ease);
+}
+
+.ui-meter-fill.is-warn {
+  background: var(--warn);
+}
+
+.ui-meter-fill.is-danger {
+  background: var(--danger);
+}
+
+.ui-overview-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-3);
+}
+
+.ui-overview-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-overview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-height: var(--h-row);
+  padding: var(--s15) var(--s2);
+  margin: 0 calc(var(--s2) * -1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.ui-overview-row:hover {
+  background: var(--surface-2);
+}
+
+.ui-overview-name {
+  flex-shrink: 0;
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+.ui-overview-mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+}
+
+.ui-overview-meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+}
+
+.ui-overview-issue {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--danger);
+}
+
+.ui-overview-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-md);
+}
+
+.ui-components-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-components-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: var(--h-row);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-components-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.ui-components-info {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.ui-components-name {
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+
+@media (max-width: 639px) {
+  .ui-overview-row {
+    min-height: 56px;
+    flex-wrap: wrap;
+    padding: var(--s2);
+    margin: 0 calc(var(--s2) * -1);
+  }
+
+  .ui-components-row {
+    flex-wrap: wrap;
+    min-height: 56px;
+  }
+}

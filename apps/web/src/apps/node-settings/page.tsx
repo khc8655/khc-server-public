@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import type { BackupImportResponse } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { hubAppsQueryOptions, hubQueryOptions } from '../../data/queries';
@@ -37,9 +37,17 @@ import { formatAbsoluteTime, formatBytes } from '../../i18n/format';
 import { ModeCard } from './ModeCard';
 import { AgentCard } from './AgentCard';
 import { AccessCard } from './AccessCard';
+import { ComponentsCard } from './ComponentsCard';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 
-type Segment = 'agent' | 'mode' | 'backup';
+type Segment = 'agent' | 'components' | 'mode' | 'backup';
+
+function resolveSettingsSegment(tab?: string): Segment {
+  if (tab === 'components') return 'components';
+  if (tab === 'mode') return 'mode';
+  if (tab === 'backup') return 'backup';
+  return 'agent';
+}
 
 /** 导入抽屉内三步 + 结果：选择文件 → 预览 → 确认 → 结果（page-specs §2.6） */
 type ImportPhase = 'pick' | 'preview' | 'confirm' | 'done';
@@ -69,6 +77,7 @@ function importError(error: unknown): ImportErrorState {
 export default function HubSettingsPage() {
   const { hubId } = useParams({ from: '/hubs/$hubId/settings' });
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { tab?: string };
   const queryClient = useQueryClient();
   const toast = useToast();
   const hubQuery = useQuery(hubQueryOptions(hubId));
@@ -79,7 +88,10 @@ export default function HubSettingsPage() {
 
   const existingApps = new Set((appsQuery.data?.apps ?? []).map((item) => item.app));
 
-  const [segment, setSegment] = useState<Segment>('agent');
+  const [segment, setSegment] = useState<Segment>(() => resolveSettingsSegment(search.tab));
+  useEffect(() => {
+    if (search.tab) setSegment(resolveSettingsSegment(search.tab));
+  }, [search.tab]);
 
   /* ------------------------------------------------------------- 导出 */
   const [exporting, setExporting] = useState(false);
@@ -220,6 +232,7 @@ export default function HubSettingsPage() {
 
   const segmentOptions = [
     { value: 'agent', label: zh.nodeSettings.segmentAgent },
+    { value: 'components', label: zh.nodeSettings.segmentComponents },
     { value: 'mode', label: zh.nodeSettings.segmentMode },
     { value: 'backup', label: zh.nodeSettings.segmentBackup },
   ];
@@ -245,6 +258,8 @@ export default function HubSettingsPage() {
           <AgentCard hubId={hubId} hubName={hubName} lastSeenAt={hubQuery.data?.lastSeenAt ?? null} offline={offline} />
         </>
       ) : null}
+
+      {segment === 'components' ? <ComponentsCard hubId={hubId} offline={offline} /> : null}
 
       {segment === 'mode' ? (
         <ModeCard hubId={hubId} hubName={hubName} offline={offline} />

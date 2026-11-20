@@ -1,12 +1,8 @@
 /**
- * 概况页地址行（2026-11-16 P-1）：地址只在标题下出现一次。
- *
- * 回归目标：节点栏、实时状态卡片 hint、页脚三处都曾显示地址，
- * 节点栏还用带框等宽字体把节点名挤成「oracle-x86-」。现在只有标题下一处，
- * 且只显示主机名（去掉协议前缀）。
+ * 概况页地址提取（2026-11-16 P-1）：统一由 patterns/NodePresentation.tsx 提供。
  */
 import { describe, expect, it } from 'vitest';
-import { endpointHost } from './HubOverviewPage';
+import { endpointHost } from '../patterns/NodePresentation';
 
 describe('endpointHost', () => {
   it('去掉 https:// 前缀，只留主机名', () => {
@@ -36,6 +32,6 @@ describe('endpointHost', () => {
   });
 
   it('大小写混合的协议前缀也能去掉', () => {
-    expect(endpointHost('HTTPS://Hub.Example.com')).toBe('Hub.Example.com');
+    expect(endpointHost('HTTPS://Hub.Example.com')).toBe('hub.example.com');
   });
 });

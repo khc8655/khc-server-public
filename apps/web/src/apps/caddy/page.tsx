@@ -6,6 +6,16 @@ import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
 import { hubAppsQueryOptions, hubQueryOptions } from '../../data/queries';
 import { certificatesQueryOptions } from '../../data/certs';
+import {
+  PORT_FORWARD_APP,
+  emptyForwardConfig,
+  forwardConfigQueryOptions,
+} from '../../data/forwards';
+import {
+  listeningUpstream,
+  unpublishedListeningPorts,
+  type ListeningPort,
+} from '../../data/services';
 import { wireGuardConfigQueryOptions, parseWireGuardStatus } from '../../data/wireguard';
 import {
   CADDY_SITE_APP,
@@ -78,7 +88,6 @@ import {
   siteExportFilename,
   type SiteImportResult,
 } from './siteTransfer';
-import { AppsSegment } from './AppsSegment';
 import { SiteDrawer } from './SiteDrawer';
 import { installTaskText } from '../installTaskText';
 import {
@@ -168,6 +177,30 @@ const certColumns: ColumnDef<Certificate>[] = [
   },
 ];
 
+const listeningColumns: ColumnDef<ListeningPort>[] = [
+  {
+    key: 'port',
+    type: 'name',
+    header: zh.services.listeningColPort,
+    width: '28%',
+    value: (row) => (row.process ? `${row.port} · ${row.process}` : String(row.port)),
+  },
+  {
+    key: 'address',
+    type: 'mono',
+    header: zh.services.listeningColAddress,
+    width: '40%',
+    value: (row) => row.address,
+  },
+  {
+    key: 'proto',
+    type: 'text',
+    header: zh.services.listeningColProto,
+    width: '18%',
+    value: (row) => row.proto,
+  },
+];
+
 interface ImportRow {
   block: ExternalSiteBlock;
   conflict: string | null;
@@ -242,6 +275,11 @@ export default function SitesPage() {
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const caddyQuery = useQuery(caddyConfigQueryOptions(hubId));
   const certsQuery = useQuery(certificatesQueryOptions());
+  const forwardConfigured = appsQuery.data?.apps.some((item) => item.app === PORT_FORWARD_APP);
+  const forwardQuery = useQuery({
+    ...forwardConfigQueryOptions(hubId),
+    enabled: appsQuery.isError ? true : Boolean(forwardConfigured),
+  });
   // 反代上游的 Peer 列表只在打开站点抽屉时按需读取，避免跨应用预取 404。
   const [form, setForm] = useState<SiteFormState | null>(null);
   const wgQuery = useQuery({ ...wireGuardConfigQueryOptions(hubId), enabled: Boolean(form) });
@@ -310,6 +348,8 @@ export default function SitesPage() {
       })),
     [config.sites, status],
   );
+  const proxyRows = useMemo(() => rows.filter((row) => row.site.kind === 'proxy'), [rows]);
+  const otherRows = useMemo(() => rows.filter((row) => row.site.kind !== 'proxy'), [rows]);
 
   // 证书分段（只读摘要）：本节点签发，或被本节点站点的 TLS 引用
   const hubCerts = useMemo(
@@ -322,13 +362,30 @@ export default function SitesPage() {
     [certs, hubId, config.sites],
   );
 
-  // 分段默认「站点」；支持 ?tab=certs|apps 深链初始定位（节点概况 TodoChip 用）
-  const [segment, setSegment] = useState<'sites' | 'apps' | 'certs'>(
-    search.tab === 'certs' ? 'certs' : search.tab === 'apps' ? 'apps' : 'sites',
+  // 分段默认「应用」（只列 kind=proxy）；「静态与跳转」和「证书」仅在有数据时显示（R2）
+  const resolveSegment = (tab?: string): 'apps' | 'other' | 'certs' =>
+    tab === 'certs' ? 'certs' : tab === 'other' ? 'other' : 'apps';
+  const [segment, setSegment] = useState<'apps' | 'other' | 'certs'>(() =>
+    resolveSegment(search.tab),
   );
+  useEffect(() => {
+    if (search.tab) setSegment(resolveSegment(search.tab));
+  }, [search.tab]);
+
+  const forwardConfig = forwardQuery.data?.config ?? emptyForwardConfig();
+  const listeningPorts = useMemo(
+    () =>
+      unpublishedListeningPorts(
+        stateQuery.data?.state?.ops,
+        config.sites,
+        forwardConfig.forwards,
+      ),
+    [stateQuery.data?.state?.ops, config.sites, forwardConfig.forwards],
+  );
+
   const importScanQuery = useQuery({
     ...caddyImportScanQueryOptions(hubId),
-    enabled: segment === 'sites' && !unreachable && !adapterMissing,
+    enabled: segment === 'apps' && !unreachable && !adapterMissing,
   });
   const [importView, setImportView] = useState<ExternalSiteBlock | null>(null);
   // 打开外部块抽屉时才生成影子预览（只读，一次请求）；旧 Agent 不支持时降级为直接接管。
@@ -488,20 +545,26 @@ export default function SitesPage() {
     }
   };
 
-  const setDrawerSearch = (drawer?: string, replace = true) => {
+  const setDrawerSearch = (drawer?: string, replace = true, upstream?: string) => {
     void navigate({
       to: '/hubs/$hubId/sites',
       params: { hubId },
-      search: { drawer },
+      search: { drawer, ...(upstream ? { upstream } : {}) },
       replace,
     });
   };
 
-  const openCreate = () => {
-    setForm(createForm());
+  const openCreate = (upstreams?: string) => {
+    const next = createForm();
+    if (upstreams) {
+      next.upstreams = upstreams;
+      next.sourcePort = splitUpstreamHostPort(upstreams).port;
+      next.initial = siteSignature(next);
+    }
+    setForm(next);
     setErrors({});
     setSaveError(null);
-    setDrawerSearch('site:new', false);
+    setDrawerSearch('site:new', false, upstreams);
   };
 
   const openEdit = (site: CaddySite) => {
@@ -1226,32 +1289,44 @@ export default function SitesPage() {
   }
   const visibleBanners = banners.sort((a, b) => a.priority - b.priority).slice(0, 2);
 
+  const segmentOptions = [
+    { value: 'apps', label: zh.sites.segmentAppsOnly },
+    ...(otherRows.length > 0 || segment === 'other'
+      ? [{ value: 'other', label: zh.sites.segmentOther }]
+      : []),
+    ...(hubCerts.length > 0 || segment === 'certs' || search.tab === 'certs'
+      ? [{ value: 'certs', label: zh.sites.segmentCerts }]
+      : []),
+  ];
+
   return (
     <Stack gap={4}>
       <PageHeader
         title={zh.nav.sites}
         scope={hubName}
-        summary={fmt(zh.sites.summaryCount, { count: config.sites.length })}
+        summary={
+          proxyRows.length > 0
+            ? fmt(zh.sites.appsSummaryCount, { count: proxyRows.length })
+            : undefined
+        }
         sync={sync}
-        primaryAction={segment === 'sites' ? action('site.create') : undefined}
-        secondaryActions={segment === 'sites' ? [action('caddy.service')] : undefined}
+        primaryAction={segment === 'certs' ? undefined : action('site.create')}
+        secondaryActions={segment === 'certs' ? undefined : [action('caddy.service')]}
         actionsDisabled={!channels.canApply}
         actionsDisabledReason={zh.channels.controlUnavailableDesc}
         onAction={handlePageAction}
       />
 
-      <Segmented
-        value={segment}
-        ariaLabel={zh.nav.sites}
-        options={[
-          { value: 'sites', label: zh.sites.segmentSites },
-          { value: 'apps', label: zh.sites.segmentApps },
-          { value: 'certs', label: zh.sites.segmentCerts },
-        ]}
-        onChange={(value) =>
-          setSegment(value === 'apps' ? 'apps' : value === 'certs' ? 'certs' : 'sites')
-        }
-      />
+      {segmentOptions.length > 1 ? (
+        <Segmented
+          value={segment}
+          ariaLabel={zh.nav.sites}
+          options={segmentOptions}
+          onChange={(value) =>
+            setSegment(value === 'other' ? 'other' : value === 'certs' ? 'certs' : 'apps')
+          }
+        />
+      ) : null}
 
       {caddyQuery.error ? (
         <Banner
@@ -1283,29 +1358,29 @@ export default function SitesPage() {
         </Card>
       ) : null}
 
-      {segment === 'sites' ? (
+      {segment === 'apps' ? (
         <>
           {sitesExportError ? <InlineError message={sitesExportError} /> : null}
           {sitesImportError ? <InlineError message={sitesImportError} /> : null}
 
           <Table
-            rows={caddyQuery.isLoading ? undefined : rows}
+            rows={caddyQuery.isLoading ? undefined : proxyRows}
             columns={columns}
             rowKey={(row) => row.site.name}
             objectLabel={zh.nav.sites}
             search={{ value: searchText, onChange: setSearchText, placeholder: zh.sites.colDomain }}
             empty={{
               icon: 'globe',
-              title: zh.sites.emptyTitle,
-              description: zh.sites.emptyHint,
+              title: zh.sites.appsEmptyTitle,
+              description: zh.sites.appsEmptyHint,
               action: (
                 <Button
-                  label={actionLabel(action('site.create'))}
+                  label={zh.sites.addFirstApp}
                   variant="primary"
                   icon="plus"
                   disabled={unreachable}
                   disabledReason={writeDisabledReason}
-                  onClick={openCreate}
+                  onClick={() => openCreate()}
                 />
               ),
             }}
@@ -1314,6 +1389,26 @@ export default function SitesPage() {
             onRowAction={handleRowAction}
             onRowOpen={(row) => openEdit(row.site)}
           />
+
+          {listeningPorts.length > 0 ? (
+            <Card title={zh.services.listeningTitle}>
+              <Stack gap={2}>
+                <span className="ui-field-help">{zh.services.listeningHint}</span>
+                <Table
+                  rows={listeningPorts}
+                  columns={listeningColumns}
+                  rowKey={(row) => String(row.port)}
+                  objectLabel={zh.services.listeningTitle}
+                  empty={{
+                    icon: 'activity',
+                    title: zh.services.listeningEmpty,
+                    description: zh.services.listeningHint,
+                  }}
+                  onRowOpen={(row) => openCreate(listeningUpstream(row))}
+                />
+              </Stack>
+            </Card>
+          ) : null}
 
           <Card
             title={zh.sites.importTitle}
@@ -1452,24 +1547,44 @@ export default function SitesPage() {
         </>
       ) : null}
 
-      {segment === 'apps' ? <AppsSegment hubId={hubId} /> : null}
+      {segment === 'other' ? (
+        <Table
+          rows={caddyQuery.isLoading ? undefined : otherRows}
+          columns={columns}
+          rowKey={(row) => row.site.name}
+          objectLabel={zh.sites.segmentOther}
+          search={{ value: searchText, onChange: setSearchText, placeholder: zh.sites.colDomain }}
+          empty={{
+            icon: 'globe',
+            title: zh.sites.emptyTitle,
+            description: zh.sites.emptyHint,
+          }}
+          rowActions={rowActions}
+          rowActionDisabled={rowActionDisabled}
+          onRowAction={handleRowAction}
+          onRowOpen={(row) => openEdit(row.site)}
+        />
+      ) : null}
 
       {segment === 'certs' ? (
         <Card
           title={zh.sites.segmentCerts}
           action={<Link to={`${paths.settings}?tab=certs`} label={zh.sites.certsManage} />}
         >
-          <Table
-            rows={certsQuery.isLoading ? undefined : hubCerts}
-            columns={certColumns}
-            rowKey={(cert) => cert.id}
-            objectLabel={zh.sites.segmentCerts}
-            empty={{
-              icon: 'lock',
-              title: zh.sites.certsEmptyTitle,
-              description: zh.sites.certsEmptyHint,
-            }}
-          />
+          <Stack gap={3}>
+            <Table
+              rows={certsQuery.isLoading ? undefined : hubCerts}
+              columns={certColumns}
+              rowKey={(cert) => cert.id}
+              objectLabel={zh.sites.segmentCerts}
+              empty={{
+                icon: 'lock',
+                title: zh.sites.certsEmptyTitle,
+                description: zh.sites.certsEmptyHint,
+              }}
+            />
+            <span className="ui-field-help">{zh.sites.certsLibraryNote}</span>
+          </Stack>
         </Card>
       ) : null}
 
