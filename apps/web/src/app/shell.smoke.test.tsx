@@ -124,15 +124,14 @@ describe('AppShell 与页面渲染', () => {
     await renderRoute('/');
     expect(await screen.findByText(PANEL_LABEL_TEXT)).toBeTruthy();
     expect((await screen.findAllByText('tyo-1')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('进入节点')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '节点' })).toBeTruthy();
   });
 
-  it('概览页打开只发一次批量探测 + 既有两份列表', async () => {
+  it('概览页打开只发 /nodes + /nodes/probe，不再拉取 /certs', async () => {
     const fetchMock = vi.mocked(globalThis.fetch);
     await renderRoute('/');
     expect(await screen.findByText(PANEL_LABEL_TEXT)).toBeTruthy();
 
-    // 等探测与两份列表都完成
     await waitFor(() => {
       const calls = fetchMock.mock.calls.map((call) => String(call[0]));
       expect(calls).toContain('/api/v1/nodes/probe');
@@ -142,7 +141,7 @@ describe('AppShell 与页面渲染', () => {
     const count = (target: string) => urls.filter((url) => url === target).length;
     expect(count('/api/v1/nodes/probe')).toBe(1);
     expect(count('/api/v1/nodes')).toBe(1);
-    expect(count('/api/v1/certs')).toBe(1);
+    expect(count('/api/v1/certs')).toBe(0);
     // 不在首页 fan-out 单节点 /state、/apps
     expect(urls.some((url) => url.includes('/state') || url.includes('/apps'))).toBe(false);
   });

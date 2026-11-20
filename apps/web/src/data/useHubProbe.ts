@@ -17,7 +17,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Node, NodeProbeApp, NodeProbeResponse } from '@khc/contracts';
+import type {
+  ExpiringCertSummary,
+  Node,
+  NodeProbeApp,
+  NodeProbeProjection,
+  NodeProbeResponse,
+} from '@khc/contracts';
 import { fmt, zh } from '../i18n/zh';
 import { probeHubs } from './hubs';
 import { hubsQueryOptions } from './queries';
@@ -51,6 +57,8 @@ export interface HubView extends Node {
   probed: boolean;
   /** 本次探测拿到的适配器实装/运行状态（/state 投影）；不可达或未上报时缺失 */
   apps?: NodeProbeApp[];
+  /** 首页与 VM 概况同源的投影（应用/Peer/转发/证书与接入证书结论） */
+  projection?: NodeProbeProjection;
 }
 
 export interface HubStatusView {
@@ -244,6 +252,7 @@ export function useHubProbe() {
         lastSeenAt: hit.lastSeenAt ?? (hit.reachable ? result!.probedAt : node.lastSeenAt),
         probed: true,
         apps: hit.apps,
+        ...(hit.projection ? { projection: hit.projection } : {}),
       };
     });
   }, [hubsQuery.data, result]);
@@ -275,5 +284,6 @@ export function useHubProbe() {
     probe,
     counts,
     probedAt: result?.probedAt ?? null,
+    expiringCerts: (result?.expiringCerts ?? []) as ExpiringCertSummary[],
   };
 }

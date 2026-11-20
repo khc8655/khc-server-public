@@ -1,181 +1,174 @@
-import type { NodeAppSummary, NodeProbeApp } from '@khc/contracts';
+import type { ReactNode } from 'react';
 import { hubStatusView, type HubProbePhase, type HubView } from '../data/useHubProbe';
-import { formatRelativeTime } from '../i18n/format';
-import { fmt, zh } from '../i18n/zh';
-import { Badge, Icon, StatusDot, type Tone } from '../ui';
+import { zh } from '../i18n/zh';
+import { paths } from '../registry/routes';
+import { StatusDot, Truncate } from '../ui';
+import {
+  NodeAccessLine,
+  formatCertMetric,
+  formatRatioMetric,
+  type RatioMetric,
+} from './NodePresentation';
 
-/**
- * 概览页节点卡片（page-specs §1.2）。
- *
- * 阅读顺序按「先身份、再可用性、最后承载」排三层：
- * 1. 身份：名称（--fs-lg / 600）+ 状态徽标；
- * 2. 可用性：端地址（mono / 弱色）+ 接入方式 chip；
- * 3. 承载：应用（名称 + 实装状态）与 Peer/站点/转发计数，字号与颜色都降到最弱。
- *
- * 应用只展示已安装/已配置的承载：Agent 明确回报 installed=false 的应用
- * 不占位（与概况页口径一致）；探测未覆盖该节点（离线、旧 Agent）时退回
- * D1 期望配置并显示「未读取」，不推断「未安装」。
- */
 interface HubCardProps {
   hub: HubView;
   phase: HubProbePhase;
   onOpen: () => void;
+  /** U4：节点到期标签插槽（未设置时不传，不占空间） */
+  expirySlot?: ReactNode;
+  /** U4：节点是否处于临期/已过期告警状态，用于卡片边框高亮 */
+  hasWarn?: boolean;
 }
 
-/** 只上卡片的业务应用；certificates / host-ops 是工具型适配器，不占卡片。 */
-const CARD_APPS = ['wireguard', 'caddy-site', 'port-forward', 'node-exporter'] as const;
-
-const APP_LABEL: Record<string, string> = {
-  wireguard: zh.nav.wireguard,
-  'caddy-site': zh.nav.sites,
-  'port-forward': zh.nav.forwards,
-  'node-exporter': 'node-exporter',
-};
-
-interface CardApp {
-  name: string;
-  label: string;
-  state: string;
-  tone: Tone;
-}
-
-function appState(app: NodeProbeApp | undefined): { state: string; tone: Tone } {
-  if (!app || app.installed === null) return { state: zh.hub.appUnknown, tone: 'neutral' };
-  if (!app.installed) return { state: zh.hub.appNotInstalled, tone: 'neutral' };
-  if (app.running === null) return { state: zh.hub.appUnknown, tone: 'neutral' };
-  return app.running
-    ? { state: zh.hub.appRunning, tone: 'ok' }
-    : { state: zh.hub.appStopped, tone: 'warn' };
-}
-
-/** 离线/旧 Agent 时的期望应用：只用于显示「未读取」，不代表实装状态。 */
-function expectedApps(summary: NodeAppSummary | undefined): string[] {
-  if (!summary) return [];
-  const names: string[] = [];
-  if (summary.mode === 'wg') names.push('wireguard');
-  if (summary.mode === 'caddy' || summary.sites !== null) names.push('caddy-site');
-  if (summary.forwards !== null) names.push('port-forward');
-  return names;
-}
-
-function resolveApps(hub: HubView): CardApp[] {
-  const reported = new Map((hub.apps ?? []).map((app) => [app.name, app]));
-  const expected = expectedApps(hub.summary);
-  return CARD_APPS.filter((name) => {
-    const app = reported.get(name);
-    // 明确未安装的应用不占卡片；没有探测结果时按 D1 期望列出（未读取）。
-    if (app) return app.installed !== false;
-    return expected.includes(name);
-  }).map((name) => ({
-    name,
-    label: APP_LABEL[name] ?? name,
-    ...appState(reported.get(name)),
-  }));
-}
-
-function accessLabel(hub: HubView): string {
-  switch (hub.accessMode) {
-    case 'tunnel':
-      return zh.hubs.accessModeTunnel;
-    case 'ip':
-      return zh.hubs.accessModeIp;
-    default:
-      return zh.hubs.accessModeDomain;
+function RatioValue({ metric }: { metric: RatioMetric }) {
+  if (metric.kind === 'all-offline') {
+    return <span className="ui-node-stat-val is-danger">{metric.text}</span>;
   }
+  if (metric.kind === 'total-only') {
+    return <span className="ui-node-stat-val num">{metric.text}</span>;
+  }
+  return (
+    <span className={`ui-node-stat-val num${metric.tone === 'warn' ? ' is-warn' : ''}`}>
+      {metric.online}
+      <small className="ui-node-stat-den">/{metric.total}</small>
+    </span>
+  );
 }
 
-export function HubCard({ hub, phase, onOpen }: HubCardProps) {
+/**
+ * 首页节点卡片（三层排版，R2/R3/R5 口径与节点概况页完全同源）：
+ * 1. 身份与在线态：名称 + 可选到期标签 + 状态点（在线 / 离线 / 探测中… / 未知）；
+ * 2. 连接方式单行（R5）：接入方式 chip + 等宽主机 + HTTPS/证书/明文说明；
+ * 3. 四项精简事实（R2/R3）：应用在线 / Peer 在线 / 转发 / 证书，全为 0 不占行。
+ */
+export function HubCard({ hub, phase, onOpen, expirySlot, hasWarn = false }: HubCardProps) {
   const status = hubStatusView(hub, phase);
-  const apps = resolveApps(hub);
+  const reachable = hub.probed ? hub.status === 'online' : null;
+  const projection = hub.projection;
   const summary = hub.summary;
 
-  const facts: Array<{ label: string; value: string }> = [];
-  if (summary?.peers !== null && summary?.peers !== undefined) {
-    facts.push({ label: 'Peer', value: String(summary.peers) });
+  const appsMetric = formatRatioMetric({
+    online: projection ? projection.apps.online : null,
+    total: projection ? projection.apps.total : (summary?.sites?.total ?? 0),
+    reachable,
+  });
+
+  const peersMetric = formatRatioMetric({
+    online: projection ? projection.peers.online : null,
+    total: projection
+      ? projection.peers.enabled
+        ? projection.peers.total
+        : 0
+      : (summary?.peers ?? 0),
+    reachable,
+  });
+
+  const forwardsTotal = projection ? projection.forwards.total : (summary?.forwards ?? 0);
+  const certMetric = projection ? formatCertMetric(projection.certs) : null;
+
+  const stats: Array<{ key: string; label: string; content: ReactNode }> = [];
+  if (appsMetric) {
+    stats.push({
+      key: 'apps',
+      label: zh.overview.metricApps,
+      content: <RatioValue metric={appsMetric} />,
+    });
   }
-  if (summary?.sites) {
-    facts.push({ label: zh.overview.summarySites, value: String(summary.sites.total) });
+  if (peersMetric) {
+    stats.push({
+      key: 'peers',
+      label: zh.overview.metricPeers,
+      content: <RatioValue metric={peersMetric} />,
+    });
   }
-  if (summary?.forwards !== null && summary?.forwards !== undefined) {
-    facts.push({ label: zh.overview.summaryForwards, value: String(summary.forwards) });
+  if (forwardsTotal > 0) {
+    stats.push({
+      key: 'forwards',
+      label: zh.overview.metricForwards,
+      content: <span className="ui-node-stat-val num">{forwardsTotal}</span>,
+    });
+  }
+  if (certMetric) {
+    stats.push({
+      key: 'certs',
+      label: zh.overview.metricCerts,
+      content: (
+        <span
+          className={`ui-node-stat-val num${
+            certMetric.tone === 'danger'
+              ? ' is-danger'
+              : certMetric.tone === 'warn'
+                ? ' is-warn'
+                : ''
+          }`}
+        >
+          {certMetric.count}
+          <small className="ui-node-stat-den">
+            {' 张'}
+            {certMetric.daysText ? ` · ${certMetric.daysText}` : ''}
+          </small>
+        </span>
+      ),
+    });
   }
 
+  const isOffline = hub.probed && hub.status === 'offline';
+  const accessCert = projection?.accessCert;
+  const hasNodeWarn =
+    !isOffline &&
+    (hasWarn ||
+      (reachable === true &&
+        ((projection?.apps.issues.length ?? 0) > 0 ||
+          (projection?.peers.offline.length ?? 0) > 0 ||
+          (projection?.certs.expiring.length ?? 0) > 0 ||
+          accessCert?.tlsState === 'failed' ||
+          (accessCert?.daysLeft !== null &&
+            accessCert?.daysLeft !== undefined &&
+            accessCert.daysLeft <= 14))));
+
+  const cardClass = [
+    'ui-node-card',
+    isOffline ? 'ui-node-card--offline' : hasNodeWarn ? 'ui-node-card--warn' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <div
-      role="link"
-      tabIndex={0}
-      className={`ui-node-card${hub.status === 'offline' ? ' ui-node-card--offline' : ''}`}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen();
-        }
+    <a
+      className={cardClass}
+      href={paths.hub(hub.id)}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        onOpen();
       }}
     >
       <div className="ui-node-card-body">
         <div className="ui-node-card-main">
           <div className="ui-node-card-identity">
-            <span className="ui-node-card-name" title={hub.name}>
-              {hub.name}
+            <span className="ui-node-card-name">
+              <Truncate text={hub.name} />
             </span>
-            <Badge tone={status.tone} label={status.label} dot />
-            <span className="sr-only">{zh.overview.hubCardEnter}</span>
-            <span className="ui-node-card-chevron" aria-hidden="true">
-              <Icon name="arrow" />
+            {expirySlot}
+            <span className={`ui-node-card-status is-${status.tone}`}>
+              <StatusDot tone={status.tone} />
+              <span>{status.label}</span>
             </span>
           </div>
-          <div className="ui-node-card-access">
-            <span className="ui-node-card-endpoint" title={hub.endpoint}>
-              {hub.endpoint}
-            </span>
-            <span className="ui-node-card-access-chip">{accessLabel(hub)}</span>
+          <NodeAccessLine hub={hub} accessCert={accessCert} />
+        </div>
+
+        {stats.length > 0 ? (
+          <div className="ui-node-card-stats">
+            {stats.map((stat) => (
+              <div className="ui-node-stat" key={stat.key}>
+                <span className="ui-node-stat-label">{stat.label}</span>
+                {stat.content}
+              </div>
+            ))}
           </div>
-        </div>
-
-        <div className="ui-node-card-apps">
-          <span className="ui-node-card-label">{zh.overview.cardApps}</span>
-          {apps.length > 0 ? (
-            <div className="ui-node-card-app-grid">
-              {apps.map((app) => (
-                <div className="ui-node-app" key={app.name}>
-                  <StatusDot tone={app.tone} />
-                  <span className="ui-node-app-name" title={app.label}>
-                    {app.label}
-                  </span>
-                  <span className={`ui-node-app-state ui-node-app-state--${app.tone}`}>
-                    {app.state}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <span className="ui-node-card-app-empty">
-              {hub.apps && hub.apps.length > 0 ? zh.hub.appNoneInstalled : zh.hub.appUnknown}
-            </span>
-          )}
-        </div>
+        ) : null}
       </div>
-
-      <div className="ui-node-card-foot">
-        <div className="ui-node-card-facts">
-          {facts.map((fact) => (
-            <span className="ui-node-card-fact" key={fact.label}>
-              {fact.label} <b>{fact.value}</b>
-            </span>
-          ))}
-          {summary?.sites && summary.sites.disabled > 0 ? (
-            <span className="ui-node-card-exc">
-              {fmt(zh.overview.summaryDisabled, { count: summary.sites.disabled })}
-            </span>
-          ) : null}
-        </div>
-        <span className="ui-node-card-lastseen">
-          {fmt(zh.overview.cardLastSeen, {
-            time: hub.lastSeenAt ? formatRelativeTime(hub.lastSeenAt) : zh.common.dash,
-          })}
-        </span>
-      </div>
-    </div>
+    </a>
   );
 }

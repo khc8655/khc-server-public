@@ -1,4 +1,5 @@
 import { Badge, Icon } from '../ui';
+import { zh } from '../i18n/zh';
 
 export interface TodoChip {
   id: string;
@@ -13,13 +14,14 @@ export interface TodoChip {
 }
 
 /**
- * 「需要处理」分诊 chips（ui-redesign ③）：复用全局概览的 triage 样式，
- * 点击 chip 直达对应管理页。纯展示组件，数据由调用方聚合。
+ * 「需要处理」分诊 chips（首页与节点概况复用）：
+ * 点击 chip 直达对应管理页；无待办时返回 null。
  */
 export function TodoChips({ items, onOpen }: { items: TodoChip[]; onOpen: (to: string) => void }) {
   if (items.length === 0) return null;
   return (
-    <div className="ui-triage-strip" role="list" aria-label="需要处理">
+    <div className="ui-triage-strip" role="list" aria-label={zh.overview.attention}>
+      <span className="ui-triage-strip-title">{zh.overview.attention}</span>
       <div className="ui-triage-strip-items">
         {items.map((chip) => (
           <button

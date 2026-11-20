@@ -1,67 +1,284 @@
-import { useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { certificatesQueryOptions } from '../data/certs';
-import { useQuery } from '@tanstack/react-query';
-import { hubOutageDays, hubStatusView, useHubProbe } from '../data/useHubProbe';
+import { hubOutageDays, useHubProbe } from '../data/useHubProbe';
 import { formatRelativeTime } from '../i18n/format';
 import { fmt, zh } from '../i18n/zh';
-import { paths } from '../registry/routes';
+import { formatRatioMetric } from '../patterns/NodePresentation';
 import { HubCard } from '../patterns/HubCard';
+import { TodoChips, type TodoChip } from '../patterns/TodoChips';
+import { paths } from '../registry/routes';
 import { PANEL_VERSION_LABEL } from '../version';
 import {
-  Badge,
   Banner,
   Button,
   Card,
   EmptyState,
   Grid,
-  Icon,
   PageHeader,
   Row,
   Skeleton,
   Stack,
-  Stat,
+  Truncate,
 } from '../ui';
+
+interface KpiItem {
+  key: string;
+  label: string;
+  value: ReactNode;
+  hint: string;
+  tone?: 'warn' | 'danger' | 'neutral';
+}
 
 export function OverviewPage() {
   const routerNavigate = useNavigate();
-  const goTo = (to: string) => void routerNavigate({ to });
+  const goTo = (to: string) => void routerNavigate({ href: to });
 
-  // 请求预算：概览页只读控制面的两份列表（/nodes、/certificates）
-  // + 一次批量轻量探测（POST /nodes/probe，覆盖全部节点）；不对每个节点 fan-out。
-  // 运行态只在节点页或浏览器直连观测里看。
-  const { hubs, hubsQuery, phase, error: probeError, probe, counts, probedAt } = useHubProbe();
-  const certsQuery = useQuery(certificatesQueryOptions());
+  // 首页仅需 2 个请求：GET /nodes + POST /nodes/probe（不再拉取 /api/v1/certs）。
+  const {
+    hubs,
+    hubsQuery,
+    phase,
+    error: probeError,
+    probe,
+    counts,
+    probedAt,
+    expiringCerts,
+  } = useHubProbe();
   const probing = phase === 'probing';
   const runProbe = () => void probe({ force: true });
 
-  const certs = certsQuery.data ?? [];
+  // 聚合「需要处理」分诊列表（R3：离线节点只报节点离线，不重复拆成应用/Peer 离线）。
+  const todos: TodoChip[] = [];
+  let offlineNodeCount = 0;
+  let appIssueCount = 0;
+  let offlinePeerCount = 0;
 
-  const onlineCount = counts.online;
-  const offlineHubs = hubs.filter((hub) => hub.status === 'offline');
-  const nowSec = Math.floor(Date.now() / 1000);
-  const expiringCerts = certs.filter(
-    (c) => c.notAfter !== null && c.notAfter - nowSec <= 86400 * 14,
-  );
-  const attentionCount = offlineHubs.length + expiringCerts.length;
+  for (const hub of hubs) {
+    if (hub.probed && hub.status === 'offline') {
+      offlineNodeCount += 1;
+      const outageDays = hubOutageDays(hub);
+      todos.push({
+        id: `node:${hub.id}`,
+        tone: 'danger',
+        badge: zh.overview.todoOfflineBadge,
+        name: hub.name,
+        desc:
+          outageDays !== null && outageDays >= 1
+            ? fmt(zh.status.staleDays, { days: outageDays })
+            : zh.overview.todoOfflineControlUnreachable,
+        to: paths.hub(hub.id),
+      });
+      continue;
+    }
 
-  // 探测未完成前的文案不能"报喜"：否则会出现「节点总数 0/2」+「所有节点都在正常运行」的自相矛盾
-  const summary =
-    phase === 'probing'
-      ? zh.overview.summaryProbing
+    if (hub.probed && hub.status === 'online' && hub.projection) {
+      for (const issue of hub.projection.apps.issues) {
+        appIssueCount += 1;
+        todos.push({
+          id: `app:${hub.id}:${issue.name}`,
+          tone: 'danger',
+          badge: zh.overview.todoAppIssueBadge,
+          name: `${hub.name} · ${issue.name}`,
+          desc:
+            issue.status !== null
+              ? `HTTP ${issue.status}`
+              : zh.overview.todoAppUnreachable,
+          to: paths.hubSection(hub.id, 'sites'),
+        });
+      }
+      for (const peerName of hub.projection.peers.offline) {
+        offlinePeerCount += 1;
+        todos.push({
+          id: `peer:${hub.id}:${peerName}`,
+          tone: 'warn',
+          badge: zh.hub.todoPeerBadge,
+          name: `${hub.name} · ${peerName}`,
+          to: paths.hubSection(hub.id, 'wireguard'),
+        });
+      }
+    }
+  }
+
+  for (const cert of expiringCerts) {
+    todos.push({
+      id: `cert:${cert.id}`,
+      tone: cert.daysLeft <= 0 ? 'danger' : 'warn',
+      badge: zh.hub.todoCertBadge,
+      name: cert.name,
+      desc:
+        cert.daysLeft < 0
+          ? zh.overview.todoCertExpired
+          : cert.daysLeft === 0
+            ? zh.overview.todoCertToday
+            : fmt(zh.overview.todoCertExpiring, { days: cert.daysLeft }),
+      to: `${paths.settings}?tab=certs`,
+    });
+  }
+
+  // 聚合全集群 KPI（R2：合计为 0 的 KPI 直接隐藏；R3：全离线标红「N 个离线」）。
+  const probedCount = hubs.filter((hub) => hub.probed).length;
+  const kpis: KpiItem[] = [];
+
+  if (hubs.length > 0) {
+    const nodeMetric = formatRatioMetric({
+      online: probedCount > 0 ? counts.online : null,
+      total: hubs.length,
+      reachable: probedCount > 0 ? true : null,
+    });
+    kpis.push({
+      key: 'nodes',
+      label: zh.overview.kpiOnlineNodes,
+      value:
+        nodeMetric?.kind === 'all-offline' ? (
+          <span className="is-danger">{nodeMetric.text}</span>
+        ) : nodeMetric?.kind === 'ratio' ? (
+          <>
+            {nodeMetric.online}
+            <small className="ui-stat-den"> / {nodeMetric.total}</small>
+          </>
+        ) : (
+          String(hubs.length)
+        ),
+      tone: nodeMetric?.kind === 'all-offline' ? 'danger' : 'neutral',
+      hint:
+        probedCount === 0
+          ? zh.overview.statHubsHintProbing
+          : counts.offline > 0
+            ? fmt(zh.overview.kpiOnlineHintPartial, {
+                online: counts.online,
+                offline: counts.offline,
+              })
+            : zh.overview.kpiOnlineHintAll,
+    });
+  }
+
+  let appsTotalCluster = 0;
+  let appsKnownTotal = 0;
+  let appsKnownOnline = 0;
+  let peersTotalCluster = 0;
+  let peersKnownTotal = 0;
+  let peersKnownOnline = 0;
+
+  for (const hub of hubs) {
+    const p = hub.projection;
+    const nodeAppsTotal = p ? p.apps.total : (hub.summary?.sites?.total ?? 0);
+    appsTotalCluster += nodeAppsTotal;
+    if (hub.probed && hub.status === 'online' && p && p.apps.online !== null) {
+      appsKnownTotal += p.apps.total;
+      appsKnownOnline += p.apps.online;
+    }
+
+    const nodePeersTotal = p
+      ? p.peers.enabled
+        ? p.peers.total
+        : 0
+      : (hub.summary?.peers ?? 0);
+    peersTotalCluster += nodePeersTotal;
+    if (
+      hub.probed &&
+      hub.status === 'online' &&
+      p?.peers.enabled &&
+      p.peers.online !== null
+    ) {
+      peersKnownTotal += p.peers.total;
+      peersKnownOnline += p.peers.online;
+    }
+  }
+
+  if (appsTotalCluster > 0) {
+    const appMetric = formatRatioMetric({
+      online: appsKnownTotal > 0 ? appsKnownOnline : null,
+      total: appsKnownTotal > 0 ? appsKnownTotal : appsTotalCluster,
+      reachable: appsKnownTotal > 0 ? true : null,
+    });
+    if (appMetric) {
+      kpis.push({
+        key: 'apps',
+        label: zh.overview.kpiAppsOnline,
+        value:
+          appMetric.kind === 'all-offline' ? (
+            <span className="is-danger">{appMetric.text}</span>
+          ) : appMetric.kind === 'ratio' ? (
+            <>
+              {appMetric.online}
+              <small className="ui-stat-den"> / {appMetric.total}</small>
+            </>
+          ) : (
+            String(appsTotalCluster)
+          ),
+        tone: appMetric.kind === 'all-offline' ? 'danger' : 'neutral',
+        hint:
+          appsKnownTotal === 0
+            ? probing
+              ? zh.overview.probing
+              : zh.hub.appUnknown
+            : appIssueCount > 0
+              ? fmt(zh.overview.kpiAppsIssues, { count: appIssueCount })
+              : zh.overview.kpiAppsAllOk,
+      });
+    }
+  }
+
+  if (peersTotalCluster > 0) {
+    const peerMetric = formatRatioMetric({
+      online: peersKnownTotal > 0 ? peersKnownOnline : null,
+      total: peersKnownTotal > 0 ? peersKnownTotal : peersTotalCluster,
+      reachable: peersKnownTotal > 0 ? true : null,
+    });
+    if (peerMetric) {
+      kpis.push({
+        key: 'peers',
+        label: zh.overview.kpiPeersOnline,
+        value:
+          peerMetric.kind === 'all-offline' ? (
+            <span className="is-danger">{peerMetric.text}</span>
+          ) : peerMetric.kind === 'ratio' ? (
+            <>
+              {peerMetric.online}
+              <small className="ui-stat-den"> / {peerMetric.total}</small>
+            </>
+          ) : (
+            String(peersTotalCluster)
+          ),
+        tone: peerMetric.kind === 'all-offline' ? 'danger' : 'neutral',
+        hint: zh.overview.kpiPeersHint,
+      });
+    }
+  }
+
+  if (todos.length > 0) {
+    const hintParts = [
+      offlineNodeCount > 0 ? `${offlineNodeCount} 离线` : null,
+      appIssueCount > 0 ? `${appIssueCount} 应用异常` : null,
+      offlinePeerCount > 0 ? `${offlinePeerCount} Peer 离线` : null,
+      expiringCerts.length > 0 ? `${expiringCerts.length} 张证书到期` : null,
+    ].filter(Boolean);
+    kpis.push({
+      key: 'todos',
+      label: zh.overview.kpiAttention,
+      value: <span className="is-warn">{todos.length}</span>,
+      tone: 'warn',
+      hint: hintParts.join(' · '),
+    });
+  }
+
+  const summaryParts =
+    phase === 'probing' && probedCount === 0
+      ? [zh.overview.summaryProbing]
       : hubs.length === 0
-        ? zh.overview.summaryEmpty
-        : attentionCount > 0
-          ? fmt(zh.overview.summaryAttention, { count: attentionCount })
-          : zh.overview.summaryAllOk;
+        ? [zh.overview.summaryEmpty]
+        : [
+            fmt(zh.overview.summaryOnlineNodes, { count: counts.online }),
+            todos.length > 0 ? fmt(zh.overview.summaryTodos, { count: todos.length }) : null,
+            probedAt ? fmt(zh.overview.summaryRecentProbe, { time: formatRelativeTime(probedAt) }) : null,
+          ].filter(Boolean);
 
   return (
     <Stack gap={5}>
-      <PageHeader
-        title={zh.overview.title}
-        summary={summary}
-      >
-        <p className="ui-panel-version">{fmt(zh.overview.panelVersion, { label: PANEL_VERSION_LABEL })}</p>
+      <PageHeader title={zh.overview.title} summary={summaryParts.join(' · ')}>
+        <p className="ui-panel-version">
+          {fmt(zh.overview.panelVersion, { label: PANEL_VERSION_LABEL })}
+        </p>
       </PageHeader>
 
       {hubsQuery.isError ? (
@@ -96,102 +313,33 @@ export function OverviewPage() {
         />
       ) : null}
 
-      {/* Top 4-Card Cluster KPI Strip */}
-      <Grid cols={4} gap={3}>
-        <Stat
-          label={zh.overview.statHubs}
-          value={phase === 'probing' ? `— / ${hubs.length}` : `${onlineCount} / ${hubs.length}`}
-          hint={
-            phase === 'probing'
-              ? zh.overview.statHubsHintProbing
-              : offlineHubs.length > 0
-                ? `${zh.overview.statOnline} ${onlineCount} · ${zh.overview.statOffline} ${offlineHubs.length}`
-                : zh.overview.summaryAllOk
-          }
-        />
-        <Stat
-          label={zh.overview.statProbe}
-          value={probedAt ? formatRelativeTime(probedAt) : zh.status.probing}
-          hint={zh.overview.statProbeHint}
-        />
-        <Stat
-          label={zh.overview.statCerts}
-          value={String(certs.length)}
-          hint={
-            expiringCerts.length > 0
-              ? fmt(zh.overview.statCertsHint, { expiring: expiringCerts.length })
-              : zh.overview.statCertsOk
-          }
-        />
-        <Stat
-          label={zh.overview.statAttention}
-          value={String(attentionCount)}
-          hint={zh.overview.statAttentionHint}
-        />
-      </Grid>
-
-      {/* Compact Actionable Triage Strip (only shown when attention is needed) */}
-      {attentionCount > 0 ? (
-        <div className="ui-triage-strip" role="region" aria-label={zh.overview.attention}>
-          <div className="ui-triage-strip-head">
-            <Badge
-              tone="warn"
-              label={`${zh.overview.attention} · ${attentionCount}`}
-            />
-          </div>
-          <div className="ui-triage-strip-items">
-            {offlineHubs.map((hub) => (
-              <button
-                key={hub.id}
-                type="button"
-                className="ui-triage-chip"
-                onClick={() => goTo(paths.hub(hub.id))}
-              >
-                <Badge tone={hubStatusView(hub, phase).tone} label={hubStatusView(hub, phase).label} dot />
-                <span className="ui-triage-name">{hub.name}</span>
-                <span className="ui-triage-desc">
-                  {fmt(
-                    (hubOutageDays(hub) ?? 0) >= 1
-                      ? zh.overview.nodeOfflineStaleReason
-                      : zh.overview.nodeOfflineReason,
-                    {
-                      days: hubOutageDays(hub) ?? 0,
-                      time: hub.lastSeenAt ? formatRelativeTime(hub.lastSeenAt) : zh.common.unknown,
-                    },
-                  )}
-                </span>
-                <Icon name="arrow" size={14} />
-              </button>
-            ))}
-            {expiringCerts.map((cert) => {
-              const daysLeft = Math.max(
-                0,
-                Math.ceil(((cert.notAfter ?? nowSec) - nowSec) / 86400),
-              );
-              return (
-                <button
-                  key={cert.id}
-                  type="button"
-                  className="ui-triage-chip"
-                  onClick={() => goTo(`${paths.settings}?tab=certs`)}
-                >
-                  <Badge tone="warn" label={zh.nav.certs} dot />
-                  <span className="ui-triage-name">{cert.name}</span>
-                  <span className="ui-triage-desc">
-                    {fmt(zh.overview.certExpiringReason, { days: daysLeft })}
-                  </span>
-                  <Icon name="arrow" size={14} />
-                </button>
-              );
-            })}
-          </div>
+      {kpis.length > 0 ? (
+        <div className="ui-kpi-strip" data-cols={String(kpis.length)}>
+          {kpis.map((kpi) => (
+            <div
+              key={kpi.key}
+              className={`ui-stat${kpi.tone === 'warn' ? ' ui-stat--warn' : kpi.tone === 'danger' ? ' ui-stat--danger' : ''}`}
+            >
+              <div className="ui-stat-label">
+                <Truncate text={kpi.label} mode="end" />
+              </div>
+              <div className="ui-stat-value num">{kpi.value}</div>
+              {kpi.hint ? (
+                <div className="ui-stat-hint">
+                  <Truncate text={kpi.hint} />
+                </div>
+              ) : null}
+            </div>
+          ))}
         </div>
       ) : null}
 
+      <TodoChips items={todos} onOpen={goTo} />
+
       {hubsQuery.isLoading ? (
         <Grid cols={2} gap={4}>
-          <Skeleton height={210} />
-          <Skeleton height={210} />
+          <Skeleton height={152} />
+          <Skeleton height={152} />
         </Grid>
       ) : hubs.length === 0 ? (
         <Card>
@@ -203,16 +351,16 @@ export function OverviewPage() {
               <Button
                 variant="primary"
                 icon="plus"
-                label={zh.overview.addFirstHub}
+                label={zh.overview.addFirstNodeGuide}
                 onClick={() => goTo(`${paths.hubs}?create=1`)}
               />
             }
           />
         </Card>
       ) : (
-        <Card
-          title={zh.overview.nodeMatrixTitle}
-          action={
+        <Stack gap={3}>
+          <div className="ui-section-header">
+            <h2 className="ui-section-title">{zh.overview.sectionNodesTitle}</h2>
             <Row gap={2}>
               <Button
                 variant="ghost"
@@ -224,12 +372,11 @@ export function OverviewPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                label={zh.overview.manageHubs}
+                label={zh.overview.manageNodes}
                 onClick={() => goTo(paths.hubs)}
               />
             </Row>
-          }
-        >
+          </div>
           <div className="ui-hub-grid">
             {hubs.map((hub) => (
               <HubCard
@@ -240,7 +387,7 @@ export function OverviewPage() {
               />
             ))}
           </div>
-        </Card>
+        </Stack>
       )}
     </Stack>
   );
