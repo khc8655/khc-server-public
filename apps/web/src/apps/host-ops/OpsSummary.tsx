@@ -1,7 +1,28 @@
 import type { AgentOps } from '@khc/contracts';
 import { EmptyState, Grid, KeyValue, Stat } from '../../ui';
-import { zh } from '../../i18n/zh';
+import { fmt, zh } from '../../i18n/zh';
 import { formatBytes, formatDuration, formatPercent } from '../../i18n/format';
+import { splitFailedUnits } from '../../data/managedUnits';
+
+/**
+ * 服务统计的副标题（2026-11-20）：受管失败才叫「失败单元」。
+ *
+ * 系统自带单元（fwupd / apt-daily-upgrade / cloud-final 等）的失败由发行版负责，
+ * 面板既不能修也不该催；全量计数会让这张卡片常年挂着与运维无关的红色。
+ * 仍如实给条数，只是换成中性文案并与受管失败分开。
+ */
+function servicesHint(failedUnits: readonly string[] | undefined): string | undefined {
+  if (!Array.isArray(failedUnits)) return undefined;
+  const { managed, system } = splitFailedUnits(failedUnits);
+  const systemHint =
+    system.length > 0 ? fmt(zh.ops.systemFailedUnits, { count: String(system.length) }) : '';
+  if (managed.length > 0) {
+    return systemHint
+      ? `${zh.ops.failedUnits}: ${managed.length} · ${systemHint}`
+      : `${zh.ops.failedUnits}: ${managed.length}`;
+  }
+  return systemHint || undefined;
+}
 
 /**
  * #007 VM 运维卡片内容，Hub 本机与 Peer 状态共用（status 输出与 /state.ops 同构）。
@@ -57,11 +78,7 @@ export function OpsSummary({
               ? ops.services.services.map((item) => `${item.name}:${item.state}`).join(' · ')
               : '—'
           }
-          hint={
-            ops.services?.failedUnits?.length
-              ? `${zh.ops.failedUnits}: ${ops.services.failedUnits.length}`
-              : undefined
-          }
+          hint={servicesHint(ops.services?.failedUnits)}
           icon="shield"
         />
       </Grid>

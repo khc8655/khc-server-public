@@ -15,6 +15,7 @@ import type { HostOpsCronEntry, HostOpsProcess } from '../data/hostOps';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { StatusBar, type StatusTile } from '../apps/host-ops/StatusBar';
 import { pickFailedUnits } from '../data/failedUnits';
+import { servicesTile } from '../apps/host-ops/serviceStatus';
 import {
   CronEntryForm,
   CronSegment,
@@ -104,7 +105,9 @@ export default function HubOpsPage() {
     // 失败单元取快照优先（2026-11-16 U2）：只读 /state 会让计数冻在打开页面那一刻，
     // 用户重启修好服务后状态带还显示旧数字。null 表示读不到，不谎报 0。
     const failedUnits = pickFailedUnits(ops, state?.ops?.services);
-    const failed = failedUnits?.length ?? 0;
+    // 服务瓦片只把面板受管的失败算成「异常」（口径见 apps/host-ops/serviceStatus.ts）：
+    // Ubuntu 云镜像自带 fwupd / apt-daily-upgrade / cloud-final 这类单元的失败与面板无关，
+    // 全算进来就是一块永远消不掉的红色告警，用户很快学会无视它。
     const diskPercent = ops?.disks?.[0]?.percent ?? null;
     const list: StatusTile[] = [
       {
@@ -152,8 +155,8 @@ export default function HubOpsPage() {
       {
         key: 'services',
         label: zh.hostOps.services,
-        value: failed > 0 ? fmt(zh.hostOps.servicesFailed, { count: String(failed) }) : zh.hostOps.servicesOk,
-        tone: failed > 0 ? 'danger' : 'neutral',
+        // 受管失败才算异常；系统自带单元降级为中性文字；读不到显示「未知」而不是「正常」。
+        ...servicesTile(failedUnits),
         onClick: () => setSegment('services'),
       },
       {
