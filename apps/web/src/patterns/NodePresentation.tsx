@@ -196,3 +196,57 @@ export function NodeAccessLine({
     </div>
   );
 }
+
+/** 计算固定公历日期（YYYY-MM-DD）相对今日 UTC 日期的剩余天数；无效日期返回 null。 */
+export function daysLeftFromDate(
+  expiresAt: string | null | undefined,
+  nowMs = Date.now(),
+): number | null {
+  if (!expiresAt) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expiresAt.trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const target = new Date(Date.UTC(year, month - 1, day));
+  if (
+    target.getUTCFullYear() !== year ||
+    target.getUTCMonth() !== month - 1 ||
+    target.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const now = new Date(nowMs);
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const raw = Math.round((target.getTime() - todayUtc) / 86_400_000);
+  return Object.is(raw, -0) ? 0 : raw;
+}
+
+/** 节点到期徽标（U4）：>14 天中性灰，1–14 天提醒黄，≤0 天警告红；未设置不渲染。 */
+export function NodeExpiryChip({
+  expiresAt,
+  daysLeft,
+}: {
+  expiresAt: string | null | undefined;
+  daysLeft?: number | null;
+}) {
+  if (!expiresAt) return null;
+  const left = daysLeft ?? daysLeftFromDate(expiresAt);
+  if (left === null) return null;
+  const tone: 'neutral' | 'warn' | 'danger' =
+    left <= 0 ? 'danger' : left <= 14 ? 'warn' : 'neutral';
+  const text =
+    left < 0
+      ? fmt(zh.overview.expiryExpiredDays, { days: Math.abs(left) })
+      : left === 0
+        ? zh.overview.expiryToday
+        : fmt(zh.overview.expiryDaysLeft, { days: left });
+  return (
+    <span
+      className={`ui-expiry-chip ui-expiry-chip--${tone} num`}
+      title={`${zh.overview.expiryTitle}：${expiresAt}`}
+    >
+      {text}
+    </span>
+  );
+}

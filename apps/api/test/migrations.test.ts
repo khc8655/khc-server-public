@@ -34,6 +34,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
       '0011_cert_acme_meta.sql',
       '0012_app_configs_summary.sql',
       '0013_app_manifests.sql',
+      '0014_node_expires_at.sql',
     ]);
     const raw = openRawDatabase();
     const { applied, skipped } = applyMigrations(raw);
@@ -67,6 +68,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
     expect(columnNames(raw, 'nodes')).toContain('access_mode');
     expect(columnNames(raw, 'nodes')).toContain('tunnel_id');
     expect(columnNames(raw, 'nodes')).toContain('allow_insecure');
+    expect(columnNames(raw, 'nodes')).toContain('expires_at');
     expect(columnNames(raw, 'tunnels')).toEqual(
       expect.arrayContaining(['id', 'name', 'hostname', 'origin_port', 'token_enc']),
     );

@@ -100,9 +100,15 @@ describe('d1-baseline', () => {
     const rows = db.prepare('SELECT name FROM d1_migrations ORDER BY id').all() as { name: string }[];
     expect(rows.map((r) => r.name)).toEqual(BASELINE_MIGRATIONS);
 
+    const postBaseline = readdirSync('migrations')
+      .filter((name) => /^\d+_.*\.sql$/.test(name) && !BASELINE_MIGRATIONS.includes(name))
+      .sort();
     const { applied, skipped } = applyMigrations(db as never);
-    expect(applied).toEqual([]);
-    expect(skipped).toEqual(expect.arrayContaining(BASELINE_MIGRATIONS));
+    expect(applied).toEqual(postBaseline);
+    expect(skipped).toEqual(BASELINE_MIGRATIONS);
+
+    const second = applyMigrations(db as never);
+    expect(second.applied).toEqual([]);
     db.close();
   });
 

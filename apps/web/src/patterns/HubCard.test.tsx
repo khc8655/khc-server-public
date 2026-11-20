@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import type { NodeProbeProjection } from '@khc/contracts';
 import { HubCard } from './HubCard';
+import { NodeExpiryChip } from './NodePresentation';
 import type { HubView } from '../data/useHubProbe';
 
 afterEach(cleanup);
@@ -235,5 +236,64 @@ describe('HubCard（三层节点卡 · R2/R3/R5）', () => {
     expect(link.getAttribute('href')).toBe('/hubs/n1');
     fireEvent.click(link);
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('U4 节点到期徽标：未设置隐藏、>14 天中性、≤14 天黄框警告、≤0 天标红', () => {
+    const cleanPeers = {
+      online: 2,
+      total: 2,
+      enabled: true,
+      offline: [],
+      interfaceName: 'khc0',
+      listenPort: 51820,
+    };
+    const unset = render(
+      <HubCard
+        hub={hub({ projection: baseProjection({ peers: cleanPeers }) })}
+        phase="done"
+        onOpen={() => {}}
+      />,
+    );
+    expect(unset.container.querySelector('.ui-expiry-chip')).toBeNull();
+    cleanup();
+
+    const far = render(
+      <HubCard
+        hub={hub({ expiresAt: '2099-01-01', projection: baseProjection({ peers: cleanPeers }) })}
+        phase="done"
+        expirySlot={<NodeExpiryChip expiresAt="2099-01-01" daysLeft={45} />}
+        onOpen={() => {}}
+      />,
+    );
+    expect(far.container.querySelector('.ui-expiry-chip--neutral')?.textContent).toBe('到期剩 45 天');
+    expect(far.container.querySelector('.ui-node-card--warn')).toBeNull();
+    cleanup();
+
+    const soon = render(
+      <HubCard
+        hub={hub({ expiresAt: '2026-12-01' })}
+        phase="done"
+        hasWarn
+        expirySlot={<NodeExpiryChip expiresAt="2026-12-01" daysLeft={7} />}
+        onOpen={() => {}}
+      />,
+    );
+    expect(soon.container.querySelector('.ui-expiry-chip--warn')?.textContent).toBe('到期剩 7 天');
+    expect(soon.container.querySelector('.ui-node-card--warn')).toBeTruthy();
+    cleanup();
+
+    const expired = render(
+      <HubCard
+        hub={hub({ expiresAt: '2026-11-10' })}
+        phase="done"
+        hasWarn
+        expirySlot={<NodeExpiryChip expiresAt="2026-11-10" daysLeft={-2} />}
+        onOpen={() => {}}
+      />,
+    );
+    expect(expired.container.querySelector('.ui-expiry-chip--danger')?.textContent).toBe(
+      '已过期 2 天',
+    );
+    expect(expired.container.querySelector('.ui-node-card--warn')).toBeTruthy();
   });
 });

@@ -3,7 +3,7 @@ import { newEpoch, newId, nowSec } from '../../lib/ids';
 import { mapStoredNode, type NodeRow } from './rows';
 
 const COLUMNS =
-  'id, name, endpoint, tunnel_endpoint, live_endpoint, domain, access_mode, tunnel_id, allow_insecure, preferred_route, token_enc, rev_epoch, last_seen_at, created_at, updated_at';
+  'id, name, endpoint, tunnel_endpoint, live_endpoint, domain, access_mode, tunnel_id, allow_insecure, preferred_route, token_enc, rev_epoch, expires_at, last_seen_at, created_at, updated_at';
 
 export class D1NodeRepo implements NodeRepo {
   constructor(private readonly db: D1Database) {}
@@ -43,13 +43,14 @@ export class D1NodeRepo implements NodeRepo {
       // D-2/T2.2：创建即生成纪元；节点重建/恢复=新节点行=新纪元，
       // Agent 据此识别旧纪元并重置 rev 基线（迁移 0007 为存量节点回填）。
       revEpoch: newEpoch(),
+      expiresAt: input.expiresAt ?? null,
       lastSeenAt: null,
       createdAt: now,
       updatedAt: now,
     };
     await this.db
       .prepare(
-        `INSERT INTO nodes (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO nodes (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         node.id,
@@ -64,6 +65,7 @@ export class D1NodeRepo implements NodeRepo {
         node.preferredRoute,
         node.tokenEnc,
         node.revEpoch,
+        node.expiresAt,
         node.lastSeenAt,
         node.createdAt,
         node.updatedAt,
@@ -92,6 +94,7 @@ export class D1NodeRepo implements NodeRepo {
     if (patch.preferredRoute !== undefined) set('preferred_route', patch.preferredRoute);
     if (patch.tokenEnc !== undefined) set('token_enc', patch.tokenEnc);
     if (patch.lastSeenAt !== undefined) set('last_seen_at', patch.lastSeenAt);
+    if (patch.expiresAt !== undefined) set('expires_at', patch.expiresAt);
     if (sets.length === 0) return this.get(id);
     set('updated_at', nowSec());
     await this.db

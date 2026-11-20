@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { hubOutageDays, useHubProbe } from '../data/useHubProbe';
 import { formatRelativeTime } from '../i18n/format';
 import { fmt, zh } from '../i18n/zh';
-import { formatRatioMetric } from '../patterns/NodePresentation';
+import { NodeExpiryChip, daysLeftFromDate, formatRatioMetric } from '../patterns/NodePresentation';
 import { HubCard } from '../patterns/HubCard';
 import { TodoChips, type TodoChip } from '../patterns/TodoChips';
 import { paths } from '../registry/routes';
@@ -112,6 +112,27 @@ export function OverviewPage() {
             ? zh.overview.todoCertToday
             : fmt(zh.overview.todoCertExpiring, { days: cert.daysLeft }),
       to: `${paths.settings}?tab=certs`,
+    });
+  }
+
+  let expiringNodeCount = 0;
+  for (const hub of hubs) {
+    const expiryDaysLeft = hub.projection?.expiresDaysLeft ?? daysLeftFromDate(hub.expiresAt);
+    if (expiryDaysLeft === null || expiryDaysLeft > 14) continue;
+    expiringNodeCount += 1;
+    todos.push({
+      id: `node-expiry:${hub.id}`,
+      tone: expiryDaysLeft <= 0 ? 'danger' : 'warn',
+      badge:
+        expiryDaysLeft <= 0 ? zh.overview.todoNodeExpiredBadge : zh.overview.todoNodeExpiringBadge,
+      name: hub.name,
+      desc:
+        expiryDaysLeft < 0
+          ? fmt(zh.overview.todoNodeExpiredDays, { days: Math.abs(expiryDaysLeft) })
+          : expiryDaysLeft === 0
+            ? zh.overview.todoNodeToday
+            : fmt(zh.overview.todoNodeExpiring, { days: expiryDaysLeft }),
+      to: paths.hubSection(hub.id, 'settings'),
     });
   }
 
@@ -252,6 +273,7 @@ export function OverviewPage() {
       appIssueCount > 0 ? `${appIssueCount} 应用异常` : null,
       offlinePeerCount > 0 ? `${offlinePeerCount} Peer 离线` : null,
       expiringCerts.length > 0 ? `${expiringCerts.length} 张证书到期` : null,
+      expiringNodeCount > 0 ? `${expiringNodeCount} 节点到期` : null,
     ].filter(Boolean);
     kpis.push({
       key: 'todos',
@@ -378,14 +400,25 @@ export function OverviewPage() {
             </Row>
           </div>
           <div className="ui-hub-grid">
-            {hubs.map((hub) => (
-              <HubCard
-                key={hub.id}
-                hub={hub}
-                phase={phase}
-                onOpen={() => goTo(paths.hub(hub.id))}
-              />
-            ))}
+            {hubs.map((hub) => {
+              const expiryDaysLeft =
+                hub.projection?.expiresDaysLeft ?? daysLeftFromDate(hub.expiresAt);
+              const expiryWarn = expiryDaysLeft !== null && expiryDaysLeft <= 14;
+              return (
+                <HubCard
+                  key={hub.id}
+                  hub={hub}
+                  phase={phase}
+                  hasWarn={expiryWarn || undefined}
+                  expirySlot={
+                    hub.expiresAt ? (
+                      <NodeExpiryChip expiresAt={hub.expiresAt} daysLeft={expiryDaysLeft} />
+                    ) : undefined
+                  }
+                  onOpen={() => goTo(paths.hub(hub.id))}
+                />
+              );
+            })}
           </div>
         </Stack>
       )}

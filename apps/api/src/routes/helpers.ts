@@ -41,6 +41,7 @@ export function toPublicNode(node: StoredNode, now = nowSec()): Node {
     allowInsecure: node.allowInsecure,
     preferredRoute: node.preferredRoute,
     status,
+    expiresAt: node.expiresAt,
     lastSeenAt: node.lastSeenAt,
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,

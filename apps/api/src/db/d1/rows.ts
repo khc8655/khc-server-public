@@ -14,6 +14,7 @@ export interface NodeRow {
   preferred_route: string;
   token_enc: string;
   rev_epoch: string;
+  expires_at: string | null;
   last_seen_at: number | null;
   created_at: number;
   updated_at: number;
@@ -42,6 +43,7 @@ export function mapStoredNode(row: NodeRow): StoredNode {
     preferredRoute: row.preferred_route === 'tunnel' ? 'tunnel' : 'direct',
     tokenEnc: row.token_enc,
     revEpoch: row.rev_epoch,
+    expiresAt: row.expires_at ?? null,
     lastSeenAt: row.last_seen_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

@@ -30,6 +30,7 @@ export interface StoredNode {
   tokenEnc: string;
   /** D-2/T2.2：rev epoch（纪元），创建时生成；节点重建/恢复时换新值（公开 API 不回显） */
   revEpoch: string;
+  expiresAt: string | null;
   lastSeenAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -46,6 +47,7 @@ export interface NewNode {
   tunnelId?: string | null;
   allowInsecure?: boolean;
   preferredRoute?: PreferredRoute;
+  expiresAt?: string | null;
   tokenEnc: string;
 }
 
@@ -60,6 +62,7 @@ export interface NodePatch {
   allowInsecure?: boolean;
   preferredRoute?: PreferredRoute;
   tokenEnc?: string;
+  expiresAt?: string | null;
   lastSeenAt?: number | null;
 }
 

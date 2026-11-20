@@ -45,6 +45,7 @@ let failedUnits: string[] = [];
 let overviewStatus = 200;
 let overviewPatch: Partial<NodeOverviewData> = {};
 let accessMode: 'domain' | 'tunnel' | 'ip' = 'domain';
+let nodeExpiresAt: string | null = null;
 let requests: string[] = [];
 
 function buildOverviewResponse() {
@@ -115,6 +116,7 @@ function buildOverviewResponse() {
   return {
     node: {
       ...baseNode,
+      expiresAt: nodeExpiresAt,
       accessMode,
       endpoint:
         accessMode === 'ip'
@@ -158,6 +160,7 @@ beforeEach(() => {
   overviewStatus = 200;
   overviewPatch = {};
   accessMode = 'domain';
+  nodeExpiresAt = null;
   requests = [];
   vi.stubGlobal(
     'fetch',
@@ -339,5 +342,30 @@ describe('节点概况页 · 单请求与核心展示（U3）', () => {
     await renderOverview();
     expect(await screen.findByText('无法加载概况')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+
+  it('U4 节点到期：标题栏渲染徽标，≤14 天与到期当天进入「需要处理」并链到设置页', async () => {
+    nodeExpiresAt = '2026-11-26';
+    overviewPatch = { expiresAt: '2026-11-26', expiresDaysLeft: 5 };
+    const warnRender = await renderOverview();
+    expect(await screen.findByText('到期剩 5 天')).toBeTruthy();
+    expect(warnRender.container.querySelector('.ui-expiry-chip--warn')?.textContent).toBe(
+      '到期剩 5 天',
+    );
+    const warnTriage = warnRender.container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(warnTriage).toContain('即将到期');
+    expect(warnTriage).toContain('节点到期剩 5 天');
+    cleanup();
+
+    nodeExpiresAt = '2026-11-21';
+    overviewPatch = { expiresAt: '2026-11-21', expiresDaysLeft: 0 };
+    const dueRender = await renderOverview();
+    expect(await screen.findByText('今日到期')).toBeTruthy();
+    expect(dueRender.container.querySelector('.ui-expiry-chip--danger')?.textContent).toBe(
+      '今日到期',
+    );
+    const dueTriage = dueRender.container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(dueTriage).toContain('节点已过期');
+    expect(dueTriage).toContain('节点今日到期');
   });
 });

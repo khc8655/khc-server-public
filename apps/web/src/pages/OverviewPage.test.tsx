@@ -282,4 +282,124 @@ describe('OverviewPage（首页概览 · U2）', () => {
     expect(await screen.findByText('无法加载节点列表')).toBeTruthy();
     expect(await screen.findByText('状态探测失败')).toBeTruthy();
   });
+
+  it('U4 节点到期（≤14 天与已过期，含离线节点）：渲染卡片徽标、黄框与「需要处理」待办', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
+        if (url === '/api/v1/nodes') {
+          return json({
+            nodes: [
+              {
+                id: 'n-soon',
+                name: 'soon-node',
+                endpoint: 'https://soon.example.dev',
+                tunnelEndpoint: null,
+                liveEndpoint: null,
+                domain: 'soon.example.dev',
+                accessMode: 'domain',
+                tunnelId: null,
+                allowInsecure: false,
+                preferredRoute: 'direct',
+                expiresAt: '2026-11-26',
+                status: 'online',
+                lastSeenAt: NOW - 10,
+                createdAt: 1,
+                updatedAt: 2,
+              },
+              {
+                id: 'n-expired',
+                name: 'expired-node',
+                endpoint: 'https://expired.example.dev',
+                tunnelEndpoint: null,
+                liveEndpoint: null,
+                domain: 'expired.example.dev',
+                accessMode: 'domain',
+                tunnelId: null,
+                allowInsecure: false,
+                preferredRoute: 'direct',
+                expiresAt: '2026-11-18',
+                status: 'offline',
+                lastSeenAt: NOW - 86400,
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            ],
+          });
+        }
+        if (url === '/api/v1/nodes/probe') {
+          return json({
+            probedAt: NOW,
+            expiringCerts: [],
+            nodes: [
+              {
+                id: 'n-soon',
+                reachable: true,
+                route: 'direct',
+                via: 'fetch',
+                error: null,
+                lastSeenAt: NOW,
+                projection: {
+                  apps: { online: 1, total: 1, issues: [], staticCount: 0, redirectCount: 0 },
+                  peers: {
+                    online: null,
+                    total: 0,
+                    enabled: false,
+                    offline: [],
+                    interfaceName: null,
+                    listenPort: null,
+                  },
+                  forwards: { total: 0, tcpCount: 0, udpCount: 0 },
+                  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+                  accessCert: { daysLeft: 60, tlsState: 'verified' },
+                  expiresAt: '2026-11-26',
+                  expiresDaysLeft: 5,
+                },
+              },
+              {
+                id: 'n-expired',
+                reachable: false,
+                route: null,
+                via: null,
+                error: 'timeout',
+                lastSeenAt: NOW - 86400,
+                projection: {
+                  apps: { online: null, total: 0, issues: [], staticCount: 0, redirectCount: 0 },
+                  peers: {
+                    online: null,
+                    total: 0,
+                    enabled: false,
+                    offline: [],
+                    interfaceName: null,
+                    listenPort: null,
+                  },
+                  forwards: { total: 0, tcpCount: 0, udpCount: 0 },
+                  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+                  accessCert: { daysLeft: null, tlsState: 'unknown' },
+                  expiresAt: '2026-11-18',
+                  expiresDaysLeft: -3,
+                },
+              },
+            ],
+          });
+        }
+        return json({});
+      }),
+    );
+
+    const { container } = await renderOverview();
+    expect(await screen.findByText('到期剩 5 天')).toBeTruthy();
+    expect(screen.getByText('已过期 3 天')).toBeTruthy();
+    expect(container.querySelector('.ui-expiry-chip--warn')?.textContent).toBe('到期剩 5 天');
+    expect(container.querySelector('.ui-expiry-chip--danger')?.textContent).toBe('已过期 3 天');
+    expect(container.querySelectorAll('.ui-node-card--warn').length).toBe(1);
+    expect(container.querySelectorAll('.ui-node-card--offline').length).toBe(1);
+    const triage = container.querySelector('.ui-triage-strip')?.textContent ?? '';
+    expect(triage).toContain('即将到期');
+    expect(triage).toContain('节点到期剩 5 天');
+    expect(triage).toContain('节点已过期');
+    expect(triage).toContain('节点已过期 3 天');
+  });
 });

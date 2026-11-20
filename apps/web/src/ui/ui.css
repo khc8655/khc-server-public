@@ -4939,3 +4939,29 @@ button.ui-statusbar-tile:hover {
     min-height: 56px;
   }
 }
+
+.ui-expiry-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--s2);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.ui-expiry-chip--warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+  background: color-mix(in srgb, var(--warn-soft) 55%, var(--surface));
+  color: var(--warn);
+}
+
+.ui-expiry-chip--danger {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  background: color-mix(in srgb, var(--danger-soft) 50%, var(--surface));
+  color: var(--danger);
+}

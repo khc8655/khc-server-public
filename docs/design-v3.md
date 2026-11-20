@@ -89,8 +89,8 @@
 
 | 路由 | 说明 |
 |---|---|
-| `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`allowInsecure`、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
-| `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），另附 `projection` 与顶层 `expiringCerts`（`lib/node-overview.ts` 同源派生，含 502/503/504 应用判定）；`/state` 超时或结构不合法时对应运行态缺失，不影响 `reachable` |
+| `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`allowInsecure`、固定到期日期 `expiresAt`（YYYY-MM-DD）、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
+| `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），另附 `projection`（含 `expiresAt` / `expiresDaysLeft`）与顶层 `expiringCerts`（`lib/node-overview.ts` 同源派生，含 502/503/504 应用判定）；`/state` 超时或结构不合法时对应运行态缺失，不影响 `reachable` |
 | `GET /nodes/:id/state` | 转发 Agent `/state`（3s） |
 | `GET /nodes/:id/apps` | 已安装应用 + Agent 上可用适配器列表（含版本） |
 | `GET/PUT /nodes/:id/apps/:app` | 读/存应用配置（只写 D1 + revisions，不碰 Hub） |
@@ -212,6 +212,7 @@ Peers、反代站点、端口转发不再单独建表，都是各自应用 `conf
 | `0011_cert_acme_meta.sql` | `certificates` 加 ACME 元数据列（provider / 凭据设置键 / CA / 密钥类型），供一键续期 |
 | `0013_app_manifests.sql` | 新增 `app_manifests`（全局应用清单：脚本正文 + 元数据，只存配置） |
 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json`（明文摘要，只含模式与计数），让 `GET /nodes` 摘要派生零解密；旧行 NULL 时读取路径回退解密，一次性回填后不再发生 |
+| `0014_node_expires_at.sql` | `nodes` 加可空 `expires_at`（固定公历到期日期 `YYYY-MM-DD`，不自动顺延） |
 
 **rev 语义（冻结）**：`PUT` 配置时 Worker 将 `rev = max+1`；`apply` 必须带 `expectRev`，Agent 成功返回 `appliedRev`，不匹配返回 `409 conflict`；`rollback` = 用旧 config 生成**新 rev** 再 apply，不直接改 `applied_rev`。节点重建/恢复后 rev 从低重新计数时，由 `rev_epoch` 纪元判定旧纪元并自动重置 Agent 的 `appliedRev` 基线（§2.2），`409 conflict` 不再永久卡死恢复流程。
 
