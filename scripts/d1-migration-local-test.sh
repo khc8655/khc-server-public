@@ -65,10 +65,10 @@ contains() {
   esac
 }
 
-section "1) 官方 migrations apply：0001–0011 + 幂等"
+section "1) 官方 migrations apply：全量迁移 + 幂等"
 FULL="$TMP/full"
 LOG="$TMP/apply.log"
-if wrangler d1 migrations apply "$DB" --local --persist-to "$FULL" >"$LOG" 2>&1; then
+if CI=true wrangler d1 migrations apply "$DB" --local --persist-to "$FULL" >"$LOG" 2>&1; then
   ok "migrations apply 退出码 0"
 else
   sed -n '1,160p' "$LOG"
@@ -79,7 +79,7 @@ for f in migrations/0*.sql; do
   contains "$(cat "$LOG")" "$name" && ok "已应用 $name" || bad "未应用 $name"
 done
 LOG2="$TMP/apply2.log"
-if wrangler d1 migrations apply "$DB" --local --persist-to "$FULL" >"$LOG2" 2>&1 \
+if CI=true wrangler d1 migrations apply "$DB" --local --persist-to "$FULL" >"$LOG2" 2>&1 \
   && contains "$(cat "$LOG2")" "No migrations to apply"; then
   ok "重复 apply 无操作（幂等）"
 else
@@ -138,6 +138,100 @@ if printf '%s\n' "$ROWS" | cut -f3 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | c
   bad "0010/0008 新列默认值不是 NULL"
 else
   ok "0010/0008 新列默认 NULL（兼容旧节点）"
+fi
+
+section "4) scripts/d1-baseline.mjs 基线演练（真本地 wrangler D1）"
+# 4a: 全新空库 → baseline no-op，随后 migrations apply 从 0001 全量应用
+EMPTY_D1="$TMP/baseline-empty"
+if BASE_EMPTY_OUT="$(node scripts/d1-baseline.mjs --local --persist-to "$EMPTY_D1" 2>&1)" \
+  && contains "$BASE_EMPTY_OUT" "空数据库"; then
+  ok "4a 空库 baseline 为 no-op"
+else
+  printf '%s\n' "$BASE_EMPTY_OUT"
+  bad "4a 空库 baseline 异常"
+fi
+if CI=true wrangler d1 migrations apply "$DB" --local --persist-to "$EMPTY_D1" >/dev/null 2>&1; then
+  ok "4a 空库随后 migrations apply 成功"
+else
+  bad "4a 空库 migrations apply 失败"
+fi
+
+# 4b: 0001–0013 手工建库（无 d1_migrations）→ baseline 登记 13 条 → migrations apply 为 no-op → 幂等复跑
+MANUAL_D1="$TMP/baseline-manual"
+for f in migrations/000[1-9]_*.sql migrations/001[0-3]_*.sql; do
+  [ -e "$f" ] || continue
+  apply_file "$MANUAL_D1" "$f" || bad "4b 预填 $f 失败"
+done
+if BASE_OK_OUT="$(node scripts/d1-baseline.mjs --local --persist-to "$MANUAL_D1" 2>&1)" \
+  && contains "$BASE_OK_OUT" "13 条"; then
+  ok "4b 0001–0013 存量库 baseline 登记 13 条"
+else
+  printf '%s\n' "$BASE_OK_OUT"
+  bad "4b 存量库 baseline 失败"
+fi
+if BASE_NOOP_OUT="$(node scripts/d1-baseline.mjs --local --persist-to "$MANUAL_D1" 2>&1)" \
+  && contains "$BASE_NOOP_OUT" "跳过基线初始化"; then
+  ok "4b 重复运行 baseline 为 no-op"
+else
+  printf '%s\n' "$BASE_NOOP_OUT"
+  bad "4b 重复运行 baseline 未跳过"
+fi
+SIM_DIR="$TMP/sim-repo"
+mkdir -p "$SIM_DIR/migrations"
+cp migrations/000[1-9]_*.sql migrations/001[0-3]_*.sql "$SIM_DIR/migrations/"
+node -e "
+const fs = require('fs');
+const src = fs.readFileSync('wrangler.toml', 'utf8');
+fs.writeFileSync(process.argv[1], src.replace('migrations_dir = \"migrations\"', 'migrations_dir = \"' + process.argv[2] + '\"'));
+" "$SIM_DIR/wrangler.toml" "$SIM_DIR/migrations"
+if SIM_LOG1="$(CI=true wrangler d1 migrations apply "$DB" --config "$SIM_DIR/wrangler.toml" --local --persist-to "$MANUAL_D1" 2>&1)" \
+  && contains "$SIM_LOG1" "No migrations to apply"; then
+  ok "4b 仅含 0001–0013 基线时 migrations apply 为 No migrations to apply"
+else
+  printf '%s\n' "$SIM_LOG1"
+  bad "4b 基线后被误判为有待执行迁移"
+fi
+
+# 4c: 缺 0013 的不完整存量库 → fail-closed 且不建 d1_migrations
+PARTIAL_D1="$TMP/baseline-partial"
+for f in migrations/000[1-9]_*.sql migrations/001[0-2]_*.sql; do
+  [ -e "$f" ] || continue
+  apply_file "$PARTIAL_D1" "$f" || bad "4c 预填 $f 失败"
+done
+if BASE_FAIL_OUT="$(node scripts/d1-baseline.mjs --local --persist-to "$PARTIAL_D1" 2>&1)"; then
+  printf '%s\n' "$BASE_FAIL_OUT"
+  bad "4c 缺 0013 时 baseline 应报错退出"
+elif contains "$BASE_FAIL_OUT" "0013_app_manifests.sql" && contains "$BASE_FAIL_OUT" "app_manifests"; then
+  ok "4c 缺 0013 时精确报错并阻断"
+else
+  printf '%s\n' "$BASE_FAIL_OUT"
+  bad "4c 缺 0013 时未报出具体缺失项"
+fi
+PARTIAL_TABLES="$(query "$PARTIAL_D1" "SELECT name FROM sqlite_master WHERE type='table' AND name='d1_migrations'")"
+if contains "$PARTIAL_TABLES" '"d1_migrations"'; then
+  bad "4c fail-closed 失败：仍创建了 d1_migrations"
+else
+  ok "4c 失败时未创建 d1_migrations"
+fi
+
+# 4d: 模拟未来增量迁移 0099_sim.sql → 只应用新增文件，第二次执行为 no-op
+cat > "$SIM_DIR/migrations/0099_sim.sql" <<'SQL'
+CREATE TABLE IF NOT EXISTS _sim_baseline_test (id TEXT PRIMARY KEY);
+SQL
+if SIM_LOG2="$(CI=true wrangler d1 migrations apply "$DB" --config "$SIM_DIR/wrangler.toml" --local --persist-to "$MANUAL_D1" 2>&1)" \
+  && contains "$SIM_LOG2" "0099_sim.sql" \
+  && ! contains "$SIM_LOG2" "0001_init.sql"; then
+  ok "4d 模拟增量迁移仅应用新增文件"
+else
+  printf '%s\n' "$SIM_LOG2"
+  bad "4d 模拟增量迁移执行异常"
+fi
+if SIM_LOG3="$(CI=true wrangler d1 migrations apply "$DB" --config "$SIM_DIR/wrangler.toml" --local --persist-to "$MANUAL_D1" 2>&1)" \
+  && contains "$SIM_LOG3" "No migrations to apply"; then
+  ok "4d 模拟 0014 重复执行为 no-op"
+else
+  printf '%s\n' "$SIM_LOG3"
+  bad "4d 模拟 0014 重复执行未跳过"
 fi
 
 section "结论"

@@ -1,6 +1,6 @@
 # 发版与部署
 
-> 状态：现行 ｜ 最后核验：2026-11-18 ｜ 关联：ADR-0013、ADR-0016、ADR-0019
+> 状态：现行 ｜ 最后核验：2026-11-20 ｜ 关联：ADR-0013、ADR-0016、ADR-0019
 
 本文是版本规则、发版流程、Agent 发版与回滚的唯一来源。决策理由见 ADR，历史记录见 `docs/archive/2026-11/release-history.md`。
 
@@ -54,6 +54,7 @@
 |---|---|---|
 | Check deploy credentials | 缺 secrets 立即退出 | 阻断 |
 | Render wrangler.ci.toml | 用 secrets 覆盖占位值，残留占位值即退出 | 阻断 |
+| D1 migrations | 记录 Time Travel 书签、校验/初始化基线并 `wrangler d1 migrations apply --remote` | 阻断 |
 | Generate signed agent release | CI 内签包，并带回线上当前版本作为 N-1（§4.2） | 签包失败阻断；取 N-1 失败只告警 |
 | Build web | 把 `apps/web/public/agent/` 一起打进 assets | 阻断 |
 | Pre-deploy smoke | `wrangler versions upload`（不切流量），用预览 URL 检查 `/api/v1/health` 与 `/api/v1/version` | 阻断 |
@@ -132,7 +133,7 @@ WARN: 本次发版不含 N-1（…），面板回滚将不可用
 | 对象 | 方式 |
 |---|---|
 | Worker | `npx wrangler rollback`，或按 `release-*` 标签对应的提交重新部署。先用 `git tag --list 'release-*'` 找目标，再用 `/api/v1/version` 核对 |
-| D1 | 迁移只增不改，通常无需回退；见 `docs/engineering/d1-migrations.md` |
+| D1 | 迁移只增不改，通常无需回退；破坏性回退按 CI 书签 `wrangler d1 time-travel restore`（见 `docs/engineering/d1-migrations.md`） |
 | Agent（自动） | 升级后 30 秒内不健康，看门狗把 `.prev` 换回并重启，结果写入 `/var/lib/khc-agent/upgrade.json` |
 | Agent（面板） | 节点设置 → Agent 卡片 → 回滚到上一版（L3）。只在节点当前版本等于 `releases[0]` 且清单有 `releases[1]` 时出现；只能回退一格，且只能回到内置公钥相同的版本 |
 | Agent（人工） | `systemctl stop khc-agent` → 安装目录内 `mv khc-agent khc-agent.failed && mv khc-agent.prev khc-agent` → `systemctl start khc-agent` |
