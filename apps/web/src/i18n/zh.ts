@@ -909,7 +909,8 @@ export const zh = {
     servicesTitle: '系统服务',
     servicesFailedCount: '{count} 个失败',
     servicesUnknown: '未读取',
-    systemUnitsFailed: '系统服务 {count} 个失败',
+    // 与状态带 / 运维卡片同一口径同一措辞（2026-11-20）：都叫「系统单元」，不混用「系统服务」。
+    systemUnitsFailed: '{count} 个系统单元失败',
     failedUnits: '失败服务',
   },
 

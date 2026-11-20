@@ -212,8 +212,8 @@ describe('节点概况页 · 需要处理只收受管单元', () => {
     expect(triage).not.toContain('unattended-upgrades');
     expect(triage).not.toContain('fwupd');
 
-    // 主机卡片里有一行灰色入口，说明「系统服务 2 个失败」并可点进去
-    expect(screen.getByText('系统服务 2 个失败')).toBeTruthy();
+    // 主机卡片里有一行灰色入口，说明「2 个系统单元失败」并可点进去
+    expect(screen.getByText('2 个系统单元失败')).toBeTruthy();
   });
 
   it('面板受管单元失败：进「需要处理」，也计入主机卡片计数', async () => {
@@ -239,7 +239,7 @@ describe('节点概况页 · 需要处理只收受管单元', () => {
     expect(triage).toContain('khc-agent.service');
     expect(triage).not.toContain('unattended-upgrades');
     // 只余一条系统单元
-    expect(screen.getByText('系统服务 1 个失败')).toBeTruthy();
+    expect(screen.getByText('1 个系统单元失败')).toBeTruthy();
   });
 });
 
