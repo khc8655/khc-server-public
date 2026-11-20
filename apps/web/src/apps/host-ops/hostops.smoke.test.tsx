@@ -86,6 +86,8 @@ let hostOpsConfig: Record<string, unknown> = { peers: {} };
 let hostOpsConfigExists = false;
 let taskState: 'done' | 'error' | 'running' = 'done';
 let removedManagedKey = false;
+/** 模拟发行版自带单元失败（真机 aws-hui-us 上的 fwupd / apt-daily-upgrade 就是这个形态）。 */
+let systemUnitFailed = false;
 let requests: { url: string; init?: RequestInit }[] = [];
 type LogsErrorsMode = 'data' | 'empty' | 'error' | 'loading';
 let logsErrorsMode: LogsErrorsMode = 'data';
@@ -361,8 +363,11 @@ function mockApi() {
                 { unit: 'caddy.service', load: 'loaded', active: 'active', sub: 'running', description: 'Caddy' },
                 { unit: 'ssh.service', load: 'loaded', active: 'active', sub: 'running', description: 'OpenBSD Secure Shell server' },
                 { unit: 'khc-r3-driver.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'KHC R3 driver' },
+                ...(systemUnitFailed
+                  ? [{ unit: 'fwupd.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'Firmware update daemon' }]
+                  : []),
               ],
-              count: 3,
+              count: systemUnitFailed ? 4 : 3,
             },
           });
         }
@@ -394,6 +399,7 @@ function mockApi() {
 beforeEach(() => {
   window.scrollTo = vi.fn();
   removedManagedKey = false;
+  systemUnitFailed = false;
   mockApi();
 });
 
@@ -450,6 +456,20 @@ describe('主机运维页（ui-redesign §4：状态带 + 分段对象表 + 唯�
     const sshRestart = await screen.findByRole('menuitem', { name: '重启' });
     expect((sshRestart as HTMLButtonElement).disabled).toBe(true);
     expect(sshRestart.getAttribute('title')).toBe('该服务受保护，不允许从面板操作');
+  });
+
+  it('系统自带单元失败：行仍列出并给说明，但不冒充面板待处理', async () => {
+    // 真机 aws-hui-us：fwupd / fwupd-refresh / apt-daily-upgrade 常驻 failed。
+    // 面板修不了它们，所以只解释一句、不摆红色告警（口径见 serviceStatus.ts）。
+    systemUnitFailed = true;
+    await renderRoute('/hubs/tyo-1/ops');
+    const row = (await screen.findAllByText('fwupd.service'))
+      .map((element) => element.closest('tr'))
+      .find((element): element is HTMLTableRowElement => element !== null);
+    if (!row) throw new Error('missing fwupd row');
+    expect(
+      await screen.findByText(/另有 1 个系统自带单元处于失败状态/),
+    ).toBeTruthy();
   });
 
   it('失败单元可清除失败状态：L2 确认后调用 svc.reset-failed 并成功提示', async () => {

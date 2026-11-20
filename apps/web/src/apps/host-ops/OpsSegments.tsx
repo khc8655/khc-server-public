@@ -45,13 +45,15 @@ import {
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatBytes, formatPercent } from '../../i18n/format';
 import { businessProcesses, countSystemProcesses } from './processFilter';
+import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
+import { refreshAfterWrite } from './refreshAfterWrite';
+import { isManagedUnit } from '../../data/managedUnits';
+import { serviceRowTone } from './serviceStatus';
 
 /** 一次抓取的进程条数上限（够覆盖业务视图，又不至于让快照过重）。 */
 const PROCESS_FETCH_LIMIT = 200;
 /** 表格实际展示条数。 */
 const PROCESS_DISPLAY_LIMIT = 20;
-import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
-import { refreshAfterWrite } from './refreshAfterWrite';
 
 /* ------------------------------------------------------------------ 服务段 */
 
@@ -126,22 +128,25 @@ export function ServicesSegment({
     await load();
   };
 
+  // 失败单元里有多少是发行版自带的（面板不管启动逻辑，只提示不改色）。
+  const systemFailedCount = (services ?? []).filter(
+    (service) => service.active === 'failed' && !isManagedUnit(service.unit),
+  ).length;
+
   const columns: ColumnDef<HostOpsService>[] = [
     {
       key: 'unit',
       type: 'name',
       header: zh.hostOps.svc.unit,
       value: (service) => service.unit,
-      dot: (service) =>
-        service.active === 'active' ? 'ok' : service.active === 'failed' ? 'danger' : 'neutral',
+      dot: (service) => serviceRowTone(service.unit, service.active),
     },
     {
       key: 'state',
       type: 'status',
       header: zh.fields.status,
       status: (service) => ({
-        tone:
-          service.active === 'active' ? 'ok' : service.active === 'failed' ? 'danger' : 'neutral',
+        tone: serviceRowTone(service.unit, service.active),
         label: `${service.active} (${service.sub})`,
       }),
     },
@@ -163,6 +168,10 @@ export function ServicesSegment({
           <Skeleton height={10} />
           <Skeleton height={10} width="70%" />
         </Stack>
+      ) : null}
+      {/* 系统单元失败单独解释一次：行还在（透明），但不假装是面板该处理的事。 */}
+      {systemFailedCount > 0 ? (
+        <p className="ui-field-help">{fmt(zh.hostOps.svc.systemUnitsHint, { count: String(systemFailedCount) })}</p>
       ) : null}
       <Table
         rows={services}

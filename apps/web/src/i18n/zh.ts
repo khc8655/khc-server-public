@@ -497,6 +497,7 @@ export const zh = {
     diskInodes: 'inode',
     services: '服务',
     failedUnits: '失败单元',
+    systemFailedUnits: '另有 {count} 个系统单元失败',
     listening: '监听端口',
     dns: 'DNS',
     route: '默认路由',
@@ -520,6 +521,8 @@ export const zh = {
     uptimeTile: '运行',
     servicesOk: '正常',
     servicesFailed: '{count} 个失败',
+    // 系统自带单元失败不算「异常」：如实给条数，但不摆出红色告警（2026-11-20）。
+    servicesSystemFailed: '{count} 个系统单元失败',
     rebootRequiredTile: '需重启',
     restartUnavailable: '服务重启能力尚未开放，待 Agent 支持后启用',
     svc: {
@@ -543,6 +546,8 @@ export const zh = {
       logsTitle: '{unit} 日志',
       logsLabel: 'journalctl 尾读 · {unit}',
       noLogs: '（无日志输出）',
+      systemUnitsHint:
+        '另有 {count} 个系统自带单元处于失败状态（如 fwupd、apt-daily）：面板不管理它们的启动逻辑，只作提示，不算待处理。',
     },
     logsErrors: {
       title: '日志错误',
