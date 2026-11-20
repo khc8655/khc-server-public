@@ -73,7 +73,7 @@
 - 应用清单的**通道**（不是某个应用）：D1 表 `app_manifests`、Worker CRUD 与下发注入在 `apps/api/`，执行器在 `agent/khc/app_manifests.py`。注入按 `params.manifestId` 字段做数据驱动，路由不得出现 `app === '<应用名>'` 判断。仓库内 `apps/manifests/<id>/` 存该应用的脚本正文与 `manifest.json`，内联脚本必须与磁盘脚本逐字节一致、sha256 对得上（`scripts/verify-app-manifests.mjs` 强制，改完跑 `--sync`）。
 - 新增 API 或表：先改 `packages/contracts`，再改路由、仓库与测试；迁移只新增 `migrations/000N_*.sql`，不改已应用的迁移；同步更新 `docs/design-v3.md`。
 - 新增页面：归类页面类型并登记 `page-specs.md`；路由与动作登记到 `registry/routes.ts`、`registry/actions.ts`。
-- 编排层例外：`apps/api/src/lib/mode.ts`、`apps/api/src/lib/node-summary.ts` 可以引用应用名，只做纯派生（不连节点、不写库、不读 secrets）；路由里不得出现 `app === '<应用名>'` 判断。
+- 编排层例外：`apps/api/src/lib/mode.ts`、`apps/api/src/lib/node-summary.ts`、`apps/api/src/lib/node-overview.ts` 可以引用应用名，只做纯派生（不连节点、不写库、不读 secrets）；路由里不得出现 `app === '<应用名>'` 判断。
 - `agent/khc/` 不引用具体应用名；`apps/api/src/lib/diagnostics/` 只保留 7 个核心码，应用问题由适配器 `status().problems` 上报。
 
 ## 7. 常用命令

@@ -1,6 +1,6 @@
 # khc-server v3：冻结核心 + 应用适配器 + 无损密钥轮换
 
-> 状态：现行 ｜ 最后核验：2026-11-18 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
+> 状态：现行 ｜ 最后核验：2026-11-20 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
 > 范围：架构与冻结契约（核心/适配器/连接/数据模型）
 > **取代**：`design-v1.md`（现 `docs/archive/2026-11/design-v1.md`）的连接层、插件包、transports 抽象；`design-v2-simple.md`（现 `docs/archive/2026-11/design-v2-simple.md`）的接口清单。v2 的原则（按需连接、无心跳、失败要快）继续有效。
 > **定位**：面板**不是监控面板**，是"替我安装 / 卸载 / 配置常用软件"的遥控器 + 配置仓库。一个月大约打开 10 次。
@@ -90,7 +90,7 @@
 | 路由 | 说明 |
 |---|---|
 | `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`allowInsecure`、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
-| `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），供首页并列表达「实装未纳管」与「D1 有、实装无」；`/state` 超时或结构不合法时该项缺失/空数组，不影响 `reachable` |
+| `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），另附 `projection` 与顶层 `expiringCerts`（`lib/node-overview.ts` 同源派生，含 502/503/504 应用判定）；`/state` 超时或结构不合法时对应运行态缺失，不影响 `reachable` |
 | `GET /nodes/:id/state` | 转发 Agent `/state`（3s） |
 | `GET /nodes/:id/apps` | 已安装应用 + Agent 上可用适配器列表（含版本） |
 | `GET/PUT /nodes/:id/apps/:app` | 读/存应用配置（只写 D1 + revisions，不碰 Hub） |
@@ -102,6 +102,7 @@
 
 | 路由 | 说明 | 文件 |
 |---|---|---|
+| `GET /nodes/:id/overview` | 节点概况聚合（D1 节点/配置/证书 + Agent `/state` + `overview` 投影，派生在 `lib/node-overview.ts`；Agent 离线仍返回 D1 部分） | `nodes.ts` |
 | `GET /nodes/:id/mode` | 节点模式（wg/caddy/unknown，见 `docs/dual-mode.md`） | `mode.ts` |
 | `GET /nodes/:id/audit` | 节点操作审计查询 | `nodes.ts` |
 | `GET /diagnostics/hints`，`GET /nodes/:id/diagnostics` | 诊断（7 核心码，见 `docs/diagnostics.md`） | `diagnostics.ts` |

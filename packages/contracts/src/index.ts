@@ -295,6 +295,73 @@ export const nodeProbeAppSchema = z.object({
 });
 export type NodeProbeApp = z.infer<typeof nodeProbeAppSchema>;
 
+export const nodeAppVerdictSchema = z.enum(['online', 'issue', 'unknown']);
+export type NodeAppVerdict = z.infer<typeof nodeAppVerdictSchema>;
+
+export const nodeAppIssueSchema = z.object({
+  name: z.string().min(1),
+  domain: z.string(),
+  state: z.enum(['down', 'warn']),
+  status: z.number().int().nullable(),
+});
+export type NodeAppIssue = z.infer<typeof nodeAppIssueSchema>;
+
+export const nodeAppsProjectionSchema = z.object({
+  online: z.number().int().nonnegative().nullable(),
+  total: z.number().int().nonnegative(),
+  issues: z.array(nodeAppIssueSchema),
+  staticCount: z.number().int().nonnegative(),
+  redirectCount: z.number().int().nonnegative(),
+});
+export type NodeAppsProjection = z.infer<typeof nodeAppsProjectionSchema>;
+
+export const nodePeersProjectionSchema = z.object({
+  online: z.number().int().nonnegative().nullable(),
+  total: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  offline: z.array(z.string().min(1)),
+  interfaceName: z.string().nullable(),
+  listenPort: z.number().int().positive().nullable(),
+});
+export type NodePeersProjection = z.infer<typeof nodePeersProjectionSchema>;
+
+export const nodeForwardsProjectionSchema = z.object({
+  total: z.number().int().nonnegative(),
+  tcpCount: z.number().int().nonnegative(),
+  udpCount: z.number().int().nonnegative(),
+});
+export type NodeForwardsProjection = z.infer<typeof nodeForwardsProjectionSchema>;
+
+export const expiringCertSummarySchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  daysLeft: z.number().int(),
+  nodeId: z.string().nullable(),
+});
+export type ExpiringCertSummary = z.infer<typeof expiringCertSummarySchema>;
+
+export const nodeCertsProjectionSchema = z.object({
+  count: z.number().int().nonnegative(),
+  soonestDaysLeft: z.number().int().nullable(),
+  expiring: z.array(expiringCertSummarySchema),
+});
+export type NodeCertsProjection = z.infer<typeof nodeCertsProjectionSchema>;
+
+export const nodeAccessCertSchema = z.object({
+  daysLeft: z.number().int().nullable(),
+  tlsState: z.enum(['verified', 'failed', 'none', 'unknown']),
+});
+export type NodeAccessCert = z.infer<typeof nodeAccessCertSchema>;
+
+export const nodeProbeProjectionSchema = z.object({
+  apps: nodeAppsProjectionSchema,
+  peers: nodePeersProjectionSchema,
+  forwards: nodeForwardsProjectionSchema,
+  certs: nodeCertsProjectionSchema,
+  accessCert: nodeAccessCertSchema,
+});
+export type NodeProbeProjection = z.infer<typeof nodeProbeProjectionSchema>;
+
 export const nodeProbeItemSchema = z.object({
   id: z.string().min(1),
   reachable: z.boolean(),
@@ -308,12 +375,16 @@ export const nodeProbeItemSchema = z.object({
    * 「实装未纳管」与「D1 有、实装无」。
    */
   apps: z.array(nodeProbeAppSchema).optional(),
+  /** 首页与 VM 概况同源的投影（应用/Peer/转发/证书与接入证书结论）。 */
+  projection: nodeProbeProjectionSchema.optional(),
 });
 export type NodeProbeItem = z.infer<typeof nodeProbeItemSchema>;
 
 export const nodeProbeResponseSchema = z.object({
   probedAt: z.number().int().nonnegative(),
   nodes: z.array(nodeProbeItemSchema),
+  /** 全库临期/已过期证书（≤14 天），供首页统一待办使用。 */
+  expiringCerts: z.array(expiringCertSummarySchema).optional(),
 });
 export type NodeProbeResponse = z.infer<typeof nodeProbeResponseSchema>;
 
@@ -698,6 +769,74 @@ export const nodeStateResponseSchema = z.object({
   tls: tlsProbeSchema.nullable().optional(),
 });
 export type NodeStateResponse = z.infer<typeof nodeStateResponseSchema>;
+
+export const overviewAppItemSchema = z.object({
+  name: z.string().min(1),
+  domain: z.string(),
+  upstream: z.string(),
+  verdict: nodeAppVerdictSchema,
+  status: z.number().int().nullable(),
+  error: z.string().nullable(),
+});
+export type OverviewAppItem = z.infer<typeof overviewAppItemSchema>;
+
+export const overviewPeerItemSchema = z.object({
+  name: z.string().min(1),
+  online: z.boolean().nullable(),
+  latestHandshake: z.number().int().nonnegative().nullable(),
+});
+export type OverviewPeerItem = z.infer<typeof overviewPeerItemSchema>;
+
+export const overviewForwardItemSchema = z.object({
+  name: z.string().min(1),
+  listenPort: z.number().int().min(1).max(65535),
+  targetHost: z.string(),
+  targetPort: z.number().int().min(0).max(65535),
+  protocol: z.enum(['tcp', 'udp']),
+  active: z.boolean().nullable(),
+});
+export type OverviewForwardItem = z.infer<typeof overviewForwardItemSchema>;
+
+export const overviewHostInfoSchema = z.object({
+  hostname: z.string().nullable(),
+  os: z.string().nullable(),
+  kernel: z.string().nullable(),
+  uptime: z.number().nonnegative().nullable(),
+  agentVersion: z.string().nullable(),
+});
+export type OverviewHostInfo = z.infer<typeof overviewHostInfoSchema>;
+
+export const overviewManagedServiceSchema = z.object({
+  name: z.string().min(1),
+  state: z.string().min(1),
+});
+export type OverviewManagedService = z.infer<typeof overviewManagedServiceSchema>;
+
+export const nodeOverviewDataSchema = z.object({
+  apps: nodeAppsProjectionSchema.extend({ items: z.array(overviewAppItemSchema) }),
+  peers: nodePeersProjectionSchema.extend({ items: z.array(overviewPeerItemSchema) }),
+  forwards: nodeForwardsProjectionSchema.extend({ items: z.array(overviewForwardItemSchema) }),
+  certs: nodeCertsProjectionSchema,
+  accessCert: nodeAccessCertSchema,
+  host: overviewHostInfoSchema.nullable(),
+  managedServices: z.array(overviewManagedServiceSchema),
+  failedUnits: z.array(z.string()).nullable(),
+});
+export type NodeOverviewData = z.infer<typeof nodeOverviewDataSchema>;
+
+/** GET /api/v1/nodes/:id/overview：聚合节点 D1 摘要、/state 与统一投影 */
+export const nodeOverviewResponseSchema = z.object({
+  node: nodeSchema,
+  reachable: z.boolean(),
+  route: preferredRouteSchema.nullable(),
+  via: z.enum(['fetch', 'tcp']).nullable(),
+  error: z.string().nullable(),
+  epochStale: z.boolean().optional(),
+  tls: tlsProbeSchema.nullable().optional(),
+  state: agentStateSchema.nullable(),
+  overview: nodeOverviewDataSchema,
+});
+export type NodeOverviewResponse = z.infer<typeof nodeOverviewResponseSchema>;
 
 /**
  * 轻量快照（10s 轮询用）：只含主机指标与 CPU/内存/磁盘/负载，

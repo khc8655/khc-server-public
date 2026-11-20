@@ -141,7 +141,154 @@ describe('POST /nodes/probe（一次请求批量探测）', () => {
       ctx.env,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { nodes: unknown[] };
+    const body = (await res.json()) as { nodes: unknown[]; expiringCerts?: unknown[] };
     expect(body.nodes).toEqual([]);
+    expect(body.expiringCerts).toEqual([]);
+  });
+
+  it('返回每节点同源 projection（502 异常/Peer/转发/证书）与顶层 expiringCerts（含已过期和未归属证书）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const onlineNode = await createNode(ctx, cookie);
+    const offlineNode = await createNode(ctx, cookie);
+    await ctx.nodes.update(onlineNode.id, { domain: 'on.example.com' });
+
+    const now = Math.floor(Date.now() / 1000);
+    await ctx.apps.put(onlineNode.id, 'caddy-site', {
+      schemaVersion: 1,
+      actor: 'admin',
+      config: {
+        sites: [
+          { name: 'ok-site', kind: 'proxy', domains: ['ok.example.com'], upstreams: ['127.0.0.1:8080'] },
+          { name: 'down-502', kind: 'proxy', domains: ['bad.example.com'], upstreams: ['127.0.0.1:8081'] },
+        ],
+      },
+    });
+    await ctx.apps.put(onlineNode.id, 'wireguard', {
+      schemaVersion: 1,
+      actor: 'admin',
+      config: {
+        enabled: true,
+        interface: { name: 'wg0', listenPort: 51820 },
+        peers: [
+          { name: 'p1', enabled: true },
+          { name: 'p2', enabled: true },
+        ],
+      },
+    });
+    await ctx.apps.put(offlineNode.id, 'caddy-site', {
+      schemaVersion: 1,
+      actor: 'admin',
+      config: {
+        sites: [{ name: 'off-site', kind: 'proxy', domains: ['off.example.com'], upstreams: ['127.0.0.1:9000'] }],
+      },
+    });
+    await ctx.certs.create({
+      name: 'node-cert',
+      domains: ['on.example.com'],
+      issuer: 'acme',
+      notAfter: now + 7 * 86_400,
+      certPem: 'CERT',
+      keyPem: 'KEY',
+      sourceNodeId: onlineNode.id,
+    });
+    await ctx.certs.create({
+      name: 'unattached-expired',
+      domains: ['orphan.example.com'],
+      issuer: 'manual',
+      notAfter: now - 2 * 86_400,
+      certPem: 'CERT',
+      keyPem: 'KEY',
+      sourceNodeId: null,
+    });
+    await ctx.certs.create({
+      name: 'healthy-cert',
+      domains: ['far.example.com'],
+      issuer: 'acme',
+      notAfter: now + 60 * 86_400,
+      certPem: 'CERT',
+      keyPem: 'KEY',
+      sourceNodeId: null,
+    });
+
+    ctx.agent.handler = async (_method, _path, _body, node) => {
+      if (node?.id === offlineNode.id) {
+        throw new HubUnreachableError('Hub 不可达', { direct: 'ECONNREFUSED' });
+      }
+      return {
+        status: 200,
+        body: {
+          host: { hostname: 'on' },
+          adapters: [
+            {
+              name: 'caddy-site',
+              version: '1.2.0',
+              status: {
+                siteHealth: [
+                  { name: 'ok-site', domain: 'ok.example.com', state: 'ok', status: 200, upstreams: ['127.0.0.1:8080'] },
+                  { name: 'down-502', domain: 'bad.example.com', state: 'warn', status: 502, upstreams: ['127.0.0.1:8081'] },
+                ],
+              },
+            },
+            {
+              name: 'wireguard',
+              version: '1.0.0',
+              status: {
+                peers: [
+                  { name: 'p1', online: true },
+                  { name: 'p2', online: false },
+                ],
+              },
+            },
+          ],
+          ports: [],
+        },
+      };
+    };
+
+    const res = await ctx.app.request('/api/v1/nodes/probe', { method: 'POST', headers }, ctx.env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      nodes: Array<{
+        id: string;
+        reachable: boolean;
+        projection?: {
+          apps: { online: number | null; total: number; issues: Array<{ name: string; status: number | null }> };
+          peers: { online: number | null; total: number; offline: string[] };
+          certs: { count: number; soonestDaysLeft: number | null };
+          accessCert: { daysLeft: number | null; tlsState: string };
+        };
+      }>;
+      expiringCerts?: Array<{ name: string; daysLeft: number; nodeId: string | null }>;
+    };
+
+    const on = body.nodes.find((n) => n.id === onlineNode.id);
+    const off = body.nodes.find((n) => n.id === offlineNode.id);
+    expect(on?.projection?.apps).toEqual({
+      online: 1,
+      total: 2,
+      issues: [{ name: 'down-502', domain: 'bad.example.com', state: 'warn', status: 502 }],
+      staticCount: 0,
+      redirectCount: 0,
+    });
+    expect(on?.projection?.peers).toMatchObject({ online: 1, total: 2, offline: ['p2'] });
+    expect(on?.projection?.certs).toMatchObject({ count: 1, soonestDaysLeft: 7 });
+    expect(on?.projection?.accessCert).toEqual({ daysLeft: 7, tlsState: 'verified' });
+
+    // 离线节点也保留 D1 配置投影，online 为 null
+    expect(off?.reachable).toBe(false);
+    expect(off?.projection?.apps).toEqual({
+      online: null,
+      total: 1,
+      issues: [],
+      staticCount: 0,
+      redirectCount: 0,
+    });
+
+    // 顶层临期/已过期证书包含无归属证书且不含 >14 天的证书
+    expect(body.expiringCerts?.map((c) => c.name)).toEqual(['unattached-expired', 'node-cert']);
+    expect(body.expiringCerts?.[0]).toMatchObject({ name: 'unattached-expired', nodeId: null });
+    expect(body.expiringCerts?.[0]?.daysLeft).toBeLessThan(0);
   });
 });
