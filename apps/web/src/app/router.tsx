@@ -18,7 +18,6 @@ import HubOpsPage from '../pages/HubOpsPage';
 import AppPage from '../pages/AppPage';
 import WireGuardPage from '../apps/wireguard/page';
 import SitesPage from '../apps/caddy/page';
-import HubServicesPage from '../apps/services/page';
 import SettingsPage from '../pages/SettingsPage';
 import HubSettingsPage from '../apps/node-settings/page';
 import { NotFoundPage } from '../pages/GlobalPages';
@@ -82,13 +81,12 @@ const hubOverviewRoute = createRoute({
   beforeLoad: requireSession,
 });
 
-// 暗路由过渡（ui-redesign ⑤）：应用列表已并入站点页「扩展应用」分段。
-// 采用 302 重定向而非直接删除，避免书签/外链 404；确认无引用后可在后续版本移除。
+// 暗路由过渡：组件列表已迁入设置页「组件」分段（302 重定向避免书签 404）。
 const hubAppsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/hubs/$hubId/apps',
   beforeLoad: ({ params }) => {
-    throw redirect({ to: '/hubs/$hubId/sites', params });
+    throw redirect({ to: '/hubs/$hubId/settings', params, search: { tab: 'components' } });
   },
 });
 
@@ -150,8 +148,9 @@ const hubSitesRoute = createRoute({
 const hubServicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/hubs/$hubId/services',
-  component: HubServicesPage,
-  beforeLoad: requireSession,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: '/hubs/$hubId/sites', params });
+  },
 });
 
 const hubForwardsRoute = createRoute({
@@ -162,13 +161,12 @@ const hubForwardsRoute = createRoute({
   },
 });
 
-// 暗路由过渡（ui-redesign ⑤）：节点证书页已并入站点页「证书」只读分段。
-// 采用 302 重定向而非直接删除，避免书签/外链 404；确认无引用后可在后续版本移除。
+// 暗路由过渡（ui-redesign ⑤）：节点证书页已并入应用页「证书」只读分段。
 const hubCertsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/hubs/$hubId/certs',
   beforeLoad: ({ params }) => {
-    throw redirect({ to: '/hubs/$hubId/sites', params });
+    throw redirect({ to: '/hubs/$hubId/sites', params, search: { tab: 'certs' } });
   },
 });
 

@@ -112,6 +112,47 @@ function mockApi() {
           },
         });
       }
+      if (url === '/api/v1/nodes/tyo-1/overview') {
+        return json({
+          node: {
+            ...node,
+            summary: {
+              mode: mode === 'wg' ? 'wg' : 'caddy',
+              peers: mode === 'wg' ? 1 : null,
+              sites: null,
+              forwards: null,
+            },
+          },
+          reachable: true,
+          route: 'direct',
+          via: 'tcp',
+          error: null,
+          tls: { state: 'none', endpoint: 'http://203.0.113.10:8880', detail: null, checkedAt: NOW },
+          state: {
+            host: { hostname: 'hub-tyo' },
+            adapters: [{ name: 'wireguard', version: '1.0.0', status: { running: wireguardRunning } }],
+            ports: [],
+          },
+          overview: {
+            apps: { online: null, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+            peers: {
+              enabled: mode === 'wg',
+              online: mode === 'wg' ? 1 : null,
+              total: mode === 'wg' ? 1 : 0,
+              offline: [],
+              interfaceName: 'wg0',
+              listenPort: 51820,
+              items: mode === 'wg' ? [{ name: 'phone', online: true, latestHandshake: NOW }] : [],
+            },
+            forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+            certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+            accessCert: { daysLeft: null, tlsState: 'none' },
+            host: { hostname: 'hub-tyo', os: null, kernel: null, uptime: null, agentVersion: null },
+            managedServices: [],
+            failedUnits: [],
+          },
+        });
+      }
       if (url === '/api/v1/nodes/tyo-1/mode') return json(modeBody());
       if (url === '/api/v1/nodes/tyo-1/state') {
         return json({
@@ -300,12 +341,12 @@ describe('节点模式 UI', () => {
     expect(screen.queryByRole('button', { name: '应用配置' })).toBeNull();
   });
 
-  it('caddy 模式下端口转发卡提示并提供设置链接', async () => {
+  it('caddy 模式下端口转发卡保持可用且不再被模式锁死', async () => {
     mode = 'caddy';
     wireguardRunning = false;
     await renderRoute('/hubs/tyo-1/wireguard');
-    expect(await screen.findByText('端口转发依赖 WireGuard，当前不可用')).toBeTruthy();
-    expect(await screen.findByRole('link', { name: '去节点设置' })).toBeTruthy();
+    expect(await screen.findByText('端口转发')).toBeTruthy();
+    expect(screen.queryByText('端口转发依赖 WireGuard，当前不可用')).toBeNull();
   });
 
   it('390 宽度下模式卡与抽屉仍可操作', async () => {
@@ -321,11 +362,13 @@ describe('节点模式 UI', () => {
     }
   });
 
-  it('概况页头模式徽章来自 D1 摘要，不再请求 /mode', async () => {
+  it('概况页走 /overview 单请求聚合，不再请求 /mode 与 /state', async () => {
     mode = 'caddy';
     wireguardRunning = false;
     await renderRoute('/hubs/tyo-1');
-    expect((await screen.findAllByText('Caddy 网关')).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('heading', { name: 'tyo-1' })).toBeTruthy();
+    expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/overview')).toBe(true);
     expect(requests.some((item) => item.url.endsWith('/mode'))).toBe(false);
+    expect(requests.some((item) => item.url.endsWith('/state'))).toBe(false);
   });
 });

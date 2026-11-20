@@ -224,9 +224,9 @@ describe('C3 页面', () => {
     expect(screen.getAllByText('凭据值').length).toBeGreaterThan(0);
   });
 
-  it('站点页展示站点、证书引用与运行状态', async () => {
+  it('应用页展示站点、证书引用与运行状态', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    expect(await screen.findByRole('heading', { name: '站点' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
     expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
     // 健康状态并入名称左侧圆点；表格保留同步状态列。
     expect((await screen.findAllByText('已同步')).length).toBeGreaterThan(0);
@@ -270,7 +270,7 @@ describe('C3 页面', () => {
 
   it('Caddy 服务抽屉展示状态并导出配置', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findByRole('heading', { name: '站点' });
+    await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Caddy 服务' }));
     expect(await screen.findByText('服务状态')).toBeTruthy();
@@ -291,7 +291,7 @@ describe('C3 页面', () => {
   it('Caddy 服务未运行时提供「启动 Caddy」而不是只能重载', async () => {
     serviceActive = false;
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findByRole('heading', { name: '站点' });
+    await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Caddy 服务' }));
     expect(await screen.findByText('服务状态')).toBeTruthy();
@@ -313,7 +313,7 @@ describe('C3 页面', () => {
 
   it('站点抽屉按类型显示字段并可清空站点', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findByRole('heading', { name: '站点' });
+    await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     const drawer = await screen.findByRole('dialog');
@@ -333,7 +333,7 @@ describe('C3 页面', () => {
 
   it('站点抽屉可打开并显示证书引用字段', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findByRole('heading', { name: '站点' });
+    await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     expect((await screen.findAllByText('站点名称')).length).toBeGreaterThan(0);

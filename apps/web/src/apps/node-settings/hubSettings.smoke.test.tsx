@@ -116,15 +116,40 @@ function mockApi() {
           data: { cleaned: ['wg-conf', 'caddy-khcd'], remaining: cleanupRemaining },
         });
       }
+      if (url === '/api/v1/nodes/tyo-1/state') {
+        return json({
+          reachable: true,
+          route: 'direct',
+          via: 'fetch',
+          error: null,
+          state: {
+            host: { hostname: 'tyo-1' },
+            adapters: [
+              { name: 'caddy-site', version: '1.0.0', status: { installed: true, running: true } },
+              { name: 'wireguard', version: '1.0.0', status: { installed: false, running: false } },
+              {
+                name: 'port-forward',
+                version: '1.0.0',
+                status: { installed: true, socatAvailable: true, running: false },
+              },
+            ],
+            ports: [],
+          },
+        });
+      }
       if (url === '/api/v1/nodes/tyo-1/apps') {
         return json({
           apps: [
             { app: 'wireguard', schemaVersion: 1, config: {}, rev: 1, appliedRev: 1, updatedAt: NOW },
             { app: 'caddy-site', schemaVersion: 1, config: {}, rev: 1, appliedRev: 1, updatedAt: NOW },
           ],
-          adapters: hostOpsAdapterInstalled
-            ? [{ name: 'host-ops', version: '1.0.0', api: 1 }]
-            : [],
+          adapters: [
+            ...(hostOpsAdapterInstalled ? [{ name: 'host-ops', version: '1.0.0', api: 1 }] : []),
+            { name: 'caddy-site', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
+            { name: 'wireguard', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
+            { name: 'port-forward', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
+            { name: 'node-exporter', version: '1.8.2', api: 1 },
+          ],
           adaptersError: null,
         });
       }
@@ -180,14 +205,25 @@ async function openImportDrawer() {
   expect(await screen.findByRole('dialog')).toBeTruthy();
 }
 
-describe('节点设置四分区（ui-redesign T4）', () => {
+describe('设置四分区（ui-redesign T4 + U3）', () => {
   it('默认 Agent 与接入分区；证书摘要卡已移除', async () => {
     await renderRoute('/hubs/tyo-1/settings');
-    expect(await screen.findByRole('heading', { name: '节点设置' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: '安装 Agent' })).toBeTruthy();
     // 观测入口由节点域名自动推导，设置页不再要求手填 liveEndpoint。
     expect(screen.queryByText('实时观测')).toBeNull();
     expect(screen.queryByText('SSL 证书与 HTTPS 配置')).toBeNull();
+  });
+
+  it('组件分段与 ?tab=components：展示内置组件与扩展组件，未安装组件支持安装入口', async () => {
+    await renderRoute('/hubs/tyo-1/settings?tab=components');
+    expect(await screen.findByText('内置组件')).toBeTruthy();
+    expect(screen.getByText('Caddy')).toBeTruthy();
+    expect(screen.getByText('WireGuard')).toBeTruthy();
+    expect(screen.getByText('端口转发（socat）')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '安装' })).toBeTruthy();
+    expect(screen.getByText('扩展组件')).toBeTruthy();
+    expect((await screen.findAllByText('node-exporter')).length).toBeGreaterThan(0);
   });
 
   it('接入方式抽屉：存量 IP 节点默认 IP 直连，域名模式选记录后同步 domain', async () => {

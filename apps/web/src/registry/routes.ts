@@ -23,35 +23,31 @@ export const routes = [
   { path: '/', scope: 'global', template: 'T1', title: 'overview' },
   { path: '/hubs', scope: 'global', template: 'T2', title: 'hubs', primary: 'hub.create' },
   { path: '/hubs/:hubId', scope: 'hub', template: 'T1', title: 'hubOverview' },
-  { path: '/hubs/:hubId/services', scope: 'hub', template: 'T2', title: 'services' },
+  { path: '/hubs/:hubId/sites', scope: 'hub', template: 'T2', title: 'sites', primary: 'site.create' },
   { path: '/hubs/:hubId/wireguard', scope: 'hub', template: 'T2', title: 'wireguard', primary: 'peer.create' },
   { path: '/hubs/:hubId/ops', scope: 'hub', template: 'T2', title: 'ops' },
-  { path: '/hubs/:hubId/sites', scope: 'hub', template: 'T2', title: 'sites' },
   { path: '/hubs/:hubId/apps/:app', scope: 'hub', template: 'T3', title: 'apps' },
   { path: '/hubs/:hubId/settings', scope: 'hub', template: 'T4', title: 'hubSettings' },
   { path: '/settings', scope: 'global', template: 'T4', title: 'settings' },
 ] as const;
 
 export type HubSection =
-  | 'services'
+  | 'sites'
   | 'wireguard'
   | 'ops'
-  | 'sites'
   | 'settings';
 
 export const hubSections: readonly HubSection[] = [
-  'services',
+  'sites',
   'wireguard',
   'ops',
-  'sites',
   'settings',
 ];
 
 export const sectionTitleKey: Record<HubSection, keyof typeof zh.nav> = {
-  services: 'services',
+  sites: 'sites',
   wireguard: 'wireguard',
   ops: 'ops',
-  sites: 'sites',
   settings: 'hubSettings',
 };
 
@@ -93,14 +89,17 @@ export function matchHubPath(pathname: string): HubPathMatch | null {
   if (parts.length === 2) return { hubId, section: null, app: null };
   if (parts[2] === 'apps') {
     const rawApp = parts[3];
-    // /hubs/:hubId/apps 已并入站点页「扩展应用」分段（ui-redesign ⑤），
-    // 过渡期让站点导航保持高亮，直到 302 重定向完成。
-    if (!rawApp) return { hubId, section: 'sites', app: null };
+    // /hubs/:hubId/apps 已并入设置页「组件」分段（302 过渡）
+    if (!rawApp) return { hubId, section: 'settings', app: null };
     try {
       return { hubId, section: null, app: decodeURIComponent(rawApp) };
     } catch {
       return null;
     }
+  }
+  // 旧「对外服务」/services 与 /certs 暗路由 302 过渡期间保持「应用」高亮
+  if (parts[2] === 'services' || parts[2] === 'certs') {
+    return { hubId, section: 'sites', app: null };
   }
   const section = parts[2];
   if (section && (hubSections as readonly string[]).includes(section)) {
@@ -116,10 +115,9 @@ export const globalNav = [
   { key: 'settings', path: '/settings', icon: 'settings' },
 ] as const;
 
-/** 节点层一级导航（压平，无二级）：概况 / 对外服务 / 站点 / 内网穿透 / 主机运维 / 节点设置。 */
+/** 节点层一级导航（5 项）：概况 / 应用 / 网络（按需显示）/ 主机 / 设置。 */
 export const hubNav = [
   { key: 'hubOverview', section: null, icon: 'home' },
-  { key: 'services', section: 'services', icon: 'activity' },
   { key: 'sites', section: 'sites', icon: 'globe' },
   { key: 'wireguard', section: 'wireguard', icon: 'users' },
   { key: 'ops', section: 'ops', icon: 'terminal' },

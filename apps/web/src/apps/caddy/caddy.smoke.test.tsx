@@ -47,6 +47,7 @@ const certificate = {
 };
 
 let caddySites: Record<string, unknown>[] = [];
+let listeningItems: { proto: string; address: string; port: number; process?: string }[] = [];
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function appConfig() {
@@ -61,12 +62,21 @@ function appConfig() {
 }
 
 function mockApi(
-  options: { caddyInstalled?: boolean; pkgInstall?: boolean; taskId?: string } = {},
+  options: {
+    caddyInstalled?: boolean;
+    pkgInstall?: boolean;
+    taskId?: string;
+    sites?: Record<string, unknown>[];
+    withCerts?: boolean;
+    listening?: { proto: string; address: string; port: number; process?: string }[];
+  } = {},
 ) {
   const caddyInstalled = options.caddyInstalled ?? true;
   const pkgInstall = options.pkgInstall ?? false;
   const taskId = options.taskId ?? 'task-install';
-  caddySites = [
+  const withCerts = options.withCerts ?? true;
+  listeningItems = options.listening ?? [];
+  caddySites = options.sites ?? [
     {
       name: 'blog',
       domains: ['blog.example.dev'],
@@ -85,7 +95,7 @@ function mockApi(
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
       if (url === '/api/v1/nodes') return json({ nodes: [node] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node });
-      if (url === '/api/v1/certs') return json({ certificates: [certificate] });
+      if (url === '/api/v1/certs') return json({ certificates: withCerts ? [certificate] : [] });
       if (url === '/api/v1/settings') return json({ settings: [] });
       if (url === '/api/v1/nodes/tyo-1/apps') {
         return json({
@@ -125,6 +135,11 @@ function mockApi(
           error: null,
           state: {
             host: { hostname: 'tyo-1' },
+            ops: {
+              network: {
+                listening: { count: listeningItems.length, items: listeningItems },
+              },
+            },
             adapters: [
               {
                 name: 'caddy-site',
@@ -290,18 +305,78 @@ describe('P1 Caddy 未安装一键安装（能力驱动）', () => {
   });
 });
 
-describe('站点页分段（ui-redesign ⑤）', () => {
-  it('证书分段展示本节点关联证书与管理链接', async () => {
+describe('应用页分段与本机监听端口（U3）', () => {
+  it('默认仅列反代应用，静态/跳转为空时不显示该分段；只有唯一分段时隐藏 Segmented', async () => {
+    mockApi({ withCerts: false });
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
+    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('group', { name: '应用' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '静态与跳转' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '证书' })).toBeNull();
+    expect(screen.queryByText('本机监听端口')).toBeNull();
+  });
+
+  it('有静态或跳转站点时出现「静态与跳转」分段', async () => {
+    mockApi({
+      sites: [
+        {
+          name: 'blog',
+          domains: ['blog.example.dev'],
+          listenPort: 443,
+          kind: 'proxy',
+          upstreams: ['10.99.0.2:8080'],
+          enabled: true,
+        },
+        {
+          name: 'landing',
+          domains: ['landing.example.dev'],
+          listenPort: 443,
+          kind: 'static',
+          root: '/srv/landing',
+          enabled: true,
+        },
+      ],
+    });
+    await renderRoute('/hubs/tyo-1/sites');
+    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('landing.example.dev')).toBeNull();
+    await userEvent.click(await screen.findByRole('button', { name: '静态与跳转' }));
+    expect((await screen.findAllByText('landing.example.dev')).length).toBeGreaterThan(0);
+  });
+
+  it('证书分段展示本节点关联证书、管理链接与 R6 统计说明', async () => {
     await renderRoute('/hubs/tyo-1/sites');
     await userEvent.click(await screen.findByRole('button', { name: '证书' }));
     expect((await screen.findAllByText('blog-cert')).length).toBeGreaterThan(0);
     expect(screen.getByText('管理全局证书库')).toBeTruthy();
+    expect(screen.getByText('仅统计证书库中的证书，Caddy 自动签发的不计。')).toBeTruthy();
   });
 
-  it('扩展应用分段过滤内置模块并展示空态', async () => {
+  it('反代列表为空时保留 P-5「添加第一个应用」引导', async () => {
+    mockApi({ sites: [], withCerts: false });
     await renderRoute('/hubs/tyo-1/sites');
-    await userEvent.click(await screen.findByRole('button', { name: '扩展应用' }));
     expect(await screen.findByText('还没有应用')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '添加第一个应用' })).toBeTruthy();
+  });
+
+  it('有未发布本机监听端口时渲染卡片，点击预填站点抽屉（IPv4/IPv6）', async () => {
+    mockApi({
+      withCerts: false,
+      listening: [
+        { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
+        { proto: 'tcp6', address: '::1', port: 9500, process: 'node' },
+        { proto: 'tcp', address: '127.0.0.1', port: 22 },
+      ],
+    });
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByText('本机监听端口')).toBeTruthy();
+    expect((await screen.findAllByText('9000 · python3')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('22')).toBeNull();
+    const rows = await screen.findAllByText('9500 · node');
+    await userEvent.click(rows[0]!);
+    expect(await screen.findByRole('heading', { name: '添加站点' })).toBeTruthy();
+    expect((document.getElementById('site-upstreams') as HTMLInputElement).value).toBe('[::1]:9500');
   });
 
   it('站点表后端列：宽屏独立列，窄屏并入名称列第二段（390 不丢项）', async () => {
@@ -319,15 +394,16 @@ describe('站点页分段（ui-redesign ⑤）', () => {
     expect(document.querySelector('.ui-cell-narrow')?.textContent).toContain('内网（未登记）');
   });
 
-  it('旧 /apps 暗路由 302 到站点页', async () => {
+  it('旧 /apps 暗路由 302 到设置页组件分段', async () => {
     const router = await renderRoute('/hubs/tyo-1/apps');
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
-    expect(router.state.location.pathname).toBe('/hubs/tyo-1/sites');
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/hubs/tyo-1/settings');
+    expect(await screen.findByText('内置组件')).toBeTruthy();
   });
 
-  it('旧 /certs 暗路由 302 到站点页', async () => {
+  it('旧 /certs 暗路由 302 到应用页证书分段', async () => {
     const router = await renderRoute('/hubs/tyo-1/certs');
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('blog-cert')).length).toBeGreaterThan(0);
     expect(router.state.location.pathname).toBe('/hubs/tyo-1/sites');
   });
 });

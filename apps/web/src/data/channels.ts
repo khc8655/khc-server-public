@@ -113,6 +113,7 @@ export function useHubChannels(
     live.snapshot !== null;
   const lastFrameTs = live.snapshot?.ts ?? null;
   useEffect(() => {
+    if (options.enabled === false) return;
     // 成功、或还没失败过：清零计数，下一次断链重新给 3 次机会。
     if (controlReachable === true || (!failed && controlReachable == null)) {
       attempts.current = 0;
@@ -144,6 +145,7 @@ export function useHubChannels(
     failed,
     hasLiveFrame,
     lastFrameTs,
+    options.enabled,
     stateQuery.isFetching,
     stateQuery.refetch,
   ]);

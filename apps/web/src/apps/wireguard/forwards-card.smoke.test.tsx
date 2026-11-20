@@ -156,6 +156,7 @@ const wireguardApp = {
   updatedAt: NOW,
 };
 
+let nodeMode: 'wg' | 'caddy' = 'wg';
 let emptyMode = false;
 let applyFails = false;
 /** 端口转发组件实装状态：有转发配置时为真。 */
@@ -166,6 +167,7 @@ let currentApp = app();
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function mockApi() {
+  nodeMode = 'wg';
   emptyMode = false;
   applyFails = false;
   pfInstalled = true;
@@ -183,8 +185,8 @@ function mockApi() {
       if (url === '/api/v1/nodes/tyo-1/mode') {
         return json({
           nodeId: 'tyo-1',
-          mode: 'wg',
-          target: 'caddy',
+          mode: nodeMode,
+          target: nodeMode === 'wg' ? 'caddy' : 'wg',
           reachable: true,
           blockers: [],
           warnings: [],
@@ -257,10 +259,10 @@ async function renderWireGuard() {
   );
 }
 
-describe('内网穿透页 · 端口转发卡', () => {
+describe('网络页 · 端口转发卡', () => {
   it('卡内展示转发列表与四种状态', async () => {
     await renderWireGuard();
-    expect(await screen.findByRole('heading', { name: '内网穿透' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '网络' })).toBeTruthy();
     expect(await screen.findByText('端口转发')).toBeTruthy();
     expect((await screen.findAllByText('ssh')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('10.99.0.2:22')).length).toBeGreaterThan(0);
@@ -386,5 +388,14 @@ describe('内网穿透页 · 端口转发卡', () => {
     expect((await screen.findAllByText('应用错误详情')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('监听端口冲突')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/"listenPort": 7001/)).length).toBeGreaterThan(0);
+  });
+
+  it('caddy 模式下端口转发卡保持可用，不被 WireGuard 模式锁死', async () => {
+    nodeMode = 'caddy';
+    await renderWireGuard();
+    expect(await screen.findByText('端口转发')).toBeTruthy();
+    expect(screen.queryByText('端口转发依赖 WireGuard，当前不可用')).toBeNull();
+    const addBtn = (await screen.findAllByRole('button', { name: '添加转发' }))[0] as HTMLButtonElement;
+    expect(addBtn.disabled).toBe(false);
   });
 });

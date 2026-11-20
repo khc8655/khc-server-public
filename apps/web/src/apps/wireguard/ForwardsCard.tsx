@@ -30,7 +30,6 @@ import {
   Card,
   CodeBlock,
   InlineError,
-  Link,
   Stack,
   Table,
   Skeleton,
@@ -40,8 +39,6 @@ import {
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
-import { paths } from '../../registry/routes';
-import { nodeModeQueryOptions } from '../../data/mode';
 import { installTaskText } from '../installTaskText';
 import {
   ForwardDrawer,
@@ -89,8 +86,6 @@ export function ForwardsCard({
     ...forwardConfigQueryOptions(hubId),
     enabled: appsQuery.isError ? true : Boolean(forwardConfigured),
   });
-  const modeQuery = useQuery(nodeModeQueryOptions(hubId));
-  const caddyMode = modeQuery.data?.mode === 'caddy';
   const { channels, stateQuery } = useHubChannelsContext();
   const liveState = stateQuery.data?.state as
     | { adapters?: { name: string; status?: Record<string, unknown> }[] }
@@ -173,7 +168,6 @@ export function ForwardsCard({
   };
 
   const openCreate = () => {
-    if (caddyMode) return;
     onOpen();
     setForm(createForwardForm());
     setErrors({});
@@ -181,7 +175,6 @@ export function ForwardsCard({
   };
 
   const openEdit = (forward: ForwardRule) => {
-    if (caddyMode) return;
     onOpen();
     setForm(editForwardForm(forward));
     setErrors({});
@@ -342,7 +335,6 @@ export function ForwardsCard({
   ];
 
   const rowActionDisabled = (ref: ActionRef): string | undefined => {
-    if (caddyMode) return zh.mode.forwardDisabledDesc;
     if (!nodeOffline) return undefined;
     if (ref.id === 'forward.toggle' || ref.id === 'forward.delete') {
       return writeDisabledReason;
@@ -372,26 +364,13 @@ export function ForwardsCard({
           label={actionLabel(action('forward.create'))}
           size="sm"
           icon="plus"
-          disabled={caddyMode || !channels.canApply}
-          disabledReason={caddyMode ? zh.mode.forwardDisabledDesc : zh.channels.controlUnavailableDesc}
+          disabled={!channels.canApply}
+          disabledReason={zh.channels.controlUnavailableDesc}
           onClick={openCreate}
         />
       }
     >
       <Stack gap={3}>
-        {caddyMode ? (
-          <Banner
-            tone="neutral"
-            title={zh.mode.forwardDisabledTitle}
-            description={zh.mode.forwardDisabledDesc}
-            action={
-              <Link
-                to={paths.hubSection(hubId, 'settings')}
-                label={zh.mode.goSettings}
-              />
-            }
-          />
-        ) : null}
         {configQuery.error ? (
           <Banner
             tone="danger"
@@ -424,7 +403,7 @@ export function ForwardsCard({
         {status?.error ? (
           <Banner tone="danger" title={zh.forwards.statusError} description={status.error} />
         ) : null}
-        {status?.socatAvailable === false && !caddyMode ? (
+        {status?.socatAvailable === false ? (
           <Banner
             tone="neutral"
             title={zh.forwards.socatMissing}
@@ -499,7 +478,7 @@ export function ForwardsCard({
             rowActions={rowActions}
             rowActionDisabled={rowActionDisabled}
             onRowAction={handleRowAction}
-            onRowOpen={caddyMode ? undefined : (row) => openEdit(row.forward)}
+            onRowOpen={(row) => openEdit(row.forward)}
           />
         )}
       </Stack>

@@ -57,7 +57,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const match = matchHubPath(pathname);
   const hubId = match?.hubId ?? '';
-  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: Boolean(hubId) });
+  const isOverviewRoute = Boolean(match && !match.section && !match.app);
+  const hubQuery = useQuery({
+    ...hubQueryOptions(hubId),
+    enabled: Boolean(hubId) && !isOverviewRoute,
+  });
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -122,11 +126,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
     },
   ];
 
-  // 节点层一级导航（压平，无二级胶囊）。未配置/未安装的按需模块不出现入口：
-  // WireGuard（内网穿透）只在 D1 summary 有 Peer 计数或模式为 wg 时显示；
-  // 判定只用 D1 summary（离线可见），summary 未到达时先显示，避免入口闪烁。
-  const hubSummary = hubQuery.data?.summary;
-  const showWireGuard = !hubSummary || hubSummary.peers !== null || hubSummary.mode === 'wg';
+  // 节点层一级导航（5 项）：按需展示「网络」（WireGuard 或端口转发配置存在时显示）。
+  // 判定只用 D1 summary，summary 未到达时暂不隐藏避免导航闪烁。
+  const hubSummary =
+    hubQuery.data?.summary ?? hubs.find((hub) => hub.id === hubId)?.summary;
+  const showNetwork =
+    match?.section === 'wireguard' ||
+    !hubSummary ||
+    hubSummary.mode === 'wg' ||
+    (hubSummary.peers ?? 0) > 0 ||
+    (hubSummary.forwards ?? 0) > 0;
   const hubPrimaryTabs: SidebarNavItem[] = useMemo(() => {
     if (!hubId) return [];
     const section = match?.section ?? null;
@@ -139,20 +148,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
         active: Boolean(match) && !section && !match?.app,
       },
       {
-        key: 'services',
-        label: zh.nav.services,
-        href: paths.hubSection(hubId, 'services'),
-        icon: 'activity',
-        active: section === 'services',
-      },
-      {
         key: 'sites',
         label: zh.nav.sites,
         href: paths.hubSection(hubId, 'sites'),
         icon: 'globe',
-        active: section === 'sites' || Boolean(match?.app),
+        active: section === 'sites',
       },
-      ...(showWireGuard
+      ...(showNetwork
         ? [
             {
               key: 'wireguard',
@@ -175,14 +177,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
         label: zh.nav.hubSettings,
         href: paths.hubSection(hubId, 'settings'),
         icon: 'settings',
-        active: section === 'settings',
+        active: section === 'settings' || Boolean(match?.app),
       },
     ];
-  }, [hubId, match, showWireGuard]);
+  }, [hubId, match, showNetwork]);
 
   const crumbs: Crumb[] = useMemo(() => {
     if (match) {
-      const nodeName = hubQuery.data?.name ?? match.hubId;
+      const nodeName =
+        hubQuery.data?.name ??
+        hubs.find((hub) => hub.id === match.hubId)?.name ??
+        match.hubId;
       const base: Crumb[] = [
         { label: zh.nav.console, href: paths.overview },
         { label: nodeName, href: paths.hub(match.hubId) },
@@ -199,7 +204,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (pathname === paths.hubs) return [{ label: zh.nav.console, href: paths.overview }, { label: zh.nav.hubs }];
     if (pathname === paths.settings) return [{ label: zh.nav.console, href: paths.overview }, { label: zh.nav.settings }];
     return [{ label: zh.nav.console }];
-  }, [hubQuery.data?.name, match, pathname]);
+  }, [hubQuery.data?.name, hubs, match, pathname]);
 
   const paletteGroups = useMemo(
     () => [
@@ -304,7 +309,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         />
         <div className="ui-main">
           {match ? (
-            <HubChannelsProvider hubId={hubId}>
+            <HubChannelsProvider hubId={hubId} useOverview={isOverviewRoute}>
               {topbar(<TaskCenter />)}
               <HubBarWithConnection
                 activeHub={activeHub}

@@ -302,6 +302,7 @@ export default function WireGuardPage() {
 
   const configState = configQuery.data;
   const config = configState?.config ?? EMPTY_CONFIG;
+  const hidePeers = caddyMode && config.peers.length === 0;
   // 适配器运行态来自打开页面时的 /state 一次性探测（不随 10s 快照轮询）。
   const liveState = stateQuery.data?.state as AgentState | undefined;
   const runtime = liveState
@@ -1200,7 +1201,7 @@ export default function WireGuardPage() {
   }
 
   const banners: PageBanner[] = [];
-  if (caddyMode) {
+  if (caddyMode && !hidePeers) {
     banners.push({
       key: 'caddy-mode',
       tone: 'neutral',
@@ -1230,141 +1231,143 @@ export default function WireGuardPage() {
       priority: 1,
     });
   }
-  for (const rotation of rotations) {
-    if (rotation.state === 'finalized') continue; // 等待下一次 apply 自动清理，无需提示
-    if (rotation.state === 'expired') {
-      // 超时已自动取消（R2）：Agent 侧新 peer 已删，D1 仍是新公钥，需要一键恢复旧钥。
+  if (!hidePeers) {
+    for (const rotation of rotations) {
+      if (rotation.state === 'finalized') continue; // 等待下一次 apply 自动清理，无需提示
+      if (rotation.state === 'expired') {
+        // 超时已自动取消（R2）：Agent 侧新 peer 已删，D1 仍是新公钥，需要一键恢复旧钥。
+        banners.push({
+          key: `rotation-expired:${rotation.peer}`,
+          tone: 'warn',
+          title: zh.wireguard.rotationExpiredTitle,
+          description: `${rotation.peer}：${zh.wireguard.rotationExpiredDesc}`,
+          action: (
+            <Button
+              label={zh.wireguard.rotationRestoreKey}
+              size="sm"
+              disabled={unreachable}
+              disabledReason={writeDisabledReason}
+              onClick={() => void cancelRotation(rotation.peer)}
+            />
+          ),
+          priority: 2,
+        });
+        continue;
+      }
       banners.push({
-        key: `rotation-expired:${rotation.peer}`,
+        key: `rotation:${rotation.peer}`,
+        tone: rotation.state === 'cutover' ? 'warn' : 'info',
+        title: fmt(
+          rotation.state === 'cutover'
+            ? zh.wireguard.rotationCutoverTitle
+            : zh.wireguard.rotationPendingTitle,
+          {},
+        ),
+        description:
+          rotation.state === 'cutover'
+            ? fmt(zh.wireguard.rotationCutoverDesc, {
+                time: formatAbsoluteTime(rotation.graceUntil),
+              })
+            : `${rotation.peer}：${zh.wireguard.rotationPendingDesc}`,
+        action: (
+          <Row gap={2}>
+            <Button
+              label={actionLabel(action('peer.cancelRotation'))}
+              size="sm"
+              onClick={() => void cancelRotation(rotation.peer)}
+            />
+            <Button
+              label={actionLabel(action('peer.confirmRotation'))}
+              variant="primary"
+              size="sm"
+              disabled={rotation.state !== 'cutover' || unreachable}
+              disabledReason={
+                unreachable ? writeDisabledReason : zh.wireguard.confirmDisabledPending
+              }
+              onClick={() => void confirmRotation(rotation.peer)}
+            />
+          </Row>
+        ),
+        priority: rotation.state === 'cutover' ? 2 : 3,
+      });
+    }
+    if (adapterMissing || appsQuery.error) {
+      banners.push({
+        key: 'adapter',
         tone: 'warn',
-        title: zh.wireguard.rotationExpiredTitle,
-        description: `${rotation.peer}：${zh.wireguard.rotationExpiredDesc}`,
+        title: zh.wireguard.adapterMissing,
+        description:
+          appsQuery.error instanceof Error
+            ? appsQuery.error.message
+            : zh.wireguard.adapterMissingDesc,
+        priority: 4,
+      });
+    }
+    const wireguardMissing = Boolean(status && !status.installed);
+    if (!configState?.exists || wireguardMissing) {
+      banners.push({
+        key: wireguardMissing ? 'not-installed' : 'not-configured',
+        // 未安装 = 中性事实（按需安装，不是告警）；只有未配置才是信息提示。
+        tone: wireguardMissing ? 'neutral' : 'info',
+        title: wireguardMissing ? zh.wireguard.notInstalledTitle : zh.wireguard.notConfiguredTitle,
+        description: installTask
+          ? installTaskText(installTask, zh.wireguard.installTaskState)
+          : wireguardMissing
+            ? zh.wireguard.notInstalledDesc
+            : status?.running
+              ? zh.wireguard.notConfiguredRunningDesc
+              : zh.wireguard.notConfiguredDesc,
+        action:
+          canPkgInstall && wireguardMissing ? (
+            installTask ? (
+              <Button
+                label={zh.wireguard.installRefresh}
+                size="sm"
+                loading={installBusy}
+                onClick={() => void refreshInstall()}
+              />
+            ) : (
+              <Button
+                label={zh.wireguard.installAction}
+                size="sm"
+                loading={installBusy}
+                disabled={unreachable || caddyMode}
+                disabledReason={caddyMode ? zh.mode.wireguardReadOnly : writeDisabledReason}
+                onClick={() => setInstallConfirm(true)}
+              />
+            )
+          ) : undefined,
+        priority: 5,
+      });
+    }
+    if (unapplied) {
+      banners.push({
+        key: 'unapplied',
+        tone: 'info',
+        title: zh.wireguard.unapplied,
+        description: zh.wireguard.unappliedDesc,
         action: (
           <Button
-            label={zh.wireguard.rotationRestoreKey}
+            label={actionLabel(action('wg.apply'))}
             size="sm"
-            disabled={unreachable}
-            disabledReason={writeDisabledReason}
-            onClick={() => void cancelRotation(rotation.peer)}
+            loading={busy === 'wg.apply'}
+            disabled={unreachable || caddyMode}
+            disabledReason={caddyMode ? zh.mode.wireguardReadOnly : writeDisabledReason}
+            onClick={() => handlePageAction(action('wg.apply'))}
           />
         ),
-        priority: 2,
+        priority: 6,
       });
-      continue;
     }
-    banners.push({
-      key: `rotation:${rotation.peer}`,
-      tone: rotation.state === 'cutover' ? 'warn' : 'info',
-      title: fmt(
-        rotation.state === 'cutover'
-          ? zh.wireguard.rotationCutoverTitle
-          : zh.wireguard.rotationPendingTitle,
-        {},
-      ),
-      description:
-        rotation.state === 'cutover'
-          ? fmt(zh.wireguard.rotationCutoverDesc, {
-              time: formatAbsoluteTime(rotation.graceUntil),
-            })
-          : `${rotation.peer}：${zh.wireguard.rotationPendingDesc}`,
-      action: (
-        <Row gap={2}>
-          <Button
-            label={actionLabel(action('peer.cancelRotation'))}
-            size="sm"
-            onClick={() => void cancelRotation(rotation.peer)}
-          />
-          <Button
-            label={actionLabel(action('peer.confirmRotation'))}
-            variant="primary"
-            size="sm"
-            disabled={rotation.state !== 'cutover' || unreachable}
-            disabledReason={
-              unreachable ? writeDisabledReason : zh.wireguard.confirmDisabledPending
-            }
-            onClick={() => void confirmRotation(rotation.peer)}
-          />
-        </Row>
-      ),
-      priority: rotation.state === 'cutover' ? 2 : 3,
-    });
-  }
-  if (adapterMissing || appsQuery.error) {
-    banners.push({
-      key: 'adapter',
-      tone: 'warn',
-      title: zh.wireguard.adapterMissing,
-      description:
-        appsQuery.error instanceof Error
-          ? appsQuery.error.message
-          : zh.wireguard.adapterMissingDesc,
-      priority: 4,
-    });
-  }
-  const wireguardMissing = Boolean(status && !status.installed);
-  if (!configState?.exists || wireguardMissing) {
-    banners.push({
-      key: wireguardMissing ? 'not-installed' : 'not-configured',
-      // 未安装 = 中性事实（按需安装，不是告警）；只有未配置才是信息提示。
-      tone: wireguardMissing ? 'neutral' : 'info',
-      title: wireguardMissing ? zh.wireguard.notInstalledTitle : zh.wireguard.notConfiguredTitle,
-      description: installTask
-        ? installTaskText(installTask, zh.wireguard.installTaskState)
-        : wireguardMissing
-          ? zh.wireguard.notInstalledDesc
-          : status?.running
-            ? zh.wireguard.notConfiguredRunningDesc
-            : zh.wireguard.notConfiguredDesc,
-      action:
-        canPkgInstall && wireguardMissing ? (
-          installTask ? (
-            <Button
-              label={zh.wireguard.installRefresh}
-              size="sm"
-              loading={installBusy}
-              onClick={() => void refreshInstall()}
-            />
-          ) : (
-            <Button
-              label={zh.wireguard.installAction}
-              size="sm"
-              loading={installBusy}
-              disabled={unreachable || caddyMode}
-              disabledReason={caddyMode ? zh.mode.wireguardReadOnly : writeDisabledReason}
-              onClick={() => setInstallConfirm(true)}
-            />
-          )
-        ) : undefined,
-      priority: 5,
-    });
-  }
-  if (unapplied) {
-    banners.push({
-      key: 'unapplied',
-      tone: 'info',
-      title: zh.wireguard.unapplied,
-      description: zh.wireguard.unappliedDesc,
-      action: (
-        <Button
-          label={actionLabel(action('wg.apply'))}
-          size="sm"
-          loading={busy === 'wg.apply'}
-          disabled={unreachable || caddyMode}
-          disabledReason={caddyMode ? zh.mode.wireguardReadOnly : writeDisabledReason}
-          onClick={() => handlePageAction(action('wg.apply'))}
-        />
-      ),
-      priority: 6,
-    });
-  }
-  if (!config.interface.publicEndpoint.trim()) {
-    banners.push({
-      key: 'endpoint',
-      tone: 'warn',
-      title: zh.wireguard.publicEndpointMissing,
-      description: zh.wireguard.publicEndpointMissingDesc,
-      priority: 7,
-    });
+    if (!config.interface.publicEndpoint.trim()) {
+      banners.push({
+        key: 'endpoint',
+        tone: 'warn',
+        title: zh.wireguard.publicEndpointMissing,
+        description: zh.wireguard.publicEndpointMissingDesc,
+        priority: 7,
+      });
+    }
   }
   const visibleBanners = banners.sort((a, b) => a.priority - b.priority).slice(0, 2);
 
@@ -1384,7 +1387,11 @@ export default function WireGuardPage() {
       <PageHeader
         title={zh.nav.wireguard}
         scope={hubName}
-        summary={fmt(zh.wireguard.summaryPeers, { count: config.peers.length })}
+        summary={
+          !hidePeers && config.peers.length > 0
+            ? fmt(zh.wireguard.summaryPeers, { count: config.peers.length })
+            : undefined
+        }
         sync={sync}
         primaryAction={caddyMode ? undefined : action('peer.create')}
         secondaryActions={caddyMode ? undefined : [action('wg.interface.update')]}
@@ -1393,7 +1400,7 @@ export default function WireGuardPage() {
         onAction={handlePageAction}
       />
 
-      {configQuery.error ? (
+      {!hidePeers && configQuery.error ? (
         <Banner
           tone="danger"
           title={fmt(zh.errors.loadTitle, { page: zh.nav.wireguard })}
@@ -1414,34 +1421,36 @@ export default function WireGuardPage() {
         />
       ))}
 
-      <Table
-        rows={configQuery.isLoading ? undefined : rows}
-        columns={columns}
-        rowKey={(row) => row.peer.name}
-        objectLabel={zh.nav.wireguard}
-        search={{
-          value: searchText,
-          onChange: setSearchText,
-          placeholder: zh.wireguard.searchPlaceholder,
-        }}
-        empty={{
-          icon: 'users',
-          title: zh.wireguard.emptyTitle,
-          description: zh.wireguard.emptyHint,
-          action: (
-            <Button
-              label={actionLabel(action('peer.create'))}
-              variant="primary"
-              icon="plus"
-              onClick={openPeerCreate}
-            />
-          ),
-        }}
-        rowActions={rowActions}
-        rowActionDisabled={rowActionDisabled}
-        onRowAction={handleRowAction}
-        onRowOpen={caddyMode ? undefined : (row) => openPeerEdit(row.peer)}
-      />
+      {!hidePeers ? (
+        <Table
+          rows={configQuery.isLoading ? undefined : rows}
+          columns={columns}
+          rowKey={(row) => row.peer.name}
+          objectLabel={zh.nav.wireguard}
+          search={{
+            value: searchText,
+            onChange: setSearchText,
+            placeholder: zh.wireguard.searchPlaceholder,
+          }}
+          empty={{
+            icon: 'users',
+            title: zh.wireguard.emptyTitle,
+            description: zh.wireguard.emptyHint,
+            action: (
+              <Button
+                label={actionLabel(action('peer.create'))}
+                variant="primary"
+                icon="plus"
+                onClick={openPeerCreate}
+              />
+            ),
+          }}
+          rowActions={rowActions}
+          rowActionDisabled={rowActionDisabled}
+          onRowAction={handleRowAction}
+          onRowOpen={caddyMode ? undefined : (row) => openPeerEdit(row.peer)}
+        />
+      ) : null}
 
       <ForwardsCard
         hubId={hubId}
