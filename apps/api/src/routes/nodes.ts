@@ -3,22 +3,31 @@ import {
   agentStateSchema,
   createNodeRequestSchema,
   nodeListResponseSchema,
+  nodeOverviewResponseSchema,
   nodeProbeResponseSchema,
   nodeResponseSchema,
   nodeStateResponseSchema,
   nodeWithTokenResponseSchema,
   okResponseSchema,
   updateNodeRequestSchema,
+  type AgentState,
   type NodeAccessMode,
   type NodeProbeApp,
   type NodeProbeItem,
+  type PreferredRoute,
+  type TlsProbe,
 } from '@khc/contracts';
 import type { AppBindings, AppDeps, Env } from '../types';
-import type { AppSummaryRow } from '../domain/repos';
+import type { AppConfigSummaryRow, AppSummaryRow, StoredNode } from '../domain/repos';
 import { encryptSecret, newNodeToken } from '../lib/crypto';
 import { AppError, badRequest, misconfigured, notFound } from '../lib/errors';
 import { nowSec } from '../lib/ids';
-import { summarizeAppSummaries } from '../lib/node-summary';
+import {
+  collectExpiringCerts,
+  projectNodeOverview,
+  projectNodeProbe,
+} from '../lib/node-overview';
+import { summarizeAppSummaries, summarizeNodeApps } from '../lib/node-summary';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError, formatRouteErrors } from '../lib/node-client';
@@ -138,6 +147,116 @@ function probeApps(body: unknown): NodeProbeApp[] {
       running: typeof status.running === 'boolean' ? status.running : null,
     };
   });
+}
+
+interface FetchedNodeState {
+  reachable: boolean;
+  route: PreferredRoute | null;
+  via: 'fetch' | 'tcp' | null;
+  state: AgentState | null;
+  error: string | null;
+  epochStale: boolean;
+  tls: TlsProbe;
+  lastSeenAt?: number;
+}
+
+/**
+ * 调用节点 `/state` 并统一处理超时、鉴权失败、格式错误、epoch 对比与 TLS 实测。
+ * 供 `GET /nodes/:id/state` 与 `GET /nodes/:id/overview` 共用，保持两处口径完全一致。
+ */
+async function fetchNodeState(
+  env: Env,
+  deps: AppDeps,
+  node: StoredNode,
+  opts: { force?: boolean } = {},
+): Promise<FetchedNodeState> {
+  const token = await nodeToken(env, node);
+  // 本次实际会用的接入地址：tunnel 优先隧道地址，否则直连 endpoint。
+  const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
+  // ?force=1 透传给 Agent，跳过它 ops 采集的 5 秒进程内缓存。
+  // 写操作成功后前端带这个参数重拉，否则会读到缓存里的旧失败计数（2026-11-16 U1）。
+  const agentPath = opts.force ? '/state?force=1' : '/state';
+  try {
+    const response = await deps.agent.call(
+      node,
+      token,
+      'GET',
+      agentPath,
+      undefined,
+      // F-M1：/state 是最重的 Agent 端点（ops 收集 systemctl/ps/df 多个子进程），
+      // 系统繁忙时 3s 预算必然踩线触发 fetch 超时→TCP 回退；放宽到与默认预算一致。
+      { timeoutMs: 10_000 },
+    );
+    const parsed = agentStateSchema.safeParse(response.body);
+    if (!parsed.success) {
+      console.warn(
+        '[state] invalid agent response',
+        response.status,
+        JSON.stringify(response.body).slice(0, 300),
+      );
+      // F-M1：401/403 是鉴权/签名类错误（token 不匹配、nonce 重放等），
+      // 不得误报为"格式不合法"；附上 Agent 的错误信息便于定位。
+      const agentMessage = (
+        response.body as { error?: { message?: string } } | null
+      )?.error?.message;
+      const error =
+        response.status === 401 || response.status === 403
+          ? `Agent 鉴权失败（HTTP ${response.status}${agentMessage ? `：${agentMessage}` : ''}）——请核对节点 token 与面板记录是否一致，稍后重试`
+          : response.status === 426
+            ? `Agent 拒绝服务：版本协商失败${agentMessage ? `（${agentMessage}）` : ''}`
+            : `Agent /state 返回格式不合法（HTTP ${response.status}）`;
+      return {
+        reachable: true,
+        route: response.route,
+        via: response.via,
+        state: null,
+        error,
+        epochStale: false,
+        // 拿到了响应 = TLS 握手已通过（https 时即证书有效）
+        tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
+      };
+    }
+    // 只更新轻量可达租约；运行快照不写入 D1（观测数据不进面板数据库）。
+    const seenAt = nowSec();
+    await deps.nodes.update(node.id, { lastSeenAt: seenAt });
+    // D-2/T2.2：Agent 回传的 epoch 与节点当前 rev_epoch 不一致 = "旧纪元"
+    // （Agent 记着节点重建/恢复前的 rev 基线）。下一次 apply 会自动重置 Agent
+    // 基线并重新下发；旧 Agent（<0.1.13）不回传 epoch，不判定（待升级）。
+    const agentEpoch = parsed.data.agent?.epoch;
+    const epochStale = Boolean(agentEpoch && node.revEpoch && agentEpoch !== node.revEpoch);
+    if (epochStale) {
+      console.warn(
+        '[state] stale rev epoch',
+        node.id,
+        `agent=${agentEpoch} node=${node.revEpoch}`,
+      );
+    }
+    return {
+      reachable: true,
+      route: response.route,
+      via: response.via,
+      state: parsed.data,
+      error: null,
+      epochStale,
+      tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
+      lastSeenAt: seenAt,
+    };
+  } catch (error) {
+    if (error instanceof HubUnreachableError) {
+      const detail = formatRouteErrors(error);
+      return {
+        reachable: false,
+        route: null,
+        via: null,
+        state: null,
+        error: detail,
+        epochStale: false,
+        // 证书类失败能断言证书有问题，网络类只能说未知——不顺势报成证书故障
+        tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: false, error: detail }),
+      };
+    }
+    throw error;
+  }
 }
 
 export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
@@ -328,12 +447,24 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
    * 让首页卡片能表达「实装未纳管」与「D1 有、实装无」。仍是一次 Worker 请求、
    * 每节点一次 Agent 调用；/state 解析失败或超时只让该节点的 apps 缺失，
    * 不影响 reachable 结论，也不让整卡报错。
+   * 自 0.20.0 起同源附加每节点 projection 与顶层 expiringCerts，供首页去掉独立 /certs 请求。
    * 单个节点失败只影响自己这一项；整体始终 200。
    * 成功才写 lastSeenAt（探活租约），失败不写 D1、不产生负向持久状态。
    */
   router.post('/nodes/probe', async (c) => {
     c.header('Cache-Control', 'no-store');
-    const nodes = await deps.nodes.list();
+    const [nodes, allConfigs, certs] = await Promise.all([
+      deps.nodes.list(),
+      deps.apps.listForSummary(),
+      deps.certs.list(),
+    ]);
+    const configsByNode = new Map<string, AppConfigSummaryRow[]>();
+    for (const row of allConfigs) {
+      const list = configsByNode.get(row.nodeId);
+      if (list) list.push(row);
+      else configsByNode.set(row.nodeId, [row]);
+    }
+
     const probedAt = nowSec();
     const results: NodeProbeItem[] = [];
 
@@ -343,6 +474,9 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       const batch = nodes.slice(offset, offset + concurrency);
       const settled = await Promise.all(
         batch.map(async (node): Promise<NodeProbeItem> => {
+          const nodeConfigs = configsByNode.get(node.id) ?? [];
+          const probeEndpoint =
+            node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
           try {
             const token = await nodeToken(c.env, node);
             const response = await deps.agent.call(
@@ -357,16 +491,38 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
             );
             const reachable = response.status >= 200 && response.status < 300;
             if (!reachable) {
+              const error = `Agent /state 返回 HTTP ${response.status}`;
+              const tls = classifyTlsProbe({
+                endpoint: probeEndpoint,
+                reachable: false,
+                error,
+                now: probedAt,
+              });
               return {
                 id: node.id,
                 reachable: false,
                 route: response.route,
                 via: response.via,
-                error: `Agent /state 返回 HTTP ${response.status}`,
+                error,
                 lastSeenAt: node.lastSeenAt,
+                projection: projectNodeProbe({
+                  node,
+                  configs: nodeConfigs,
+                  certs,
+                  state: null,
+                  tls,
+                  now: probedAt,
+                }),
               };
             }
             await deps.nodes.update(node.id, { lastSeenAt: probedAt });
+            const parsed = agentStateSchema.safeParse(response.body);
+            const parsedState = parsed.success ? parsed.data : null;
+            const tls = classifyTlsProbe({
+              endpoint: probeEndpoint,
+              reachable: true,
+              now: probedAt,
+            });
             return {
               id: node.id,
               reachable: true,
@@ -375,20 +531,43 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
               error: null,
               lastSeenAt: probedAt,
               apps: probeApps(response.body),
+              projection: projectNodeProbe({
+                node,
+                configs: nodeConfigs,
+                certs,
+                state: parsedState,
+                tls,
+                now: probedAt,
+              }),
             };
           } catch (error) {
+            const message =
+              error instanceof HubUnreachableError
+                ? formatRouteErrors(error)
+                : error instanceof Error
+                  ? error.message
+                  : String(error);
+            const tls = classifyTlsProbe({
+              endpoint: probeEndpoint,
+              reachable: false,
+              error: message,
+              now: probedAt,
+            });
             return {
               id: node.id,
               reachable: false,
               route: null,
               via: null,
-              error:
-                error instanceof HubUnreachableError
-                  ? formatRouteErrors(error)
-                  : error instanceof Error
-                    ? error.message
-                    : String(error),
+              error: message,
               lastSeenAt: node.lastSeenAt,
+              projection: projectNodeProbe({
+                node,
+                configs: nodeConfigs,
+                certs,
+                state: null,
+                tls,
+                now: probedAt,
+              }),
             };
           }
         }),
@@ -396,7 +575,8 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       results.push(...settled);
     }
 
-    return c.json(nodeProbeResponseSchema.parse({ probedAt, nodes: results }));
+    const expiringCerts = collectExpiringCerts(certs, probedAt);
+    return c.json(nodeProbeResponseSchema.parse({ probedAt, nodes: results, expiringCerts }));
   });
 
   /**
@@ -407,96 +587,67 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     // 运行状态是瞬时的：不进入共享缓存（也不进入 D1）。
     c.header('Cache-Control', 'no-store');
     const node = await requireNode(deps, c.req.param('id'));
-    const token = await nodeToken(c.env, node);
-    // 本次实际会用的接入地址：tunnel 优先隧道地址，否则直连 endpoint。
-    const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
-    // ?force=1 透传给 Agent，跳过它 ops 采集的 5 秒进程内缓存。
-    // 写操作成功后前端带这个参数重拉，否则会读到缓存里的旧失败计数（2026-11-16 U1）。
     const force = c.req.query('force');
-    const agentPath = force === '1' || force === 'true' ? '/state?force=1' : '/state';
-    try {
-      const response = await deps.agent.call(
-        node,
-        token,
-        'GET',
-        agentPath,
-        undefined,
-        // F-M1：/state 是最重的 Agent 端点（ops 收集 systemctl/ps/df 多个子进程），
-        // 系统繁忙时 3s 预算必然踩线触发 fetch 超时→TCP 回退；放宽到与默认预算一致。
-        { timeoutMs: 10_000 },
-      );
-      const parsed = agentStateSchema.safeParse(response.body);
-      if (!parsed.success) {
-        console.warn(
-          '[state] invalid agent response',
-          response.status,
-          JSON.stringify(response.body).slice(0, 300),
-        );
-        // F-M1：401/403 是鉴权/签名类错误（token 不匹配、nonce 重放等），
-        // 不得误报为"格式不合法"；附上 Agent 的错误信息便于定位。
-        const agentMessage = (
-          response.body as { error?: { message?: string } } | null
-        )?.error?.message;
-        const error =
-          response.status === 401 || response.status === 403
-            ? `Agent 鉴权失败（HTTP ${response.status}${agentMessage ? `：${agentMessage}` : ''}）——请核对节点 token 与面板记录是否一致，稍后重试`
-            : response.status === 426
-              ? `Agent 拒绝服务：版本协商失败${agentMessage ? `（${agentMessage}）` : ''}`
-              : `Agent /state 返回格式不合法（HTTP ${response.status}）`;
-        return c.json(
-          nodeStateResponseSchema.parse({
-            reachable: true,
-            route: response.route,
-            via: response.via,
-            state: null,
-            error,
-            // 拿到了响应 = TLS 握手已通过（https 时即证书有效）
-            tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
-          }),
-        );
-      }
-      // 只更新轻量可达租约；运行快照不写入 D1（观测数据不进面板数据库）。
-      await deps.nodes.update(node.id, { lastSeenAt: nowSec() });
-      // D-2/T2.2：Agent 回传的 epoch 与节点当前 rev_epoch 不一致 = "旧纪元"
-      // （Agent 记着节点重建/恢复前的 rev 基线）。下一次 apply 会自动重置 Agent
-      // 基线并重新下发；旧 Agent（<0.1.13）不回传 epoch，不判定（待升级）。
-      const agentEpoch = parsed.data.agent?.epoch;
-      const epochStale = Boolean(agentEpoch && node.revEpoch && agentEpoch !== node.revEpoch);
-      if (epochStale) {
-        console.warn(
-          '[state] stale rev epoch',
-          node.id,
-          `agent=${agentEpoch} node=${node.revEpoch}`,
-        );
-      }
-      return c.json(
-        nodeStateResponseSchema.parse({
-          reachable: true,
-          route: response.route,
-          via: response.via,
-          state: parsed.data,
-          error: null,
-          ...(epochStale ? { epochStale } : {}),
-          tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
-        }),
-      );
-    } catch (error) {
-      if (error instanceof HubUnreachableError) {
-        const detail = formatRouteErrors(error);
-        return c.json(
-          nodeStateResponseSchema.parse({
-            reachable: false,
-            route: null,
-            via: null,
-            state: null,
-            error: detail,
-            // 证书类失败能断言证书有问题，网络类只能说未知——不顺势报成证书故障
-            tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: false, error: detail }),
-          }),
-        );
-      }
-      throw error;
-    }
+    const result = await fetchNodeState(c.env, deps, node, {
+      force: force === '1' || force === 'true',
+    });
+    return c.json(
+      nodeStateResponseSchema.parse({
+        reachable: result.reachable,
+        route: result.route,
+        via: result.via,
+        state: result.state,
+        error: result.error,
+        ...(result.epochStale ? { epochStale: true } : {}),
+        tls: result.tls,
+      }),
+    );
+  });
+
+  /**
+   * GET /nodes/:id/overview —— VM 概况聚合接口（合并节点信息 + D1 配置 + 证书 + /state + 投影）。
+   * Agent 不可达时 D1 部分照常返回，state 为 null，reachable 为 false。
+   */
+  router.get('/nodes/:id/overview', async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const node = await requireNode(deps, c.req.param('id'));
+    const force = c.req.query('force');
+    const [configs, certs, stateResult] = await Promise.all([
+      deps.apps.listByNode(node.id),
+      deps.certs.list(),
+      fetchNodeState(c.env, deps, node, {
+        force: force === '1' || force === 'true',
+      }),
+    ]);
+    const nodeForPublic =
+      stateResult.lastSeenAt !== undefined
+        ? { ...node, lastSeenAt: stateResult.lastSeenAt }
+        : node;
+    const publicNode = {
+      ...toPublicNode(nodeForPublic),
+      summary: summarizeNodeApps(configs),
+    };
+    const overview = projectNodeOverview({
+      node,
+      configs,
+      certs,
+      state: stateResult.state,
+      tls: stateResult.tls,
+      now: nowSec(),
+    });
+    return c.json(
+      nodeOverviewResponseSchema.parse({
+        node: publicNode,
+        reachable: stateResult.reachable,
+        route: stateResult.route,
+        via: stateResult.via,
+        error: stateResult.error,
+        ...(stateResult.epochStale ? { epochStale: true } : {}),
+        tls: stateResult.tls,
+        state: stateResult.state,
+        overview,
+      }),
+    );
   });
 
   return router;
