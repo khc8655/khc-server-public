@@ -660,8 +660,42 @@ function projectFailedUnits(state: AgentState | null): string[] | null {
   return null;
 }
 
+/**
+ * 计算固定公历到期日期（YYYY-MM-DD）相对当前 UTC 日期的剩余天数：
+ * - `> 0`：未到期（1 表示明天到期）
+ * - `0`：今日到期（normalizeZero 防 -0）
+ * - `< 0`：已逾期 N 天
+ */
+export function daysLeftFromCalendarDate(
+  expiresAt: string | null | undefined,
+  nowSec = Math.floor(Date.now() / 1000),
+): number | null {
+  if (!expiresAt) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expiresAt);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const nowDate = new Date(nowSec * 1000);
+  const todayUtcMs = Date.UTC(
+    nowDate.getUTCFullYear(),
+    nowDate.getUTCMonth(),
+    nowDate.getUTCDate(),
+  );
+  return normalizeZero(Math.round((dt.getTime() - todayUtcMs) / (DAY_SECONDS * 1000)));
+}
+
 export interface NodeProjectionInput {
-  node: Pick<StoredNode, 'id' | 'domain' | 'endpoint' | 'accessMode'>;
+  node: Pick<StoredNode, 'id' | 'domain' | 'endpoint' | 'accessMode'> &
+    Partial<Pick<StoredNode, 'expiresAt'>>;
   configs: readonly AppConfigLike[];
   certs: readonly Certificate[];
   state: AgentState | null;
@@ -672,6 +706,8 @@ export interface NodeProjectionInput {
 /** 节点详情概况与首页探测共用的完整投影（不写库、不抛异常）。 */
 export function projectNodeOverview(input: NodeProjectionInput): NodeOverviewData {
   const nowSec = input.now ?? Math.floor(Date.now() / 1000);
+  const expiresAt = input.node.expiresAt ?? null;
+  const expiresDaysLeft = daysLeftFromCalendarDate(expiresAt, nowSec);
   const byApp = new Map(input.configs.map((item) => [item.app, item]));
   const caddyRow = byApp.get('caddy-site');
   const wgRow = byApp.get('wireguard');
@@ -683,6 +719,8 @@ export function projectNodeOverview(input: NodeProjectionInput): NodeOverviewDat
     forwards: projectForwards(pfRow, input.state),
     certs: projectCerts(input.node, caddyRow, input.certs, nowSec),
     accessCert: projectAccessCert(input.node, input.certs, input.state, input.tls, nowSec),
+    expiresAt,
+    expiresDaysLeft,
     host: projectHost(input.state),
     managedServices: projectManagedServices(input.state),
     failedUnits: projectFailedUnits(input.state),
@@ -715,5 +753,7 @@ export function projectNodeProbe(input: NodeProjectionInput): NodeProbeProjectio
     },
     certs: full.certs,
     accessCert: full.accessCert,
+    expiresAt: full.expiresAt,
+    expiresDaysLeft: full.expiresDaysLeft,
   };
 }

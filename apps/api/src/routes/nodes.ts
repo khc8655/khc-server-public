@@ -320,6 +320,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       allowInsecure: access.allowInsecure,
       preferredRoute:
         body.preferredRoute ?? (accessMode === 'tunnel' ? 'tunnel' : 'direct'),
+      expiresAt: body.expiresAt ?? null,
       tokenEnc,
     });
     await deps.audit.log({

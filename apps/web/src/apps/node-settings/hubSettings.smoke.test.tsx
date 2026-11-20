@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
@@ -64,6 +64,8 @@ function backupFile() {
 }
 
 let requests: { url: string; init?: RequestInit }[] = [];
+let currentNode: Record<string, unknown> = { ...node };
+let stateReachable = true;
 let cleanupRemaining: { item: string; reason: string }[] = [];
 let cfDnsDeleteResult: unknown = null;
 /** 批次 Q：host-ops 适配器是否安装在节点上（决定删除节点清理项的默认值/可用性）。 */
@@ -71,6 +73,8 @@ let hostOpsAdapterInstalled = true;
 
 function mockApi() {
   requests = [];
+  currentNode = { ...node };
+  stateReachable = true;
   cleanupRemaining = [];
   vi.stubGlobal(
     'fetch',
@@ -78,11 +82,13 @@ function mockApi() {
       const url = String(input);
       requests.push({ url, init });
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
-      if (url === '/api/v1/nodes') return json({ nodes: [node] });
+      if (url === '/api/v1/nodes') return json({ nodes: [currentNode] });
       if (url === '/api/v1/nodes/tyo-1' && init?.method === 'PATCH') {
-        return json({ node: { ...node, ...JSON.parse(String(init.body ?? '{}')) } });
+        const patch = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
+        currentNode = { ...currentNode, ...patch };
+        return json({ node: currentNode });
       }
-      if (url === '/api/v1/nodes/tyo-1') return json({ node });
+      if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
       if (url === '/api/v1/tunnels') return json({ tunnels: [] });
       if (url === '/api/v1/cf-dns/zones') {
         return json({
@@ -117,6 +123,15 @@ function mockApi() {
         });
       }
       if (url === '/api/v1/nodes/tyo-1/state') {
+        if (!stateReachable) {
+          return json({
+            reachable: false,
+            route: null,
+            via: null,
+            error: 'timeout',
+            state: null,
+          });
+        }
         return json({
           reachable: true,
           route: 'direct',
@@ -340,5 +355,49 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     await openImportDrawer();
     await userEvent.click(await screen.findByRole('button', { name: '选择备份文件' }));
     expect(await screen.findByText('文件不是合法 JSON')).toBeTruthy();
+  });
+
+  it('U4 到期日期设置：节点离线时仍可设置、保存与清除 expiresAt', async () => {
+    stateReachable = false;
+    await renderRoute('/hubs/tyo-1/settings');
+
+    expect(await screen.findByText('到期日期')).toBeTruthy();
+    expect(screen.getByText('未设置')).toBeTruthy();
+
+    const dateInput = document.querySelector('#node-expires-at') as HTMLInputElement;
+    expect(dateInput).toBeTruthy();
+    expect(dateInput.type).toBe('date');
+    const saveBtn = screen.getByRole('button', { name: '保存到期日期' }) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+
+    fireEvent.change(dateInput, { target: { value: '2099-12-31' } });
+    expect(saveBtn.disabled).toBe(false);
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      const patch = requests.find(
+        (item) =>
+          item.url === '/api/v1/nodes/tyo-1' &&
+          item.init?.method === 'PATCH' &&
+          String(item.init?.body ?? '').includes('2099-12-31'),
+      );
+      expect(patch).toBeTruthy();
+    });
+    expect(await screen.findByText('到期日期已保存')).toBeTruthy();
+    expect(document.querySelector('.ui-expiry-chip')).toBeTruthy();
+
+    const clearBtn = await screen.findByRole('button', { name: '清除到期日期' });
+    await userEvent.click(clearBtn);
+    await waitFor(() => {
+      const patch = requests.find(
+        (item) =>
+          item.url === '/api/v1/nodes/tyo-1' &&
+          item.init?.method === 'PATCH' &&
+          String(item.init?.body ?? '').includes('"expiresAt":null'),
+      );
+      expect(patch).toBeTruthy();
+    });
+    expect(await screen.findByText('到期日期已清除')).toBeTruthy();
+    expect(await screen.findByText('未设置')).toBeTruthy();
   });
 });

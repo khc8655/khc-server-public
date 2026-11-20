@@ -69,7 +69,7 @@ export interface TextInputProps {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  type?: 'text' | 'password' | 'email' | 'url';
+  type?: 'text' | 'password' | 'email' | 'url' | 'date';
   mono?: boolean;
   suffix?: string;
   suffixIcon?: IconName;

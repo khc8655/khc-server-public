@@ -7,6 +7,8 @@ import { formatBytes, formatRelativeTime } from '../i18n/format';
 import { fmt, zh } from '../i18n/zh';
 import {
   NodeAccessLine,
+  NodeExpiryChip,
+  daysLeftFromDate,
   formatCertMetric,
   formatRatioMetric,
 } from '../patterns/NodePresentation';
@@ -158,6 +160,24 @@ export default function HubOverviewPage() {
             ? zh.overview.todoCertToday
             : fmt(zh.overview.todoCertExpiring, { days: cert.daysLeft }),
       to: `${paths.hubSection(hubId, 'sites')}?tab=certs`,
+    });
+  }
+
+  const expiryDaysLeft = overview.expiresDaysLeft ?? daysLeftFromDate(node.expiresAt);
+  if (expiryDaysLeft !== null && expiryDaysLeft <= 14) {
+    todos.push({
+      id: `node-expiry:${node.id}`,
+      tone: expiryDaysLeft <= 0 ? 'danger' : 'warn',
+      badge:
+        expiryDaysLeft <= 0 ? zh.overview.todoNodeExpiredBadge : zh.overview.todoNodeExpiringBadge,
+      name: node.name,
+      desc:
+        expiryDaysLeft < 0
+          ? fmt(zh.overview.todoNodeExpiredDays, { days: Math.abs(expiryDaysLeft) })
+          : expiryDaysLeft === 0
+            ? zh.overview.todoNodeToday
+            : fmt(zh.overview.todoNodeExpiring, { days: expiryDaysLeft }),
+      to: paths.hubSection(hubId, 'settings'),
     });
   }
 
@@ -407,7 +427,14 @@ export default function HubOverviewPage() {
 
   return (
     <Stack gap={4}>
-      <PageHeader title={node.name}>
+      <PageHeader
+        title={node.name}
+        actions={
+          node.expiresAt ? (
+            <NodeExpiryChip expiresAt={node.expiresAt} daysLeft={expiryDaysLeft} />
+          ) : undefined
+        }
+      >
         <NodeAccessLine
           hub={node}
           accessCert={overview.accessCert}

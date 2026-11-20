@@ -4,8 +4,10 @@ export { ConfirmAction } from './ConfirmAction';
 export { AdvancedSection } from './AdvancedSection';
 export {
   NodeAccessLine,
+  NodeExpiryChip,
   accessModeShortLabel,
   accessSecurityInfo,
+  daysLeftFromDate,
   endpointHost,
   formatCertMetric,
   formatRatioMetric,

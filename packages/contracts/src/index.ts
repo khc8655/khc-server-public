@@ -139,6 +139,30 @@ export const nodeAppSummarySchema = z.object({
 });
 export type NodeAppSummary = z.infer<typeof nodeAppSummarySchema>;
 
+const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function isValidCalendarDate(value: string): boolean {
+  const m = CALENDAR_DATE_RE.exec(value);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  return (
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day
+  );
+}
+
+/** 固定公历日期（YYYY-MM-DD，严格校验真实存在日期，REJECT 2026-02-30 等无效日期） */
+export const calendarDateSchema = z
+  .string()
+  .trim()
+  .regex(CALENDAR_DATE_RE, '日期格式应为 YYYY-MM-DD')
+  .refine(isValidCalendarDate, '无效的公历日期');
+
 export const nodeSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -156,6 +180,8 @@ export const nodeSchema = z.object({
   allowInsecure: z.boolean().default(false),
   preferredRoute: preferredRouteSchema,
   status: nodeStatusSchema,
+  /** 节点固定到期日期（YYYY-MM-DD，手动维护、不自动顺延；未设置为 null） */
+  expiresAt: calendarDateSchema.nullable().optional(),
   lastSeenAt: z.number().int().nonnegative().nullable(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -194,6 +220,8 @@ export const createNodeRequestSchema = z.object({
   preferredRoute: preferredRouteSchema.optional(),
   /** 允许明文 http 入口（IP 直连模式）；生产环境仅此项为 true 时跳过 https 门禁 */
   allowInsecure: z.boolean().optional(),
+  /** 节点固定到期日期（YYYY-MM-DD，可选；不自动顺延） */
+  expiresAt: calendarDateSchema.nullable().optional(),
 });
 export type CreateNodeRequest = z.infer<typeof createNodeRequestSchema>;
 
@@ -218,6 +246,8 @@ export const updateNodeRequestSchema = z.object({
   allowInsecure: z.boolean().optional(),
   /** 轮换节点 token（明文，仅在请求中出现；存储走加密 tokenEnc，审计只记 tokenRotated） */
   token: z.string().trim().min(16).max(128).optional(),
+  /** 节点固定到期日期（YYYY-MM-DD，传 null 表示清除） */
+  expiresAt: calendarDateSchema.nullable().optional(),
 });
 export type UpdateNodeRequest = z.infer<typeof updateNodeRequestSchema>;
 
@@ -359,6 +389,8 @@ export const nodeProbeProjectionSchema = z.object({
   forwards: nodeForwardsProjectionSchema,
   certs: nodeCertsProjectionSchema,
   accessCert: nodeAccessCertSchema,
+  expiresAt: calendarDateSchema.nullable().optional(),
+  expiresDaysLeft: z.number().int().nullable().optional(),
 });
 export type NodeProbeProjection = z.infer<typeof nodeProbeProjectionSchema>;
 
@@ -818,6 +850,8 @@ export const nodeOverviewDataSchema = z.object({
   forwards: nodeForwardsProjectionSchema.extend({ items: z.array(overviewForwardItemSchema) }),
   certs: nodeCertsProjectionSchema,
   accessCert: nodeAccessCertSchema,
+  expiresAt: calendarDateSchema.nullable().optional(),
+  expiresDaysLeft: z.number().int().nullable().optional(),
   host: overviewHostInfoSchema.nullable(),
   managedServices: z.array(overviewManagedServiceSchema),
   failedUnits: z.array(z.string()).nullable(),

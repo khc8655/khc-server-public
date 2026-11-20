@@ -37,6 +37,7 @@ import { formatAbsoluteTime, formatBytes } from '../../i18n/format';
 import { ModeCard } from './ModeCard';
 import { AgentCard } from './AgentCard';
 import { AccessCard } from './AccessCard';
+import { ExpiryCard } from './ExpiryCard';
 import { ComponentsCard } from './ComponentsCard';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 
@@ -255,6 +256,7 @@ export default function HubSettingsPage() {
       {segment === 'agent' ? (
         <>
           {hubQuery.data ? <AccessCard hub={hubQuery.data} /> : null}
+          {hubQuery.data ? <ExpiryCard hub={hubQuery.data} /> : null}
           <AgentCard hubId={hubId} hubName={hubName} lastSeenAt={hubQuery.data?.lastSeenAt ?? null} offline={offline} />
         </>
       ) : null}
