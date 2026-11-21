@@ -15,10 +15,13 @@ import {
   extractTaskCertificateResult,
   fetchCertificateMaterial,
   fetchCertificateTask,
+  issueCfDnsCertificate,
+  renewCertificate,
   runCertificateAction,
   updateCertificate,
   type CertActionEnvelope,
 } from '../../data/certs';
+import { fetchCfDnsAccounts } from '../../data/cfDns';
 import { settingsQueryOptions } from '../../data/settings';
 import { paths } from '../../registry/routes';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
@@ -58,13 +61,14 @@ import {
   formatExpiry,
 } from '../../i18n/format';
 
-type CertMode = 'selfsigned' | 'acme' | 'manual';
+type CertMode = 'cf-dns01' | 'selfsigned' | 'acme' | 'manual';
 
 interface IssueForm {
   mode: CertMode;
   name: string;
   domains: string;
   nodeId: string;
+  accountId: string;
   days: number | null;
   keyType: '' | 'ec' | 'rsa';
   provider: string;
@@ -125,11 +129,12 @@ function defaultForm(mode: CertMode, scopeNodeId?: string): IssueForm {
     domains: '',
     // 手动导入默认可全局：只有节点作用域内才预填该节点，用户可显式改回「全局」。
     nodeId: mode === 'manual' ? scopeNodeId ?? '' : '',
+    accountId: '',
     days: 365,
     keyType: '',
     provider: '',
     credentialsKey: '',
-    ca: '',
+    ca: mode === 'cf-dns01' ? 'letsencrypt' : '',
     certPem: '',
     keyPem: '',
     parsedNotAfter: null,
@@ -183,6 +188,28 @@ export default function CertificatesPage({
   const [renewing, setRenewing] = useState(false);
   const formRef = useRef<IssueForm | null>(null);
   formRef.current = form;
+
+  const cfAccountsQuery = useQuery({
+    queryKey: ['cf-dns', 'accounts'],
+    queryFn: fetchCfDnsAccounts,
+    enabled: Boolean(form),
+  });
+  const enabledCfAccounts = useMemo(
+    () => (cfAccountsQuery.data ?? []).filter((account) => account.enabled),
+    [cfAccountsQuery.data],
+  );
+  const defaultCreateMode: CertMode = scopeHubId ? 'selfsigned' : 'cf-dns01';
+
+  useEffect(() => {
+    if (!form || form.mode !== 'cf-dns01' || form.accountId || enabledCfAccounts.length === 0) {
+      return;
+    }
+    setForm((prev) =>
+      prev && prev.mode === 'cf-dns01' && !prev.accountId
+        ? { ...prev, accountId: enabledCfAccounts[0]!.id }
+        : prev,
+    );
+  }, [enabledCfAccounts, form]);
 
   // 请求预算：打开证书库只拉 /certificates + /hubs，不对每个节点 fan-out Caddy 配置。
   // 站点占用只在打开证书详情或删除确认时才按需拉取（用户主动动作，单次）。
@@ -301,7 +328,7 @@ export default function CertificatesPage({
       return;
     }
     if (drawer === 'issue' || drawer === 'import') {
-      if (!form) setForm(defaultForm(drawer === 'import' ? 'manual' : 'selfsigned', scopeHubId));
+      if (!form) setForm(defaultForm(drawer === 'import' ? 'manual' : defaultCreateMode, scopeHubId));
       return;
     }
     if (drawer.startsWith('cert:')) {
@@ -449,10 +476,19 @@ export default function CertificatesPage({
   };
 
   const startRenew = async (cert: Certificate) => {
-    if (!cert.sourceNodeId || !cert.acmeProvider || !cert.acmeCredentialKey) return;
     setRenewError(null);
     setRenewing(true);
     try {
+      if (cert.acmeProvider === 'cf-dns01') {
+        const updated = await renewCertificate(cert.id);
+        await queryClient.invalidateQueries({ queryKey: ['certs'] });
+        setDetailCert(updated);
+        toast.show({ message: zh.certs.renewSuccess });
+        return;
+      }
+      if (!cert.sourceNodeId || !cert.acmeProvider || !cert.acmeCredentialKey) {
+        throw new Error(zh.certs.renewUnsupported);
+      }
       const envelope = await runCertificateAction(cert.sourceNodeId, 'issue_acme', {
         domains: cert.domains,
         provider: cert.acmeProvider,
@@ -515,8 +551,12 @@ export default function CertificatesPage({
       setFormField({ error: zh.certs.invalidDomains });
       return;
     }
-    if (form.mode !== 'manual' && !effectiveNodeId) {
+    if ((form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId) {
       setFormField({ error: zh.certs.nodeMissing });
+      return;
+    }
+    if (form.mode === 'cf-dns01' && !form.accountId) {
+      setFormField({ error: zh.certs.cfAccountMissing });
       return;
     }
     if (form.mode === 'acme' && !form.provider.trim()) {
@@ -533,6 +573,18 @@ export default function CertificatesPage({
     }
     setFormField({ busy: true, error: null });
     try {
+      if (form.mode === 'cf-dns01') {
+        await issueCfDnsCertificate({
+          name,
+          domains,
+          accountId: form.accountId,
+          ca: form.ca === 'letsencrypt_staging' ? 'letsencrypt_staging' : 'letsencrypt',
+        });
+        await queryClient.invalidateQueries({ queryKey: ['certs'] });
+        toast.show({ message: zh.certs.issueSuccess });
+        closeIssue();
+        return;
+      }
       if (form.mode === 'manual') {
         await createCertificate({
           name,
@@ -705,13 +757,15 @@ export default function CertificatesPage({
       type: 'text',
       header: zh.certs.colIssuer,
       value: (cert) =>
-        cert.issuer === 'acme'
-          ? zh.certs.issuerAcme
-          : cert.issuer === 'selfsigned'
-            ? zh.certs.issuerSelfsigned
-            : cert.issuer === 'manual'
-              ? zh.certs.issuerManual
-              : zh.certs.issuerUnknown,
+        cert.acmeProvider === 'cf-dns01'
+          ? zh.certs.issuerCfDns
+          : cert.issuer === 'acme'
+            ? zh.certs.issuerAcme
+            : cert.issuer === 'selfsigned'
+              ? zh.certs.issuerSelfsigned
+              : cert.issuer === 'manual'
+                ? zh.certs.issuerManual
+                : zh.certs.issuerUnknown,
     },
     {
       key: 'expiry',
@@ -750,7 +804,7 @@ export default function CertificatesPage({
   };
 
   const handlePageAction = (ref: ActionRef) => {
-    if (ref.id === 'cert.create') openIssue('selfsigned');
+    if (ref.id === 'cert.create') openIssue(defaultCreateMode);
   };
 
   const task = taskQuery.data?.task;
@@ -780,7 +834,7 @@ export default function CertificatesPage({
               variant="primary"
               size="sm"
               icon="plus"
-              onClick={() => openIssue('selfsigned')}
+              onClick={() => openIssue(defaultCreateMode)}
             />
           }
         >
@@ -902,7 +956,7 @@ export default function CertificatesPage({
               label={actionLabel(action('cert.create'))}
               variant="primary"
               icon="plus"
-              onClick={() => openIssue('selfsigned')}
+              onClick={() => openIssue(defaultCreateMode)}
             />
           ),
         }}
@@ -933,13 +987,16 @@ export default function CertificatesPage({
                   variant="primary"
                   loading={form.busy}
                   disabled={
-                    (form.mode !== 'manual' && !effectiveNodeId) ||
+                    (form.mode === 'cf-dns01' && !form.accountId) ||
+                    ((form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId) ||
                     (form.mode === 'acme' && !form.credentialsKey)
                   }
                   disabledReason={
-                    form.mode !== 'manual' && !effectiveNodeId
-                      ? zh.certs.nodeMissing
-                      : zh.certs.credentialsMissing
+                    form.mode === 'cf-dns01'
+                      ? zh.certs.cfAccountMissing
+                      : (form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId
+                        ? zh.certs.nodeMissing
+                        : zh.certs.credentialsMissing
                   }
                   onClick={() => void submit()}
                 />
@@ -953,13 +1010,18 @@ export default function CertificatesPage({
                 value={form.mode}
                 ariaLabel={zh.certs.issueTitle}
                 options={[
+                  { value: 'cf-dns01', label: zh.certs.modeCfDns01 },
                   { value: 'selfsigned', label: zh.certs.modeSelfsigned },
                   { value: 'acme', label: zh.certs.modeAcme },
                   { value: 'manual', label: zh.certs.modeImport },
                 ]}
                 onChange={(value) => {
                   const mode = value as CertMode;
-                  setFormField({ mode, error: null });
+                  setFormField({
+                    mode,
+                    ca: mode === 'cf-dns01' && !form.ca ? 'letsencrypt' : form.ca,
+                    error: null,
+                  });
                   setDrawerSearch(mode === 'manual' ? 'import' : 'issue', true);
                 }}
               />
@@ -1006,7 +1068,55 @@ export default function CertificatesPage({
                   />
                 </Field>
 
-                {form.mode !== 'manual' ? (
+                {form.mode === 'cf-dns01' ? (
+                  <>
+                    <Banner tone="info" title={zh.certs.cfDnsHint} />
+                    <Field
+                      id="cert-cf-account"
+                      label={zh.certs.cfAccountLabel}
+                      help={zh.certs.cfAccountHelp}
+                      required
+                    >
+                      <Select
+                        id="cert-cf-account"
+                        value={form.accountId}
+                        options={enabledCfAccounts.map((account) => ({
+                          value: account.id,
+                          label: account.accountName
+                            ? `${account.name} · ${account.accountName}`
+                            : account.name,
+                        }))}
+                        placeholder={zh.form.choose}
+                        onChange={(value) => setFormField({ accountId: value })}
+                      />
+                    </Field>
+                    {cfAccountsQuery.isSuccess && enabledCfAccounts.length === 0 ? (
+                      <Banner
+                        tone="warn"
+                        title={zh.certs.cfAccountMissing}
+                        action={
+                          <Link
+                            to={`${paths.settings}?tab=accounts`}
+                            label={zh.certs.cfAccountLink}
+                          />
+                        }
+                      />
+                    ) : null}
+                    <Field id="cert-cf-ca" label={zh.certs.caLabel}>
+                      <Select
+                        id="cert-cf-ca"
+                        value={form.ca === 'letsencrypt_staging' ? 'letsencrypt_staging' : 'letsencrypt'}
+                        options={[
+                          { value: 'letsencrypt', label: zh.certs.caLetsencrypt },
+                          { value: 'letsencrypt_staging', label: zh.certs.caStaging },
+                        ]}
+                        onChange={(value) => setFormField({ ca: value })}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+
+                {form.mode === 'selfsigned' || form.mode === 'acme' ? (
                   <Field id="cert-node" label={zh.fields.node} help={zh.certs.nodeHelp}>
                     <Select
                       id="cert-node"
@@ -1191,13 +1301,15 @@ export default function CertificatesPage({
                 {
                   key: zh.certs.colIssuer,
                   value:
-                    detailCert.issuer === 'acme'
-                      ? zh.certs.issuerAcme
-                      : detailCert.issuer === 'selfsigned'
-                        ? zh.certs.issuerSelfsigned
-                        : detailCert.issuer === 'manual'
-                          ? zh.certs.issuerManual
-                          : zh.certs.issuerUnknown,
+                    detailCert.acmeProvider === 'cf-dns01'
+                      ? zh.certs.issuerCfDns
+                      : detailCert.issuer === 'acme'
+                        ? zh.certs.issuerAcme
+                        : detailCert.issuer === 'selfsigned'
+                          ? zh.certs.issuerSelfsigned
+                          : detailCert.issuer === 'manual'
+                            ? zh.certs.issuerManual
+                            : zh.certs.issuerUnknown,
                 },
                 {
                   key: zh.certs.colExpiry,

@@ -6,11 +6,13 @@ import {
   certificateListResponseSchema,
   certificateMaterialResponseSchema,
   certificateResponseSchema,
+  issueCfDnsCertificateRequestSchema,
   type AgentEnvelope,
   type Certificate,
   type CertificateBindResponse,
   type CertificateMaterialResponse,
   type CreateCertificateRequest,
+  type IssueCfDnsCertificateRequest,
   type TaskResponse,
   type UpdateCertificateRequest,
 } from '@khc/contracts';
@@ -132,6 +134,27 @@ export async function createCertificate(input: CreateCertificateRequest): Promis
   const body = await apiRequest('/api/v1/certs', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+  return certificateResponseSchema.parse(body).certificate;
+}
+
+/** 控制面直连 Cloudflare DNS-01 签发全局证书（无需节点安装 acme.sh）。 */
+export async function issueCfDnsCertificate(
+  input: IssueCfDnsCertificateRequest,
+): Promise<Certificate> {
+  const payload = issueCfDnsCertificateRequestSchema.parse(input);
+  const body = await apiRequest('/api/v1/certs/issue-dns01', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return certificateResponseSchema.parse(body).certificate;
+}
+
+/** 控制面一键续期 Cloudflare DNS-01 证书。 */
+export async function renewCertificate(id: string): Promise<Certificate> {
+  const body = await apiRequest(`/api/v1/certs/${encodeURIComponent(id)}/renew`, {
+    method: 'POST',
+    body: '{}',
   });
   return certificateResponseSchema.parse(body).certificate;
 }

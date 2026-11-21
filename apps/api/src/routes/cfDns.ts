@@ -85,7 +85,7 @@ interface StoredAccounts {
   accounts: StoredAccount[];
 }
 
-interface AccountRuntime {
+export interface CfAccountRuntime {
   id: string;
   name: string;
   accountName: string | null;
@@ -94,6 +94,8 @@ interface AccountRuntime {
   zones: CfDnsZoneRef[];
   enabledZoneIds: string[];
 }
+
+type AccountRuntime = CfAccountRuntime;
 
 interface ManagedRecord {
   id: string;
@@ -127,7 +129,7 @@ async function loadConfig(deps: AppDeps, env: Env): Promise<CfDnsConfig | null> 
 }
 
 /** 读多账号配置；没有则把旧单 Zone 配置投影成一条只读账号（删除/编辑时会迁移）。 */
-async function loadAccounts(deps: AppDeps, env: Env): Promise<AccountRuntime[]> {
+export async function loadCfAccounts(deps: AppDeps, env: Env): Promise<AccountRuntime[]> {
   if (!env.MASTER_ENC_KEY) throw misconfigured('MASTER_ENC_KEY 未配置');
   const file = (await deps.settings.getValue(CF_DNS_ACCOUNTS_KEY)) as StoredAccounts | null;
   if (file && Array.isArray(file.accounts) && file.accounts.length > 0) {
@@ -169,6 +171,8 @@ async function loadAccounts(deps: AppDeps, env: Env): Promise<AccountRuntime[]> 
     },
   ];
 }
+
+const loadAccounts = loadCfAccounts;
 
 async function persistAccounts(deps: AppDeps, env: Env, accounts: AccountRuntime[]): Promise<void> {
   if (!env.MASTER_ENC_KEY) throw misconfigured('MASTER_ENC_KEY 未配置');

@@ -7,9 +7,12 @@ import {
   certificateMaterialResponseSchema,
   certificateResponseSchema,
   createCertificateRequestSchema,
+  issueCfDnsCertificateRequestSchema,
   updateCertificateRequestSchema,
 } from '@khc/contracts';
-import type { AppBindings, AppDeps } from '../types';
+import type { AppBindings, AppDeps, Env } from '../types';
+import { issueAcmeDns01 } from '../lib/acme-dns01';
+import { loadCfAccounts, type CfAccountRuntime } from './cfDns';
 import { newIdempotencyKey } from '../lib/crypto';
 import { AppError, badRequest, notFound } from '../lib/errors';
 import { assertSecureChannelForRawSecrets } from '../lib/secure-channel';
@@ -29,6 +32,20 @@ function assertPem(certPem: string, keyPem: string): void {
   if (!/BEGIN (RSA |EC )?PRIVATE KEY/.test(keyPem)) {
     throw badRequest('私钥 PEM 格式不正确', { keyPem: '缺少 BEGIN PRIVATE KEY' });
   }
+}
+
+async function resolveCfAccount(deps: AppDeps, env: Env, accountId: string): Promise<CfAccountRuntime> {
+  const accounts = await loadCfAccounts(deps, env);
+  const found = accounts.find((item) => item.id === accountId);
+  if (!found || !found.enabled) {
+    throw badRequest('所选 Cloudflare 账号不存在或已停用');
+  }
+  const enabledSet = new Set(found.enabledZoneIds);
+  const enabledZones = found.zones.filter((zone) => enabledSet.has(zone.id));
+  return {
+    ...found,
+    zones: enabledZones.length > 0 ? enabledZones : found.zones,
+  };
 }
 
 export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
@@ -66,6 +83,78 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
       detail: { id: certificate.id, issuer: certificate.issuer, domains: certificate.domains },
     });
     return c.json(certificateResponseSchema.parse({ certificate }), 201);
+  });
+
+  // 控制面直连 Cloudflare DNS-01 签发全球证书（支持单域名与 *. 通配符，无需节点 acme.sh）
+  router.post('/certs/issue-dns01', async (c) => {
+    const body = await parseJsonBody(c, issueCfDnsCertificateRequestSchema);
+    const account = await resolveCfAccount(deps, c.env, body.accountId);
+    const material = await issueAcmeDns01({
+      domains: body.domains,
+      cfToken: account.token,
+      zones: account.zones,
+      ca: body.ca,
+      acmeFetch: deps.acmeFetch,
+      cfFetch: deps.cfFetch,
+      sleep: deps.acmeSleep,
+    });
+    const certificate = await deps.certs.create({
+      name: body.name,
+      domains: material.domains,
+      issuer: 'acme',
+      notAfter: material.notAfter,
+      certPem: material.certPem,
+      keyPem: material.keyPem,
+      sourceNodeId: null,
+      acme: {
+        provider: 'cf-dns01',
+        credentialKey: account.id,
+        ca: body.ca,
+        keyType: 'ec',
+      },
+    });
+    await deps.audit.log({
+      actor: c.get('user').name,
+      action: 'cert.issue_dns01',
+      detail: { id: certificate.id, accountId: account.id, domains: certificate.domains, ca: body.ca },
+    });
+    return c.json(certificateResponseSchema.parse({ certificate }), 201);
+  });
+
+  // 控制面直接续期 CF DNS-01 证书（替换材料并更新到期时间）
+  router.post('/certs/:id/renew', async (c) => {
+    const id = c.req.param('id');
+    const existing = await deps.certs.get(id);
+    if (!existing) throw notFound('证书不存在');
+    if (existing.acmeProvider !== 'cf-dns01' || !existing.acmeCredentialKey) {
+      throw badRequest('仅控制面 Cloudflare DNS-01 签发的证书支持通过此接口续期');
+    }
+    const account = await resolveCfAccount(deps, c.env, existing.acmeCredentialKey);
+    const ca =
+      existing.acmeCa === 'letsencrypt_staging' ? 'letsencrypt_staging' : 'letsencrypt';
+    const material = await issueAcmeDns01({
+      domains: existing.domains,
+      cfToken: account.token,
+      zones: account.zones,
+      ca,
+      acmeFetch: deps.acmeFetch,
+      cfFetch: deps.cfFetch,
+      sleep: deps.acmeSleep,
+    });
+    const certificate = await deps.certs.update(id, {
+      certPem: material.certPem,
+      keyPem: material.keyPem,
+      notAfter: material.notAfter,
+      domains: material.domains,
+      issuer: 'acme',
+    });
+    if (!certificate) throw notFound('证书不存在');
+    await deps.audit.log({
+      actor: c.get('user').name,
+      action: 'cert.renew',
+      detail: { id, domains: certificate.domains, notAfter: certificate.notAfter },
+    });
+    return c.json(certificateResponseSchema.parse({ certificate }));
   });
 
   // 续期成功后用新材料替换同一条记录（名称/来源节点/ACME 参数不变）

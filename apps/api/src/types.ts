@@ -61,6 +61,9 @@ export interface AppDeps {
   agent: AgentClient;
   /** CF DNS 集成的可注入 fetch（测试 mock；生产缺省用全局 fetch，不触达真实 CF API） */
   cfFetch?: import('./lib/cf-dns').CfFetch;
+  /** ACME DNS-01 签发/续期的可注入 fetch 与等待函数（测试 mock） */
+  acmeFetch?: import('./lib/acme-dns01').AcmeFetch;
+  acmeSleep?: import('./lib/acme-dns01').AcmeSleep;
 }
 
 export type AppBindings = {

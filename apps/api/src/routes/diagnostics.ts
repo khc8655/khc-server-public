@@ -186,8 +186,13 @@ export function diagnosticsRoutes(deps: AppDeps): Hono<AppBindings> {
       certRows,
     );
 
-    // acme.sh 缺失只在节点确实有 ACME 证书时才算失败；否则降为提示（3A）。
-    const hasAcmeCert = relevantCerts.some((cert) => cert.issuer === 'acme');
+    // acme.sh 缺失只在节点确实有「节点本地 ACME」证书时才算失败；控制面全局 DNS-01 证书与非 ACME 场景降为提示。
+    const hasAcmeCert = relevantCerts.some(
+      (cert) =>
+        cert.issuer === 'acme' &&
+        cert.sourceNodeId === node.id &&
+        cert.acmeProvider !== 'cf-dns01',
+    );
     const checks = evaluateDiagnostics({
       node: { lastSeenAt: node.lastSeenAt },
       state: adjustAcmeProblems(state, hasAcmeCert),
