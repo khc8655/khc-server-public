@@ -250,7 +250,7 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
       '203.0.113.10',
     );
     expect(
-      (within(dialog).getByLabelText('接入地址（自动生成）') as HTMLInputElement).value,
+      (within(dialog).getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
     ).toBe('http://203.0.113.10:8880');
 
     await userEvent.click(within(dialog).getByRole('button', { name: '域名（HTTPS）' }));
@@ -259,9 +259,9 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     expect((within(dialog).getByLabelText('当前域名') as HTMLInputElement).value).toBe(
       'agent.example.com',
     );
-    expect((within(dialog).getByLabelText('HTTPS 端口') as HTMLSelectElement).value).toBe('443');
+    expect((within(dialog).getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('443');
     expect(
-      (within(dialog).getByLabelText('接入地址（自动生成）') as HTMLInputElement).value,
+      (within(dialog).getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
     ).toBe('https://agent.example.com');
 
     await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));

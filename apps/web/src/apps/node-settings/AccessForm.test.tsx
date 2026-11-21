@@ -129,7 +129,7 @@ describe('AccessForm 纯函数', () => {
   it('一键发布与 Agent 自己抢 443 时不可提交；改用 8443 后可提交', () => {
     const clash = draft({ autoPublish: true, domainPort: '443' });
     expect(accessDraftIssue(clash)).toBe(
-      '自动发布要把 443 留给 Caddy：请把 HTTPS 端口改为 8443，或取消自动发布',
+      '自动发布要把 443 留给 Caddy：请把 Agent 监听端口改为 8443，或取消自动发布',
     );
     expect(isAccessDraftSubmittable(clash)).toBe(false);
     expect(isAccessDraftSubmittable({ ...clash, domainPort: '8443' })).toBe(true);

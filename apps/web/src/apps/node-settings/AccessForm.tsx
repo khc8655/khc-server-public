@@ -617,6 +617,22 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                 label={zh.access.autoPublishLabel}
                 description={zh.access.autoPublishHelp}
               />
+              {draft.autoPublish && draft.domainPort === '443' ? (
+                <Stack gap={2}>
+                  <Banner
+                    tone="warn"
+                    title={zh.access.publishPortConflictTitle}
+                    description={zh.access.publishPortConflictHint}
+                  />
+                  <Row gap={2}>
+                    <Button
+                      label={zh.access.publishPortConflictCta}
+                      size="sm"
+                      onClick={() => update({ domainPort: '8443' })}
+                    />
+                  </Row>
+                </Stack>
+              ) : null}
               {draft.autoPublish ? (
                 <Field
                   id="access-upstream-port"
@@ -634,21 +650,16 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                   />
                 </Field>
               ) : null}
-              {draft.autoPublish && draft.domainPort === '443' ? (
-                <Stack gap={2}>
-                  <Banner
-                    tone="warn"
-                    title={zh.access.publishPortConflictTitle}
-                    description={zh.access.publishPortConflictHint}
+              {draft.autoPublish && domainReady ? (
+                <Field id="access-publish-target" label={zh.access.publishTargetLabel} help={zh.access.publishTargetHelp}>
+                  <TextInput
+                    id="access-publish-target"
+                    value={`${buildDomainEndpoint(normalizedDomain, '443')} → 127.0.0.1:${draft.upstreamPort}`}
+                    mono
+                    readOnly
+                    onChange={() => {}}
                   />
-                  <Row gap={2}>
-                    <Button
-                      label={zh.access.publishPortConflictCta}
-                      size="sm"
-                      onClick={() => update({ domainPort: '8443' })}
-                    />
-                  </Row>
-                </Stack>
+                </Field>
               ) : null}
             </Stack>
           ) : null}

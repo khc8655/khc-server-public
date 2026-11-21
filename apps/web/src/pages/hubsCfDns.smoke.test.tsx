@@ -287,9 +287,9 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
 
-    expect((screen.getByLabelText('HTTPS 端口') as HTMLSelectElement).value).toBe('443');
+    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('443');
     expect(
-      (screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value,
+      (screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
     ).toBe('https://manual.example.com');
 
     await submitCreate();
@@ -335,7 +335,7 @@ describe('添加节点：统一接入表单', () => {
     expect(screen.queryByRole('button', { name: '已有解析记录' })).toBeNull();
 
     await userEvent.type(await screen.findByLabelText('域名'), 'app.other.net');
-    expect((screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
       'https://app.other.net',
     );
 
@@ -379,9 +379,9 @@ describe('添加节点：统一接入表单', () => {
     // 有账户时默认「已有解析记录」，可显式切到手填。
     await userEvent.click(await screen.findByRole('button', { name: '手动输入域名' }));
     await userEvent.type(await screen.findByLabelText('域名'), 'custom.example.org');
-    await userEvent.selectOptions(screen.getByLabelText('HTTPS 端口'), '8443');
+    await userEvent.selectOptions(screen.getByLabelText('Agent 监听端口'), '8443');
 
-    expect((screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
       'https://custom.example.org:8443',
     );
 
@@ -443,7 +443,7 @@ describe('添加节点：统一接入表单', () => {
       expect((screen.getByLabelText('Zone') as HTMLSelectElement).value).toBe('z1');
     });
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
-    expect((screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
       'https://app.example.com',
     );
 
@@ -619,7 +619,7 @@ describe('添加节点：统一接入表单', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '改用 8443' }));
     expect(save().disabled).toBe(false);
-    expect((screen.getByLabelText('HTTPS 端口') as HTMLSelectElement).value).toBe('8443');
+    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('8443');
     expect(screen.queryByText('443 已被节点自己占用')).toBeNull();
   });
 
