@@ -215,7 +215,10 @@ export function SiteDrawer({
     form.sourcePeer && sourcePeerHost && upstreamHost && upstreamHost !== sourcePeerHost,
   );
   const [customTarget, setCustomTarget] = useState(
-    () => !peers.some((peer) => peer.host === upstreamHost) && upstreamHost !== '127.0.0.1',
+    () =>
+      Boolean(upstreamHost) &&
+      !peers.some((peer) => peer.host === upstreamHost) &&
+      upstreamHost !== '127.0.0.1',
   );
   const selectedTarget = customTarget
     ? 'custom'
