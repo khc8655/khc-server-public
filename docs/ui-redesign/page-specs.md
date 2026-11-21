@@ -149,7 +149,7 @@
   3. 「本机监听端口」卡片仅在存在未发布端口（`listeningPorts.length > 0`）时渲染（R2），行点击复用 `SiteDrawer` 预填 `upstreams`；下方保留外部配置接管卡与「高级」导入/导出/清空；
   4. 「证书」分段展示本节点关联证书并注明「仅统计证书库中的证书，Caddy 自动签发的不计」（R6）。
 
-- **抽屉与外部接管**：保留 `SiteDrawer`（基本 / 类型 / TLS + 高级折叠，内联删除无 Dialog）、主 Caddyfile 外部配置扫描接管卡与批量 JSON 导入/导出/清空；Caddy 服务状态抽屉收在页头次操作，安装由组件 capabilities 驱动（L2）。
+- **抽屉与外部接管**：保留 `SiteDrawer`（手填本机端口 / Peer / 自定义上游，并给出「安装并发布应用」三步向导跳转，内联删除无 Dialog）、独立 `InstallAndPublishDrawer` 三步向导（页头次操作 [安装并发布应用]：选应用 → 配参数/域名/端口/TLS → 安装并自动发布为 Caddy 站点）、主 Caddyfile 外部配置扫描接管卡与批量 JSON 导入/导出/清空；Caddy 服务状态抽屉收在页头次操作，安装由组件 capabilities 驱动（L2）。
 - **命名**：页面标题「应用」；类型：反代 / 静态 / 重定向。
 
 ### 2.2a `/hubs/:id/services` 对外服务（302 过渡）

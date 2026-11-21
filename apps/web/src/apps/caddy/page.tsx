@@ -89,6 +89,7 @@ import {
   type SiteImportResult,
 } from './siteTransfer';
 import { SiteDrawer } from './SiteDrawer';
+import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
 import { InstalledAppsCard } from '../hosted-apps/InstalledAppsCard';
 import { installTaskText } from '../installTaskText';
 import {
@@ -490,6 +491,7 @@ export default function SitesPage() {
   const [sitesImportError, setSitesImportError] = useState<string | null>(null);
   const [sitesPreview, setSitesPreview] = useState<SiteImportResult | null>(null);
   const [sitesSaving, setSitesSaving] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const exportSites = () => {
     setSitesExportError(null);
@@ -1150,6 +1152,10 @@ export default function SitesPage() {
       openCreate();
       return;
     }
+    if (ref.id === 'app.installPublish') {
+      setWizardOpen(true);
+      return;
+    }
     if (ref.id === 'site.clear') {
       if (config.sites.length === 0) return;
       if (unreachable) {
@@ -1312,7 +1318,13 @@ export default function SitesPage() {
         }
         sync={sync}
         primaryAction={segment === 'certs' ? undefined : action('site.create')}
-        secondaryActions={segment === 'certs' ? undefined : [action('caddy.service')]}
+        secondaryActions={
+          segment === 'certs'
+            ? undefined
+            : segment === 'apps'
+              ? [action('app.installPublish'), action('caddy.service')]
+              : [action('caddy.service')]
+        }
         actionsDisabled={!channels.canApply}
         actionsDisabledReason={zh.channels.controlUnavailableDesc}
         onAction={handlePageAction}
@@ -1608,6 +1620,25 @@ export default function SitesPage() {
           onClose={closeDrawer}
           onSave={(apply) => void save(apply)}
           onDelete={deleteFromDrawer}
+          onOpenInstallWizard={() => {
+            closeDrawer();
+            setWizardOpen(true);
+          }}
+        />
+      ) : null}
+
+      {wizardOpen ? (
+        <InstallAndPublishDrawer
+          hubId={hubId}
+          hubName={hubName}
+          node={hubQuery.data}
+          certificates={certs}
+          existingSites={config.sites}
+          offlineReason={writeDisabledReason}
+          onClose={() => setWizardOpen(false)}
+          onPublished={async () => {
+            await Promise.all([invalidateConfig(), invalidateState()]);
+          }}
         />
       ) : null}
 

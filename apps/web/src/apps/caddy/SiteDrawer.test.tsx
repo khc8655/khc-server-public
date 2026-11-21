@@ -96,7 +96,13 @@ function stubApi() {
   );
 }
 
-function Harness({ initial }: { initial?: Partial<SiteFormState> }) {
+function Harness({
+  initial,
+  onOpenInstallWizard,
+}: {
+  initial?: Partial<SiteFormState>;
+  onOpenInstallWizard?: () => void;
+}) {
   const [form, setForm] = useState<SiteFormState>(() => ({ ...createForm(), ...initial }));
   return (
     <SiteDrawer
@@ -114,72 +120,55 @@ function Harness({ initial }: { initial?: Partial<SiteFormState> }) {
       onClose={() => {}}
       onSave={() => {}}
       onDelete={async () => {}}
+      onOpenInstallWizard={onOpenInstallWizard}
     />
   );
 }
 
-function renderDrawer(initial?: Partial<SiteFormState>) {
+function renderDrawer(initial?: Partial<SiteFormState>, onOpenInstallWizard?: () => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Harness initial={initial} />
+      <Harness initial={initial} onOpenInstallWizard={onOpenInstallWizard} />
     </QueryClientProvider>,
   );
 }
 
-describe('发布应用 → 上游来源 = 从应用目录安装', () => {
+describe('站点抽屉上游配置（S2 简化版）', () => {
   beforeEach(stubApi);
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
   });
 
-  it('本机目标才有安装入口，装完自动把清单端口填成上游', async () => {
-    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 });
+  it('本机目标直接填端口，不内嵌安装组件并可跳转到「安装并发布应用」向导', async () => {
+    const onOpenInstallWizard = vi.fn();
+    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 }, onOpenInstallWizard);
 
-    // 目标选「本机」后才出现上游来源；默认手填时没有「应用」下拉。
-    await userEvent.selectOptions(screen.getByLabelText('目标来源'), 'local');
-    const source = await screen.findByLabelText('上游来源');
-    expect(screen.queryByLabelText('应用')).toBeNull();
+    expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
+    expect(screen.queryByLabelText('上游来源')).toBeNull();
 
-    await userEvent.selectOptions(source, 'app');
-    const picker = (await screen.findByLabelText('应用')) as HTMLSelectElement;
-    await waitFor(() => {
-      expect(Array.from(picker.options).map((option) => option.value)).toContain('magpie');
-    });
-
-    await userEvent.selectOptions(picker, 'magpie');
-    // 对外地址用当前站点域名 + 对外端口预填，避免装出一个指向 localhost 的登录地址。
-    const publicUrl = screen.getByLabelText('Caddy 发布后的对外地址（可选）') as HTMLInputElement;
-    expect(publicUrl.value).toBe('https://svc.example.com:2083');
-
-    await userEvent.type(screen.getByLabelText('密码'), 's3cret');
-    await userEvent.click(screen.getByRole('button', { name: '安装 magpie 到本机' }));
-    await waitFor(() => expect(polls).toBeGreaterThan(0));
-    await userEvent.click(screen.getByRole('button', { name: '刷新进度' }));
-
-    // 装完：上游变成 127.0.0.1:3430，页面上给一条已经填好的确认。
-    await waitFor(() => {
-      expect((screen.getByLabelText('目标端口') as HTMLInputElement).value).toBe('3430');
-    });
+    const portInput = screen.getByLabelText('目标端口') as HTMLInputElement;
+    await userEvent.clear(portInput);
+    await userEvent.type(portInput, '3430');
     expect(screen.getByText('127.0.0.1:3430')).toBeTruthy();
-    expect(await screen.findByText(/magpie 已装好（127\.0\.0\.1:3430）/)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
+    expect(onOpenInstallWizard).toHaveBeenCalledTimes(1);
   });
 
-  it('目标指向 Peer 时不提供安装入口', async () => {
-    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 });
+  it('目标指向 Peer 时隐藏向导引导并填充 Peer 上游', async () => {
+    const onOpenInstallWizard = vi.fn();
+    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 }, onOpenInstallWizard);
     await userEvent.selectOptions(screen.getByLabelText('目标来源'), '10.20.30.40');
 
-    await waitFor(() => {
-      expect(screen.queryByLabelText('上游来源')).toBeNull();
-    });
-    expect(screen.getByText(/安装只能落在本机/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
+    expect(screen.getByText(/10\.20\.30\.40:/)).toBeTruthy();
   });
 
-  it('新建站点默认选中本机（127.0.0.1），直接展示应用目录入口；已有自定义上游保持 custom', () => {
+  it('新建站点默认选中本机（127.0.0.1）；已有自定义上游保持 custom', () => {
     renderDrawer({ domains: 'new.example.com', listenPort: 2083 });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
-    expect(screen.getByLabelText('上游来源')).toBeTruthy();
 
     cleanup();
 
@@ -190,6 +179,6 @@ describe('发布应用 → 上游来源 = 从应用目录安装', () => {
       upstreams: '192.168.1.10:8080',
     });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('custom');
-    expect(screen.queryByLabelText('上游来源')).toBeNull();
+    expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
   });
 });

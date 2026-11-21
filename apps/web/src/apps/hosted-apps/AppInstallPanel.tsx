@@ -16,6 +16,7 @@ import { appManifestsQueryOptions } from '../../data/appManifests';
 import { Banner, Button, Field, InlineError, LogViewer, NumberInput, Select, Stack, TextInput, Toggle } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import {
+  declaredPort,
   defaultValues,
   taskAccess,
   toCatalogRecipe,
@@ -23,16 +24,7 @@ import {
   type CatalogRecipe,
 } from './recipes';
 
-/** 清单声明的本机端口（取参数默认值或固定 port）。 */
-export function declaredPort(recipe: CatalogRecipe): number | null {
-  const decl = recipe.manifest.publish;
-  if (!decl) return null;
-  const raw = decl.portParam
-    ? recipe.params.find((param) => param.key === decl.portParam)?.default
-    : decl.port;
-  const port = typeof raw === 'number' ? raw : Number(raw);
-  return Number.isInteger(port) && port > 0 ? port : null;
-}
+export { declaredPort };
 
 export function AppInstallPanel({
   hubId,
