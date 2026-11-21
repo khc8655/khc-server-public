@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import type { Certificate, CreateCertificateRequest, TaskResponse } from '@khc/contracts';
+import type {
+  Certificate,
+  CertificateSyncTargetResult,
+  CreateCertificateRequest,
+  TaskResponse,
+} from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { hubStateQueryOptions, hubsQueryOptions } from '../../data/queries';
 import { caddyConfigQueryOptions } from '../../data/sites';
@@ -15,9 +20,12 @@ import {
   extractTaskCertificateResult,
   fetchCertificateMaterial,
   fetchCertificateTask,
+  fetchCertificateUsages,
   issueCfDnsCertificate,
+  patchCertificateAutoSync,
   renewCertificate,
   runCertificateAction,
+  syncCertificate,
   updateCertificate,
   type CertActionEnvelope,
 } from '../../data/certs';
@@ -50,6 +58,7 @@ import {
   Tag,
   Textarea,
   TextInput,
+  Toggle,
   downloadTextFile,
   useToast,
   type ColumnDef,
@@ -186,8 +195,18 @@ export default function CertificatesPage({
   const [bindError, setBindError] = useState<string | null>(null);
   const [renewError, setRenewError] = useState<string | null>(null);
   const [renewing, setRenewing] = useState(false);
+  const [autoSyncBusy, setAutoSyncBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncResults, setSyncResults] = useState<CertificateSyncTargetResult[] | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const formRef = useRef<IssueForm | null>(null);
   formRef.current = form;
+
+  const usagesQuery = useQuery({
+    queryKey: ['certs', detailCert?.id, 'usages'],
+    queryFn: () => fetchCertificateUsages(detailCert!.id),
+    enabled: Boolean(detailCert),
+  });
 
   const cfAccountsQuery = useQuery({
     queryKey: ['cf-dns', 'accounts'],
@@ -306,6 +325,8 @@ export default function CertificatesPage({
     setBindError(null);
     setRenewError(null);
     setRenewTask(null);
+    setSyncResults(null);
+    setSyncError(null);
     setDrawerSearch(`cert:${encodeURIComponent(cert.id)}`, false);
   };
 
@@ -316,6 +337,8 @@ export default function CertificatesPage({
     setBindError(null);
     setRenewError(null);
     setRenewTask(null);
+    setSyncResults(null);
+    setSyncError(null);
     setDrawerSearch(undefined);
   };
 
@@ -475,14 +498,54 @@ export default function CertificatesPage({
     await bindCertToNode(updated, nodeId);
   };
 
+  const toggleAutoSync = async (cert: Certificate, autoSync: boolean) => {
+    setAutoSyncBusy(true);
+    setSyncError(null);
+    try {
+      const updated = await patchCertificateAutoSync(cert.id, autoSync);
+      await queryClient.invalidateQueries({ queryKey: ['certs'] });
+      setDetailCert(updated);
+      toast.show({ message: zh.certs.autoSyncSaved });
+    } catch (error) {
+      setSyncError(message(error, zh.certs.actionFailed));
+    } finally {
+      setAutoSyncBusy(false);
+    }
+  };
+
+  const runSyncNow = async (cert: Certificate) => {
+    setSyncBusy(true);
+    setSyncError(null);
+    try {
+      const results = await syncCertificate(cert.id);
+      setSyncResults(results);
+      const okCount = results.filter((item) => item.status === 'synced').length;
+      const failCount = results.length - okCount;
+      if (results.length > 0) {
+        toast.show({
+          message:
+            failCount === 0
+              ? fmt(zh.certs.syncAllOk, { ok: String(okCount) })
+              : fmt(zh.certs.syncPartial, { ok: String(okCount), fail: String(failCount) }),
+        });
+      }
+      await queryClient.invalidateQueries({ queryKey: ['certs', cert.id, 'usages'] });
+    } catch (error) {
+      setSyncError(message(error, zh.certs.actionFailed));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   const startRenew = async (cert: Certificate) => {
     setRenewError(null);
     setRenewing(true);
     try {
       if (cert.acmeProvider === 'cf-dns01') {
-        const updated = await renewCertificate(cert.id);
+        const { certificate: updated, syncResults: autoResults } = await renewCertificate(cert.id);
         await queryClient.invalidateQueries({ queryKey: ['certs'] });
         setDetailCert(updated);
+        if (autoResults) setSyncResults(autoResults);
         toast.show({ message: zh.certs.renewSuccess });
         return;
       }
@@ -1332,6 +1395,110 @@ export default function CertificatesPage({
                 },
               ]}
             />
+            <Card title={zh.certs.usagesTitle}>
+              <Stack gap={3}>
+                <Field
+                  id="cert-auto-sync"
+                  label={zh.certs.autoSyncLabel}
+                  help={zh.certs.autoSyncHelp}
+                  variant="row"
+                >
+                  <Toggle
+                    checked={Boolean(detailCert.autoSync)}
+                    disabled={autoSyncBusy}
+                    label={zh.certs.autoSyncLabel}
+                    onChange={(checked) => void toggleAutoSync(detailCert, checked)}
+                  />
+                </Field>
+                {usagesQuery.isLoading ? (
+                  <Skeleton height={36} />
+                ) : (usagesQuery.data ?? []).length === 0 ? (
+                  <span className="ui-field-help">{zh.certs.usagesEmpty}</span>
+                ) : (
+                  <Stack gap={2}>
+                    {(usagesQuery.data ?? []).map((item) => (
+                      <Row gap={2} justify="between" key={item.nodeId}>
+                        <span className="mono">{item.nodeName}</span>
+                        <Row gap={1}>
+                          {item.apps.map((app) => (
+                            <Tag key={app} label={app} />
+                          ))}
+                          {item.isSourceNode ? <Tag label={zh.certs.usagesSourceTag} /> : null}
+                        </Row>
+                      </Row>
+                    ))}
+                  </Stack>
+                )}
+                <Row gap={2}>
+                  <Button
+                    label={zh.certs.syncNow}
+                    size="sm"
+                    icon="refresh"
+                    loading={syncBusy}
+                    disabled={(usagesQuery.data ?? []).length === 0 && !usagesQuery.isError}
+                    onClick={() => void runSyncNow(detailCert)}
+                  />
+                </Row>
+                {syncError ? <InlineError message={syncError} /> : null}
+                {syncResults && syncResults.length > 0 ? (
+                  <Stack gap={2}>
+                    {(() => {
+                      const okCount = syncResults.filter((item) => item.status === 'synced').length;
+                      const failCount = syncResults.length - okCount;
+                      return (
+                        <Banner
+                          tone={failCount === 0 ? 'ok' : 'warn'}
+                          title={
+                            failCount === 0
+                              ? fmt(zh.certs.syncAllOk, { ok: String(okCount) })
+                              : fmt(zh.certs.syncPartial, {
+                                  ok: String(okCount),
+                                  fail: String(failCount),
+                                })
+                          }
+                          action={
+                            failCount > 0 ? (
+                              <Button
+                                label={zh.certs.syncRetry}
+                                size="sm"
+                                loading={syncBusy}
+                                onClick={() => void runSyncNow(detailCert)}
+                              />
+                            ) : undefined
+                          }
+                        />
+                      );
+                    })()}
+                    {syncResults.map((item) => (
+                      <Row gap={2} justify="between" key={item.nodeId}>
+                        <Row gap={2}>
+                          <span className="mono">{item.nodeName}</span>
+                          <Badge
+                            tone={
+                              item.status === 'synced'
+                                ? 'ok'
+                                : item.status === 'offline'
+                                  ? 'warn'
+                                  : 'danger'
+                            }
+                            label={
+                              item.status === 'synced'
+                                ? zh.certs.syncStatusSynced
+                                : item.status === 'offline'
+                                  ? zh.certs.syncStatusOffline
+                                  : zh.certs.syncStatusError
+                            }
+                          />
+                        </Row>
+                        <span className="ui-text-caption">
+                          {item.error ?? item.appliedApps.join(', ')}
+                        </span>
+                      </Row>
+                    ))}
+                  </Stack>
+                ) : null}
+              </Stack>
+            </Card>
             <Card title={zh.certs.bindTitle}>
               <Stack gap={3}>
                 <Field id="cert-bind-node" label={zh.fields.node} help={zh.certs.bindHelp}>

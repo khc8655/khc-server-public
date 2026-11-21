@@ -989,6 +989,8 @@ export const certificateSchema = z.object({
   acmeKeyType: z.enum(['rsa', 'ec']).nullable().optional(),
   /** 能一键续期：来源节点 + provider + 凭据键齐全 */
   renewable: z.boolean().optional(),
+  /** 续期/更新后自动同步到引用此证书的在线节点 */
+  autoSync: z.boolean().optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 });
@@ -1052,7 +1054,43 @@ export const certificateBindResponseSchema = z.object({
 export type CertificateBindResponse = z.infer<typeof certificateBindResponseSchema>;
 
 
-export const certificateResponseSchema = z.object({ certificate: certificateSchema });
+export const patchCertificateRequestSchema = z.object({
+  autoSync: z.boolean(),
+});
+export type PatchCertificateRequest = z.infer<typeof patchCertificateRequestSchema>;
+
+export const certificateUsageItemSchema = z.object({
+  nodeId: z.string().min(1),
+  nodeName: z.string(),
+  apps: z.array(z.string()),
+  isSourceNode: z.boolean(),
+});
+export type CertificateUsageItem = z.infer<typeof certificateUsageItemSchema>;
+
+export const certificateUsagesResponseSchema = z.object({
+  usages: z.array(certificateUsageItemSchema),
+});
+export type CertificateUsagesResponse = z.infer<typeof certificateUsagesResponseSchema>;
+
+export const certificateSyncTargetResultSchema = z.object({
+  nodeId: z.string().min(1),
+  nodeName: z.string(),
+  status: z.enum(['synced', 'offline', 'error']),
+  appliedApps: z.array(z.string()),
+  tlsBound: z.boolean(),
+  error: z.string().nullable(),
+});
+export type CertificateSyncTargetResult = z.infer<typeof certificateSyncTargetResultSchema>;
+
+export const certificateSyncResponseSchema = z.object({
+  results: z.array(certificateSyncTargetResultSchema),
+});
+export type CertificateSyncResponse = z.infer<typeof certificateSyncResponseSchema>;
+
+export const certificateResponseSchema = z.object({
+  certificate: certificateSchema,
+  syncResults: z.array(certificateSyncTargetResultSchema).optional(),
+});
 export type CertificateResponse = z.infer<typeof certificateResponseSchema>;
 export const certificateListResponseSchema = z.object({ certificates: z.array(certificateSchema) });
 export type CertificateListResponse = z.infer<typeof certificateListResponseSchema>;

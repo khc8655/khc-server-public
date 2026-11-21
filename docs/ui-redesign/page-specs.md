@@ -235,7 +235,7 @@
 | 实时通道卡 / OpsSummary / 诊断卡 / 3 操作按钮 | `/ops` | 状态带 + 对象表 + 唯一抽屉 | 重做（已落地） |
 | Agent 卡 / ModeCard / 备份导出 / 备份导入 / 导入结果 / 证书摘要 | `/settings`（节点） | 节点设置 3 分区；证书摘要移到站点页分段；liveEndpoint 表单删除（域名自动推导） | 7 卡纵列 → 分区（已落地） |
 | 删除节点 | `/hubs` 行内「更多操作」 | 节点设置 · 危险区 | 入口回到列表行（已落地；L3 + 删除时总会生成卸载脚本） |
-| 证书库 / 系统变量 | `/settings`（全局） | 不变 | 仅统一表格与抽屉规范 |
+| 证书库 / 系统变量 | `/settings`（全局） | `/settings?tab=certs` 等 | 保留统一表格/抽屉；新增面板 CF DNS-01 签发/续期与「续期后自动同步到关联 Hub」开关及同步回执（S3/S4） |
 | 添加节点接入表单（endpoint/Zone/子域名/隧道/自签） | `/hubs` 创建抽屉 | `/hubs` 创建抽屉 · `AccessForm` | 三模式统一表单；域名只选已有记录；Tunnel 选全局配置；IP 必须确认明文 |
 | 修改接入方式（域名/自定义二分） | `/hubs/:id/settings` | `/hubs/:id/settings` · `AccessForm` | 与添加节点共用；徽章按 `node.accessMode` |
 | CF DNS 记录只读列表 | `/settings?tab=cloudflare` | `/settings?tab=domain` | 分段更名「域名」；A/AAAA/CNAME 行内编辑 + L2 删除 |

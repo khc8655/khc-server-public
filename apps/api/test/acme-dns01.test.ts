@@ -329,8 +329,174 @@ describe('S3：控制面原生 ACME v2 + Cloudflare DNS-01', () => {
       ctx.env,
     );
     expect(renewRes.status).toBe(200);
-    const renewed = (await renewRes.json()) as { certificate: { id: string; renewable: boolean } };
+    const renewed = (await renewRes.json()) as {
+      certificate: { id: string; renewable: boolean; autoSync: boolean };
+      syncResults?: unknown[];
+    };
     expect(renewed.certificate.id).toBe(issued.certificate.id);
     expect(renewed.certificate.renewable).toBe(true);
+    expect(renewed.certificate.autoSync).toBe(false);
+    expect(renewed.syncResults).toBeUndefined();
+  });
+
+  it('S4：关联查询 / PATCH autoSync / 手动与续期自动同步到多节点（含离线节点部分失败回执）', async () => {
+    const mock = createMockAcmeAndCf({});
+    const ctx = makeTestContext(mock.cfFetch);
+    const { createApp } = await import('../src/app');
+    ctx.app = createApp({
+      nodes: ctx.nodes,
+      apps: ctx.apps,
+      audit: ctx.audit,
+      certs: ctx.certs,
+      settings: ctx.settings,
+      sshKeys: ctx.sshKeys,
+      appManifests: ctx.appManifests,
+      tunnels: ctx.tunnels,
+      agent: ctx.agentClient,
+      cfFetch: mock.cfFetch,
+      acmeFetch: mock.acmeFetch,
+      acmeSleep: async () => {},
+    });
+
+    const cookie = await loginAsAdmin(ctx);
+    const encToken = await encryptSecret(ctx.env.MASTER_ENC_KEY!, 'cf-token-real');
+    await ctx.settings.put('cf_dns_accounts', {
+      accounts: [
+        {
+          id: 'acc_cf1',
+          name: '主账号',
+          encToken,
+          enabled: true,
+          zones: [{ id: 'zone_1', name: 'example.com' }],
+          enabledZoneIds: ['zone_1'],
+        },
+      ],
+    });
+
+    // 准备 2 台域名/HTTPS 节点，一台在线、一台离线
+    const nodeOnline = await ctx.nodes.create({
+      name: 'hub-online',
+      endpoint: 'https://online.example.com',
+      accessMode: 'domain',
+      domain: 'online.example.com',
+      tokenEnc: await encryptSecret(ctx.env.MASTER_ENC_KEY!, 'tok-online'),
+    });
+    const nodeOffline = await ctx.nodes.create({
+      name: 'hub-offline',
+      endpoint: 'https://offline.example.com',
+      accessMode: 'domain',
+      domain: 'offline.example.com',
+      tokenEnc: await encryptSecret(ctx.env.MASTER_ENC_KEY!, 'tok-offline'),
+    });
+
+    const issueRes = await ctx.app.request(
+      '/api/v1/certs/issue-dns01',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          name: 'wild-sync',
+          domains: ['*.example.com'],
+          accountId: 'acc_cf1',
+        }),
+      },
+      ctx.env,
+    );
+    expect(issueRes.status).toBe(201);
+    const certId = ((await issueRes.json()) as { certificate: { id: string } }).certificate.id;
+
+    // 两个节点的应用配置都通过 $cert 引用此证书
+    await ctx.apps.put(nodeOnline.id, 'caddy-site', {
+      config: { sites: [{ name: 'a', domains: ['a.example.com'], tls: { mode: 'manual', cert: { $cert: certId } } }] },
+      schemaVersion: 1,
+      actor: 'test',
+    });
+    await ctx.apps.put(nodeOffline.id, 'caddy-site', {
+      config: { sites: [{ name: 'b', domains: ['b.example.com'], tls: { mode: 'manual', cert: { $cert: certId } } }] },
+      schemaVersion: 1,
+      actor: 'test',
+    });
+
+    // 1. 查询关联 Hub 与应用
+    const usagesRes = await ctx.app.request(
+      `/api/v1/certs/${certId}/usages`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(usagesRes.status).toBe(200);
+    const usagesBody = (await usagesRes.json()) as {
+      usages: Array<{ nodeId: string; nodeName: string; apps: string[] }>;
+    };
+    expect(usagesBody.usages.map((u) => `${u.nodeName}:${u.apps.join(',')}`)).toEqual([
+      'hub-offline:caddy-site',
+      'hub-online:caddy-site',
+    ]);
+
+    // 2. 手动触发同步：在线节点生效（已解析 $cert 写入 apply），离线节点返回 offline 回执且不阻断其他节点
+    ctx.agent.handler = async (_method, path, _body, targetNode) => {
+      if (targetNode?.id === nodeOffline.id) throw new Error('ECONNREFUSED');
+      if (path === '/apps/caddy-site/apply') return { status: 200, body: { ok: true, appliedRev: 1 } };
+      return { status: 200, body: { ok: true } };
+    };
+
+    const syncRes = await ctx.app.request(
+      `/api/v1/certs/${certId}/sync`,
+      { method: 'POST', headers: authHeaders(cookie), body: '{}' },
+      ctx.env,
+    );
+    expect(syncRes.status).toBe(200);
+    const syncBody = (await syncRes.json()) as {
+      results: Array<{ nodeName: string; status: string; appliedApps: string[]; error: string | null }>;
+    };
+    expect(syncBody.results).toEqual([
+      {
+        nodeId: nodeOffline.id,
+        nodeName: 'hub-offline',
+        status: 'offline',
+        appliedApps: [],
+        tlsBound: false,
+        error: '节点控制通道不可达',
+      },
+      {
+        nodeId: nodeOnline.id,
+        nodeName: 'hub-online',
+        status: 'synced',
+        appliedApps: ['caddy-site'],
+        tlsBound: false,
+        error: null,
+      },
+    ]);
+
+    // 3. 开启 autoSync 后再续期：自动下发并返回 syncResults
+    const patchRes = await ctx.app.request(
+      `/api/v1/certs/${certId}`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ autoSync: true }),
+      },
+      ctx.env,
+    );
+    expect(patchRes.status).toBe(200);
+    expect(((await patchRes.json()) as { certificate: { autoSync: boolean } }).certificate.autoSync).toBe(
+      true,
+    );
+
+    const reqCountBefore = ctx.agent.requests.length;
+    const autoRenewRes = await ctx.app.request(
+      `/api/v1/certs/${certId}/renew`,
+      { method: 'POST', headers: authHeaders(cookie), body: '{}' },
+      ctx.env,
+    );
+    expect(autoRenewRes.status).toBe(200);
+    const autoRenewBody = (await autoRenewRes.json()) as {
+      certificate: { autoSync: boolean };
+      syncResults?: Array<{ nodeName: string; status: string }>;
+    };
+    expect(autoRenewBody.certificate.autoSync).toBe(true);
+    expect(autoRenewBody.syncResults).toHaveLength(2);
+    expect(autoRenewBody.syncResults?.find((r) => r.nodeName === 'hub-online')?.status).toBe('synced');
+    expect(autoRenewBody.syncResults?.find((r) => r.nodeName === 'hub-offline')?.status).toBe('offline');
+    expect(ctx.agent.requests.length).toBeGreaterThan(reqCountBefore);
   });
 });

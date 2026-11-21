@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../app/router';
@@ -158,7 +158,7 @@ describe('OverviewPage（首页概览 · U2）', () => {
       }),
     );
 
-    const { container } = await renderOverview();
+    const { container, router } = await renderOverview();
     expect(await screen.findByText(`面板 ${PANEL_VERSION_LABEL}`)).toBeTruthy();
     expect(await screen.findByText('oracle-x86-2 · hermes')).toBeTruthy();
 
@@ -176,6 +176,12 @@ describe('OverviewPage（首页概览 · U2）', () => {
     expect(triageText).not.toContain('down-node ·');
 
     expect(screen.getByRole('heading', { name: '节点' })).toBeTruthy();
+
+    fireEvent.click(screen.getByText('wild-cert'));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/settings');
+      expect(router.state.location.search).toMatchObject({ tab: 'certs', drawer: 'cert:c1' });
+    });
   });
 
   it('R2：无 Peer、无应用、无待办时隐藏对应 KPI 与分诊条', async () => {

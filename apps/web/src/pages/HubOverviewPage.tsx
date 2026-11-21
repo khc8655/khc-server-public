@@ -159,7 +159,7 @@ export default function HubOverviewPage() {
           : cert.daysLeft === 0
             ? zh.overview.todoCertToday
             : fmt(zh.overview.todoCertExpiring, { days: cert.daysLeft }),
-      to: `${paths.hubSection(hubId, 'sites')}?tab=certs`,
+      to: `${paths.settings}?tab=certs&drawer=${encodeURIComponent(`cert:${cert.id}`)}`,
     });
   }
 

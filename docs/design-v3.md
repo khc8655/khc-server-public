@@ -112,7 +112,7 @@
 | `GET /cf-dns/zones`，`GET /cf-dns/records?zoneId=`，`POST /cf-dns/records`，`POST /cf-dns/records/:zoneId`，`PATCH/DELETE /cf-dns/records/:zoneId/:recordId`，`DELETE /cf-dns/records/:nodeId` | 跨凭据启用 Zone 汇总；列出现有 A/AAAA/CNAME；全局域名管理可新增/改/删单条记录（设置页）；按 Zone+子域名代建记录并写 `nodes.domain`；按节点联动删除 | `cfDns.ts` |
 | `GET/POST /tunnels`，`PATCH/DELETE /tunnels/:id` | 全局隧道配置（名称、对外域名、源站端口、cloudflared Token 密文）。面板只存配置，不做 Cloudflare Tunnel CRUD；被节点引用时禁止删除 | `tunnels.ts` |
 | `GET/PUT /cf-dns`，`POST /cf-dns/test` | 旧版单 Token + 单 Zone 端点（兼容保留，首次多凭据写入时迁移） | `cfDns.ts` |
-| `GET/POST /certs`，`POST /certs/issue-dns01`，`POST /certs/:id/renew`，`PUT/DELETE /certs/:id`，`GET /certs/:id/material`，`POST /certs/:id/bind` | 全局证书库（0002，见 ADR-0006）；`issue-dns01` / `renew` 支持控制面直连 Cloudflare DNS-01 签发与续期（零节点 `acme.sh`），`PUT` 用于材料原位替换，`bind` 安装到节点 Agent TLS 目录并热重载 | `certs.ts` |
+| `GET/POST /certs`，`POST /certs/issue-dns01`，`POST /certs/:id/renew`，`GET /certs/:id/usages`，`POST /certs/:id/sync`，`PATCH/PUT/DELETE /certs/:id`，`GET /certs/:id/material`，`POST /certs/:id/bind` | 全局证书库（0002、0015）；`issue-dns01` / `renew` 支持控制面 CF DNS-01 签发与续期（零节点 `acme.sh`），`PATCH` 切换 `autoSync`，`usages` / `sync` 自动或手动下发到引用该证书的关联 Hub | `certs.ts` |
 | `GET/POST /ssh-keys`，`PATCH/DELETE /ssh-keys/:id` | 全局 SSH 公钥库（0009；只存公钥，Worker 侧规范化并计算 `SHA256:` 指纹，重复指纹 409） | `sshKeys.ts` |
 | `GET /nodes/:id/export`，`POST /nodes/:id/import` | 备份导出/导入（见 `docs/backup.md`） | `backup.ts` |
 | `GET /agent/releases`；`POST /nodes/:id/agent/install-command|upgrade-command|uninstall-command|upgrade` | Agent 生命周期命令与升级（见 `docs/agent-lifecycle.md`、`docs/agent-releases.md`） | `agent_lifecycle.ts`（命令组装在 `lib/agent-commands.ts`，发布包校验在 `lib/agent-releases.ts`） |

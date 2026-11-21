@@ -6,11 +6,16 @@ import {
   certificateListResponseSchema,
   certificateMaterialResponseSchema,
   certificateResponseSchema,
+  certificateSyncResponseSchema,
+  certificateUsagesResponseSchema,
   issueCfDnsCertificateRequestSchema,
+  patchCertificateRequestSchema,
   type AgentEnvelope,
   type Certificate,
   type CertificateBindResponse,
   type CertificateMaterialResponse,
+  type CertificateSyncTargetResult,
+  type CertificateUsageItem,
   type CreateCertificateRequest,
   type IssueCfDnsCertificateRequest,
   type TaskResponse,
@@ -150,13 +155,43 @@ export async function issueCfDnsCertificate(
   return certificateResponseSchema.parse(body).certificate;
 }
 
-/** 控制面一键续期 Cloudflare DNS-01 证书。 */
-export async function renewCertificate(id: string): Promise<Certificate> {
+/** 控制面一键续期 Cloudflare DNS-01 证书（若启用 autoSync 会返回 syncResults）。 */
+export async function renewCertificate(
+  id: string,
+): Promise<{ certificate: Certificate; syncResults?: CertificateSyncTargetResult[] }> {
   const body = await apiRequest(`/api/v1/certs/${encodeURIComponent(id)}/renew`, {
     method: 'POST',
     body: '{}',
   });
+  return certificateResponseSchema.parse(body);
+}
+
+/** 切换证书续期后自动同步开关。 */
+export async function patchCertificateAutoSync(
+  id: string,
+  autoSync: boolean,
+): Promise<Certificate> {
+  const payload = patchCertificateRequestSchema.parse({ autoSync });
+  const body = await apiRequest(`/api/v1/certs/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
   return certificateResponseSchema.parse(body).certificate;
+}
+
+/** 查询引用此证书的关联节点与应用。 */
+export async function fetchCertificateUsages(id: string): Promise<CertificateUsageItem[]> {
+  const body = await apiRequest(`/api/v1/certs/${encodeURIComponent(id)}/usages`);
+  return certificateUsagesResponseSchema.parse(body).usages;
+}
+
+/** 手动一键推送证书到所有关联在线节点并重载引用应用。 */
+export async function syncCertificate(id: string): Promise<CertificateSyncTargetResult[]> {
+  const body = await apiRequest(`/api/v1/certs/${encodeURIComponent(id)}/sync`, {
+    method: 'POST',
+    body: '{}',
+  });
+  return certificateSyncResponseSchema.parse(body).results;
 }
 
 export async function deleteCertificate(id: string): Promise<void> {

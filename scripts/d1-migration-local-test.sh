@@ -99,18 +99,18 @@ done
 APP_COLS="$(query "$FULL" "PRAGMA table_info(app_configs)")"
 contains "$APP_COLS" '"name": "last_apply_error"' && ok "app_configs.last_apply_error 存在" || bad "缺少 last_apply_error"
 CERT_COLS="$(query "$FULL" "PRAGMA table_info(certificates)")"
-for col in acme_provider acme_credential_key acme_ca acme_key_type; do
+for col in acme_provider acme_credential_key acme_ca acme_key_type auto_sync; do
   contains "$CERT_COLS" "\"name\": \"$col\"" && ok "certificates.$col 存在" || bad "缺少 certificates.$col"
 done
 
-section "3) 存量数据前向兼容（0001–0004 → 0005–0014）"
+section "3) 存量数据前向兼容（0001–0004 → 0005–0015）"
 LEGACY="$TMP/legacy"
 for f in 0001_init.sql 0002_c3.sql 0003_live_endpoint.sql 0004_last_apply_error.sql; do
   apply_file "$LEGACY" "migrations/$f" || bad "应用 $f 失败"
 done
 INSERT="INSERT INTO nodes (id, name, endpoint, tunnel_endpoint, live_endpoint, preferred_route, token_enc, last_seen_at, last_state_json, created_at, updated_at) VALUES ('nd_legacy1', 'a', 'https://a.example.com', NULL, NULL, 'direct', 'enc-a', NULL, '{\"x\":1}', 1, 1), ('nd_legacy2', 'b', 'https://b.example.com', NULL, NULL, 'direct', 'enc-b', NULL, '{\"x\":2}', 1, 1)"
 query "$LEGACY" "$INSERT" >/dev/null 2>&1 && ok "写入旧节点（含 last_state_json）" || bad "写入旧节点失败"
-for f in 0005_clear_runtime_state.sql 0006_rate_limit.sql 0007_rev_epoch.sql 0008_node_domain.sql 0009_ssh_keys.sql 0010_node_access.sql 0011_cert_acme_meta.sql 0012_app_configs_summary.sql 0013_app_manifests.sql 0014_node_expires_at.sql; do
+for f in 0005_clear_runtime_state.sql 0006_rate_limit.sql 0007_rev_epoch.sql 0008_node_domain.sql 0009_ssh_keys.sql 0010_node_access.sql 0011_cert_acme_meta.sql 0012_app_configs_summary.sql 0013_app_manifests.sql 0014_node_expires_at.sql 0015_cert_auto_sync.sql; do
   apply_file "$LEGACY" "migrations/$f" || bad "应用 $f 失败"
 done
 ROWS_JSON="$(query "$LEGACY" "SELECT id, rev_epoch, access_mode, allow_insecure, domain, last_state_json, expires_at FROM nodes ORDER BY id")"

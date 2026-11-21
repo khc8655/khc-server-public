@@ -24,13 +24,14 @@ interface CertificateRow {
   acme_credential_key: string | null;
   acme_ca: string | null;
   acme_key_type: string | null;
+  auto_sync?: number | null;
   created_at: number;
   updated_at: number;
 }
 
 const COLUMNS =
   'id, name, domains_json, issuer, not_after, cert_pem_enc, key_pem_enc, source_node_id, ' +
-  'acme_provider, acme_credential_key, acme_ca, acme_key_type, created_at, updated_at';
+  'acme_provider, acme_credential_key, acme_ca, acme_key_type, auto_sync, created_at, updated_at';
 
 function mapCertificate(row: CertificateRow): Certificate {
   const acmeKeyType =
@@ -51,6 +52,7 @@ function mapCertificate(row: CertificateRow): Certificate {
       acmeProvider: row.acme_provider,
       acmeCredentialKey: row.acme_credential_key,
     }),
+    autoSync: Boolean(row.auto_sync),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -106,12 +108,13 @@ export class D1CertificateRepo implements CertificateRepo {
       acmeCredentialKey: input.acme?.credentialKey ?? null,
       acmeCa: input.acme?.ca ?? null,
       acmeKeyType: input.acme?.keyType ?? null,
+      autoSync: Boolean(input.autoSync),
       createdAt: now,
       updatedAt: now,
     };
     await this.db
       .prepare(
-        `INSERT INTO certificates (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO certificates (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         record.id,
@@ -126,6 +129,7 @@ export class D1CertificateRepo implements CertificateRepo {
         record.acmeCredentialKey,
         record.acmeCa,
         record.acmeKeyType,
+        record.autoSync ? 1 : 0,
         record.createdAt,
         record.updatedAt,
       )
@@ -146,6 +150,7 @@ export class D1CertificateRepo implements CertificateRepo {
         acmeProvider: record.acmeProvider,
         acmeCredentialKey: record.acmeCredentialKey,
       }),
+      autoSync: record.autoSync,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
@@ -175,6 +180,16 @@ export class D1CertificateRepo implements CertificateRepo {
         now,
         id,
       )
+      .run();
+    return this.get(id).then((record) => (record ? toPublic(record) : null));
+  }
+
+  async setAutoSync(id: string, autoSync: boolean): Promise<Certificate | null> {
+    const existing = await this.get(id);
+    if (!existing) return null;
+    await this.db
+      .prepare('UPDATE certificates SET auto_sync = ?, updated_at = ? WHERE id = ?')
+      .bind(autoSync ? 1 : 0, nowSec(), id)
       .run();
     return this.get(id).then((record) => (record ? toPublic(record) : null));
   }

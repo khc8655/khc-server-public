@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.28.0] - 2026-11-21
+### Added
+- 新增全球证书「续期后自动同步到关联 Hub」开关（D1 0015）、关联节点查询、`POST /certs/:id/sync` 一键同步回执，并将 14 天内到期证书待办直达对应证书详情抽屉（S4）。
+
 ## [0.27.0] - 2026-11-21
 ### Added
 - 新增控制面原生 Cloudflare DNS-01 ACME 签发与续期（支持单域名与通配符，免节点安装 acme.sh 并消除全局证书误报；保留节点本地 acme.sh 与 IP 自签能力，S3）。

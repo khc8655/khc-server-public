@@ -188,6 +188,7 @@ export interface NewCertificate {
   keyPem: string;
   sourceNodeId: string | null;
   acme?: CertificateAcmeMeta | null;
+  autoSync?: boolean;
 }
 
 export interface UpdateCertificate {
@@ -211,6 +212,8 @@ export interface CertificateRepo {
   create(input: NewCertificate): Promise<Certificate>;
   /** 续期成功后替换材料（名称/来源节点/ACME 元数据保持不变）。 */
   update(id: string, input: UpdateCertificate): Promise<Certificate | null>;
+  /** 切换续期后自动同步开关。 */
+  setAutoSync(id: string, autoSync: boolean): Promise<Certificate | null>;
   /** 解密后的 PEM/KEY；供 Worker 解析 $cert 引用与管理员导出 */
   material(id: string): Promise<CertificateMaterial | null>;
   remove(id: string): Promise<boolean>;
