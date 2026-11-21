@@ -12,6 +12,7 @@ import {
   HTTPS_PORT_OPTIONS,
   buildDomainEndpoint,
   endpointHost,
+  nodeByDomain,
   normalizeDomain,
   parseDomainEndpoint,
 } from '../../data/endpoint';
@@ -27,12 +28,17 @@ import {
   Stack,
   TextInput,
 } from '../../ui';
-import { zh } from '../../i18n/zh';
+import { zh, fmt } from '../../i18n/zh';
+
+/** 域名模式下域名的来源：选择已有解析记录，或直接手动输入。 */
+export type DomainSource = 'record' | 'manual';
 
 /** AccessForm 的受控草稿；添加节点与修改接入方式共用。 */
 export interface NodeAccessDraft {
   name: string;
   accessMode: NodeAccessMode;
+  /** 域名模式：域名来源（选择已有记录 / 手动输入） */
+  domainSource: DomainSource;
   /** 域名模式：所选 Zone / 已有解析记录 */
   zoneId: string;
   recordId: string;
@@ -118,6 +124,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     return {
       name: '',
       accessMode: 'domain',
+      domainSource: 'record',
       zoneId: '',
       recordId: '',
       domain: '',
@@ -165,6 +172,9 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
   return {
     name: node.name,
     accessMode,
+    // 存量节点的域名可能不来自某条受管记录（手动配置的域名、外部 DNS），
+    // 编辑时默认落到「手动输入」，让域名可直接改，而不是卡在空的记录选择器上。
+    domainSource: parsedDomain ? 'manual' : 'record',
     zoneId: '',
     recordId: '',
     domain: parsedDomain,
@@ -282,7 +292,9 @@ export interface AccessFormProps {
 
 /**
  * 节点接入方式统一表单（D 配置表单）：域名（HTTPS）/ Tunnel / IP 直连。
- * 只选用已有 Zone + 解析记录，不在本表单新建 DNS 记录或隧道。
+ * 域名模式支持两种来源：选择已有解析记录（需要 DNS 账户），或直接手动输入域名
+ * （不依赖任何 DNS 账户，非 Cloudflare 用户也能建节点）。
+ * 本表单不在建节点的同时新建 DNS 记录或隧道，DNS 记录的集中管理在「设置 · 域名」。
  */
 export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProps) {
   const zonesQuery = useQuery({
@@ -313,6 +325,16 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const selectedTunnel: Tunnel | undefined = (tunnelsQuery.data ?? []).find(
     (tunnel) => tunnel.id === draft.tunnelId,
   );
+  const normalizedDomain = normalizeDomain(draft.domain);
+  const domainReady = normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain);
+  /**
+   * 没有可用 Zone（未配账户 / 全部读取失败）时只剩「手动输入」一条路：
+   * 不再用一条横幅把「添加节点」堵死，非 Cloudflare 用户也能直接填自己的域名。
+   */
+  const manualOnly = zonesQuery.isSuccess ? zones.length === 0 : zonesQuery.isError;
+  const domainSource: DomainSource = manualOnly ? 'manual' : draft.domainSource;
+  // 同一域名已绑到别的节点时提示占用；新建场景才有全量列表可比。
+  const occupiedNode = mode === 'create' ? nodeByDomain(nodes, normalizedDomain) : null;
 
   return (
     <Stack gap={4}>
@@ -345,97 +367,143 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
 
       {draft.accessMode === 'domain' ? (
         <Stack gap={3}>
-          {zonesQuery.isLoading ? (
-            <span className="ui-muted">{zh.access.zonesLoading}</span>
-          ) : zonesQuery.error ? (
-            <Banner
-              tone="danger"
-              title={zh.access.zonesFailed}
-              description={(zonesQuery.error as Error).message}
-            />
-          ) : zones.length === 0 ? (
+          {manualOnly ? (
             <Banner
               tone="info"
-              title={zh.access.zonesEmpty}
-              description={zh.access.zonesEmptyHint}
+              title={zh.access.noZoneTitle}
+              description={zh.access.noZoneHint}
               action={<Link to={DOMAIN_SETTINGS_HREF} label={zh.access.goDomainSettings} />}
             />
           ) : (
-            <Field id="access-zone" label={zh.access.zoneLabel} required>
-              <Select
-                id="access-zone"
-                value={draft.zoneId}
-                placeholder={zh.access.zonePlaceholder}
-                options={zones.map((zone) => ({
-                  value: zone.id,
-                  label: `${zone.name} · ${zone.accountName}`,
-                }))}
-                onChange={(zoneId) => update({ zoneId, recordId: '' })}
+            <Field
+              id="access-domain-source"
+              label={zh.access.domainSourceLabel}
+              help={zh.access.domainSourceHelp}
+            >
+              <Segmented
+                value={domainSource}
+                ariaLabel={zh.access.domainSourceLabel}
+                options={[
+                  { value: 'record', label: zh.access.domainSourceRecord },
+                  { value: 'manual', label: zh.access.domainSourceManual },
+                ]}
+                onChange={(value) => update({ domainSource: value as DomainSource })}
               />
             </Field>
           )}
 
-          {draft.zoneId ? (
-            recordsQuery.isLoading ? (
-              <span className="ui-muted">{zh.access.recordsLoading}</span>
-            ) : recordsQuery.error ? (
-              <Banner
-                tone="danger"
-                title={zh.access.recordsFailed}
-                description={zh.access.recordsFailedHint}
-                action={
-                  <button
-                    type="button"
-                    className="ui-link"
-                    onClick={() => void recordsQuery.refetch()}
+          {domainSource === 'record' ? (
+            <>
+              {zonesQuery.isLoading ? (
+                <span className="ui-muted">{zh.access.zonesLoading}</span>
+              ) : zonesQuery.error ? (
+                <Banner
+                  tone="danger"
+                  title={zh.access.zonesFailed}
+                  description={(zonesQuery.error as Error).message}
+                />
+              ) : (
+                <Field id="access-zone" label={zh.access.zoneLabel} required>
+                  <Select
+                    id="access-zone"
+                    value={draft.zoneId}
+                    placeholder={zh.access.zonePlaceholder}
+                    options={zones.map((zone) => ({
+                      value: zone.id,
+                      label: `${zone.name} · ${zone.accountName}`,
+                    }))}
+                    onChange={(zoneId) => update({ zoneId, recordId: '' })}
+                  />
+                </Field>
+              )}
+
+              {draft.zoneId ? (
+                recordsQuery.isLoading ? (
+                  <span className="ui-muted">{zh.access.recordsLoading}</span>
+                ) : recordsQuery.error ? (
+                  <Banner
+                    tone="danger"
+                    title={zh.access.recordsFailed}
+                    description={zh.access.recordsFailedHint}
+                    action={
+                      <button
+                        type="button"
+                        className="ui-link"
+                        onClick={() => void recordsQuery.refetch()}
+                      >
+                        {zh.common.retry}
+                      </button>
+                    }
+                  />
+                ) : candidates.length === 0 ? (
+                  <span className="ui-muted">{zh.access.recordsEmpty}</span>
+                ) : (
+                  <Field
+                    id="access-record"
+                    label={zh.access.recordLabel}
+                    help={zh.access.recordHelp}
+                    required={!draft.domain}
                   >
-                    {zh.common.retry}
-                  </button>
-                }
-              />
-            ) : candidates.length === 0 ? (
-              <span className="ui-muted">{zh.access.recordsEmpty}</span>
-            ) : (
+                    <Select
+                      id="access-record"
+                      value={draft.recordId}
+                      placeholder={zh.access.recordPlaceholder}
+                      options={candidates.map((candidate) => ({
+                        value: candidate.record.id,
+                        label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}`,
+                        description: candidate.selectable
+                          ? undefined
+                          : candidate.conflict
+                            ? zh.access.recordConflict
+                            : candidate.boundNodeName
+                              ? zh.access.recordBound
+                              : undefined,
+                        disabled: !candidate.selectable,
+                      }))}
+                      onChange={(recordId) => {
+                        const hit = candidates.find((candidate) => candidate.record.id === recordId);
+                        update({
+                          recordId,
+                          domain: hit?.record.name ?? draft.domain,
+                          domainPort: '443',
+                        });
+                      }}
+                    />
+                  </Field>
+                )
+              ) : null}
+
+              {draft.domain ? (
+                <Field id="access-domain" label={zh.access.currentDomainLabel}>
+                  <TextInput id="access-domain" value={draft.domain} readOnly onChange={() => {}} />
+                </Field>
+              ) : null}
+            </>
+          ) : (
+            <Stack gap={3}>
               <Field
-                id="access-record"
-                label={zh.access.recordLabel}
-                help={zh.access.recordHelp}
-                required={!draft.domain}
+                id="access-domain-input"
+                label={zh.access.domainInputLabel}
+                help={zh.access.domainInputHelp}
+                required
               >
-                <Select
-                  id="access-record"
-                  value={draft.recordId}
-                  placeholder={zh.access.recordPlaceholder}
-                  options={candidates.map((candidate) => ({
-                    value: candidate.record.id,
-                    label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}`,
-                    description: candidate.selectable
-                      ? undefined
-                      : candidate.conflict
-                        ? zh.access.recordConflict
-                        : candidate.boundNodeName
-                          ? zh.access.recordBound
-                          : undefined,
-                    disabled: !candidate.selectable,
-                  }))}
-                  onChange={(recordId) => {
-                    const hit = candidates.find((candidate) => candidate.record.id === recordId);
-                    update({
-                      recordId,
-                      domain: hit?.record.name ?? draft.domain,
-                      domainPort: '443',
-                    });
-                  }}
+                <TextInput
+                  id="access-domain-input"
+                  value={draft.domain}
+                  mono
+                  placeholder={zh.access.domainInputPlaceholder}
+                  onChange={(value) => update({ domain: value })}
                 />
               </Field>
-            )
-          ) : null}
-
-          {draft.domain ? (
-            <Field id="access-domain" label={zh.access.currentDomainLabel}>
-              <TextInput id="access-domain" value={draft.domain} readOnly onChange={() => {}} />
-            </Field>
-          ) : null}
+              {occupiedNode ? (
+                <Banner
+                  tone="warn"
+                  title={fmt(zh.access.domainOccupiedTitle, { name: occupiedNode.name })}
+                  description={zh.access.domainOccupiedHint}
+                />
+              ) : null}
+            </Stack>
+          )}
 
           <Field id="access-domain-port" label={zh.access.domainPortLabel} help={zh.access.domainPortHelp}>
             <Select
@@ -446,18 +514,20 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             />
           </Field>
 
-          {draft.domain ? (
+          {domainReady ? (
             <Field id="access-domain-preview" label={zh.access.endpointPreviewLabel}>
               <TextInput
                 id="access-domain-preview"
-                value={buildDomainEndpoint(draft.domain, draft.domainPort)}
+                value={buildDomainEndpoint(normalizedDomain, draft.domainPort)}
                 mono
                 readOnly
                 onChange={() => {}}
               />
             </Field>
           ) : (
-            <span className="ui-muted">{zh.access.domainSelectHint}</span>
+            <span className="ui-muted">
+              {domainSource === 'record' ? zh.access.domainSelectHint : zh.access.domainInputHint}
+            </span>
           )}
         </Stack>
       ) : null}

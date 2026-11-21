@@ -98,8 +98,107 @@ describe('nodes CRUD（v3）', () => {
     expect(missingBody.error.fields?.endpoint).toBeTruthy();
   });
 
-  it('允许裸 IP endpoint（Worker 会走 TCP socket）', async () => {
+  it('域名模式可以只给 domain：endpoint 由域名推导为 https://<domain>', async () => {
     const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const res = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ name: '自有域名', domain: 'app.other.net' }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      node: { endpoint: string; accessMode: string; domain: string };
+    };
+    expect(body.node.accessMode).toBe('domain');
+    expect(body.node.endpoint).toBe('https://app.other.net');
+    expect(body.node.domain).toBe('app.other.net');
+  });
+
+  it('域名模式：endpoint 主机与 domain 不一致时拒绝（两份真相）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const res = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          name: '冲突域名',
+          accessMode: 'domain',
+          endpoint: 'https://a.example.com',
+          domain: 'b.example.com',
+        }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; fields?: Record<string, string> } };
+    expect(body.error.code).toBe('domain_mismatch');
+    expect(body.error.fields?.domain).toBeTruthy();
+  });
+
+  it('域名模式：PATCH 只改名不触发一致性校验，改域名与入口不一致仍被拒', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const created = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: '域名节点',
+          accessMode: 'domain',
+          endpoint: 'https://a.example.com',
+          domain: 'a.example.com',
+        }),
+      },
+      ctx.env,
+    );
+    expect(created.status).toBe(201);
+    const nodeId = ((await created.json()) as { node: { id: string } }).node.id;
+
+    const renamed = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}`,
+      { method: 'PATCH', headers, body: JSON.stringify({ name: '域名节点 2' }) },
+      ctx.env,
+    );
+    expect(renamed.status).toBe(200);
+
+    const mismatch = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}`,
+      { method: 'PATCH', headers, body: JSON.stringify({ domain: 'c.example.com' }) },
+      ctx.env,
+    );
+    expect(mismatch.status).toBe(400);
+    const body = (await mismatch.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('domain_mismatch');
+  });
+
+  it('域名模式：非法域名被 zod 拒绝', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const res = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ name: 'bad', domain: 'not a domain' }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; fields?: Record<string, string> } };
+    expect(body.error.code).toBe('validation_failed');
+    expect(body.error.fields?.domain).toBeTruthy();
+  });
+
+  it('允许裸 IP endpoint（Worker 会走 TCP socket）', async () => {    const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);
     const res = await ctx.app.request(
       '/api/v1/nodes',

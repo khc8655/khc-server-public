@@ -1,14 +1,16 @@
 # Cloudflare DNS 集成（cf-dns）
 
-> 状态：现行 ｜ 最后核验：2026-11-09 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`docs/security-boundaries.md` §10
+> 状态：现行 ｜ 最后核验：2026-11-21 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`apps/web/src/apps/node-settings/AccessForm.tsx`、`docs/security-boundaries.md` §10
 > 范围：面板托管 Cloudflare DNS A/AAAA 记录（多凭据设置、读取已有记录、代建与联动删除、节点域名与证书状态）的使用说明——Token 权限、配置入口、失败处理
 
 ## 1. 是什么（第一期受限版，不做完整 DNS 管理面板）
 
-域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录，只读选用已有记录，或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。
+域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录，只读选用已有记录，或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。没有 Cloudflare 账户、或域名托管在别家服务商的用户，可以在域名模式里**直接手动输入域名**建节点——面板不代管其解析，也不要求先配凭据（见 §3）。
 
 
-选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，并在安装命令里自动带上 `--with-caddy --tls-cn=<域名>`（证书由 Caddy 自动申请 Let's Encrypt；默认**不带** `--tls`，Agent 自签证书 Worker 传输层不接受）。节点概况的「域名 / 证书状态」按**控制面实测 → Agent 站点探测 → 未知**三级判定：先看 `GET /nodes/:id/state` 附带的 `tls.state`（控制面对接入地址做完整 TLS 校验，探测成功即「证书对该域名有效且受信」），再退回 `caddy-site` 的站点健康，两者都没有证据才显示「未知」。这样 TLS 由外部反代 / Caddy / Cloudflare Tunnel 终结的节点不会再被误报成「未签发」（见 CHANGELOG 0.12.10）。
+选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，安装命令里自动带上的只有 **`--with-caddy`**（仅安装系统包 caddy，**不创建站点、不签发证书**）。域名 HTTPS 的证书靠节点上的 Caddy 站点在 `tls=auto` 时**首次访问自动申请**（Let's Encrypt）；也可以走 ACME 账户 + `--acme` / `--acme-dns` 的 DNS-01 高级路径。`--tls-cn` **只对自签证书生效**（`--tls` / `--tls-self-signed` 分支），生产环境的域名模式**不下发**该参数——自签证书不被控制面 Worker 接受。
+
+节点概况的「域名 / 证书状态」按**控制面实测 → Agent 站点探测 → 未知**三级判定：先看 `GET /nodes/:id/state` 附带的 `tls.state`（控制面对接入地址做完整 TLS 校验，探测成功即「证书对该域名有效且受信」），再退回 `caddy-site` 的站点健康，两者都没有证据才显示「未知」。这样 TLS 由外部反代 / Caddy / Cloudflare Tunnel 终结的节点不会再被误报成「未签发」（见 CHANGELOG 0.12.10）。
 
 ## 2. 配置步骤（设置页「Cloudflare DNS」分段）
 
@@ -21,14 +23,16 @@
 
 | 场景 | 行为 |
 |---|---|
-| 添加节点时未选 Zone（仅一个启用 Zone） | 按节点名在该唯一 Zone 自动代建，安装命令自动带 `--with-caddy --tls-cn=<域名>`；前端也可显式选择 Zone/子域 |
+| 添加节点未配置任何 DNS 凭据（或凭据全部读取失败） | 域名模式**不再被挡住**：表单只剩「手动输入域名」一条路径，直接填已在别处配好解析的域名即可建节点；安装命令带 `--with-caddy`，不产生任何 DNS 写入 |
+| 添加节点时手动输入域名（有账户） | 表单可在「已有解析记录 / 手动输入域名」间切换；手填只写 `nodes.domain` 与 `endpoint`，**不建、不改 DNS 记录**；域名与已有节点重复时给出占用提示但不禁用保存（域名可能正指向该节点） |
+| 添加节点时未选 Zone（仅一个启用 Zone） | 按节点名在该唯一 Zone 自动代建，安装命令自动带 `--with-caddy`；前端也可显式选择 Zone/子域 |
 | 添加节点时未选 Zone（多个启用 Zone） | 返回 `cf_dns_zone_required`，抽屉显式提示选择 Zone 与子域；**不猜 Zone** |
 | 添加节点时选用 Zone/子域 | 显式传给 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`），子域留空则用节点名 |
-| 添加节点时选了 Zone（有已有记录） | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取 A/AAAA/CNAME；选中 A/AAAA 后域名与主机只读带入（端口可改），**不建、不改 DNS 记录**，仅把记录名写进 `nodes.domain`；安装命令自动带 `--with-caddy --tls-cn=<域名>` |
+| 添加节点时选了 Zone（有已有记录） | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取 A/AAAA/CNAME；选中 A/AAAA 后域名与主机只读带入（端口可改），**不建、不改 DNS 记录**，仅把记录名写进 `nodes.domain`；安装命令自动带 `--with-caddy`（证书由后续 Caddy 站点自动签发） |
 | 已有记录同名多条 / 同名 CNAME | 标注冲突并置灰不可选；已绑定其他节点的记录同样置灰，避免静默共用域名 |
-| 读取已有记录失败（权限/网络） | 抽屉内提示具体原因（权限不足 / Token 失效 / 网络），保留手填子域名代建路径作为兜底 |
-| 添加节点时选了 Zone（无已有记录或未选） | 调 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`）代建记录，写 `nodes.domain`，安装命令自动带 `--with-caddy --tls-cn=<域名>`（默认不带 `--tls`）；代建失败**不阻断**节点创建，抽屉内用 danger Banner 写明具体原因 |
-| 添加 endpoint 为域名的节点 | 不代建（面板提示去 Cloudflare 手工建记录） |
+| 读取已有记录失败（权限/网络） | 抽屉内提示具体原因（权限不足 / Token 失效 / 网络），并提供「手动输入域名」路径兜底 |
+| 添加节点时选了 Zone（无已有记录或未选） | 调 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`）代建记录，写 `nodes.domain`，安装命令自动带 `--with-caddy`；代建失败**不阻断**节点创建，抽屉内用 danger Banner 写明具体原因 |
+| 直接调接口建域名节点 | `POST /api/v1/nodes` 支持只给 `domain`（不需要 endpoint）：服务端推导 `https://<domain>` 并按域名模式处理；若同时给 `endpoint` 与 `domain`，两者主机必须一致，否则 `400 domain_mismatch` |
 | 设置 → 域名 → 展开 Zone → 添加记录 | 调 `POST /api/v1/cf-dns/records/:zoneId`（`{type, name, content, proxied?, ttl?}`）在 Cloudflare 新建单条 A/AAAA/CNAME；记录名可只填子域（自动补当前 Zone），不写面板托管标记、不绑定节点 |
 | 删除节点 | 确认框默认勾选「联动删除 DNS 记录」（`DELETE /api/v1/cf-dns/records/:nodeId`）；取消勾选则保留记录 |
 | 未配置 / 未启用凭据 | 代建端点返回 `cf_dns_disabled`；节点仍创建成功，抽屉用 toast 显式提示（不再静默跳过），可稍后手工建记录 |

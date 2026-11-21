@@ -8,7 +8,7 @@ import { createAppRouter } from '../app/router';
 
 /**
  * 添加节点：接入方式统一表单（AccessForm）。
- * - 域名：只选已有解析记录，不代建 DNS；
+ * - 域名：可选已有解析记录，也可直接手填域名（无 DNS 账户时唯一路径）；本表单不代建 DNS；
  * - Tunnel：选择全局隧道配置，空态给出设置链接；
  * - IP：必须确认明文风险，payload 自动生成 http endpoint；
  * - 创建后「我已完成安装」触发探活，失败时给出 3 条排查提示。
@@ -258,6 +258,81 @@ describe('添加节点：统一接入表单', () => {
         mode: 'system',
         installOptions: { withCaddy: true },
       });
+    });
+  });
+
+  it('域名模式：没有 DNS 账户时直接手填域名，仍可建节点', async () => {
+    // zones 默认为空 = 未配置任何 DNS 账户（非 Cloudflare 用户的真实状态）。
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+
+    expect(await screen.findByText('没有 DNS 账户，可直接手填域名')).toBeTruthy();
+    // 没有账户时不出现「选择 / 手填」的开关，只有一条明确的输入路径。
+    expect(screen.queryByRole('button', { name: '已有解析记录' })).toBeNull();
+
+    await userEvent.type(await screen.findByLabelText('域名'), 'app.other.net');
+    expect((screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value).toBe(
+      'https://app.other.net',
+    );
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      name: 'node-9',
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net',
+      domain: 'app.other.net',
+    });
+    // 手填域名不产生任何 DNS 写入。
+    expect(
+      requests.some(
+        (item) => item.url.startsWith('/api/v1/cf-dns/records') && item.init?.method === 'POST',
+      ),
+    ).toBe(false);
+  });
+
+  it('域名模式：有账户时可切到手动输入，端口沿用所选值', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'manual.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    // 有账户时默认「已有解析记录」，可显式切到手填。
+    await userEvent.click(await screen.findByRole('button', { name: '手动输入域名' }));
+    await userEvent.type(await screen.findByLabelText('域名'), 'custom.example.org');
+    await userEvent.selectOptions(screen.getByLabelText('HTTPS 端口'), '8443');
+
+    expect((screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value).toBe(
+      'https://custom.example.org:8443',
+    );
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      accessMode: 'domain',
+      endpoint: 'https://custom.example.org:8443',
+      domain: 'custom.example.org',
     });
   });
 

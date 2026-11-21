@@ -15,6 +15,7 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
   return {
     name: 'node-9',
     accessMode: 'domain',
+    domainSource: 'record',
     zoneId: 'z1',
     recordId: 'rec-1',
     domain: 'agent.example.com',
@@ -92,6 +93,54 @@ describe('AccessForm 纯函数', () => {
     expect(accessDraftIssue(ipDraft)).toBe('请确认明文 HTTP 风险');
     expect(isAccessDraftSubmittable(ipDraft)).toBe(false);
     expect(isAccessDraftSubmittable({ ...ipDraft, insecureConfirmed: true })).toBe(true);
+  });
+
+  it('域名模式：手动输入域名时不带 Zone / 记录，仍生成 https endpoint', () => {
+    const manual = draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'app.other.net' });
+    expect(toCreatePayload(manual)).toEqual({
+      name: 'node-9',
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net',
+      domain: 'app.other.net',
+    });
+    expect(toPatchPayload({ ...manual, domainPort: '8443' })).toEqual({
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net:8443',
+      domain: 'app.other.net',
+    });
+  });
+
+  it('域名模式：手动输入时框空 / 非法域名不可提交', () => {
+    expect(accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: '' }))).toBe(
+      '请填写域名',
+    );
+    expect(
+      accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'not a domain' })),
+    ).toBe('域名格式不正确');
+    expect(
+      isAccessDraftSubmittable(
+        draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'https://app.other.net/x' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('存量节点有域名时默认落到「手动输入」，域名可直接改', () => {
+    const existing = initialAccessDraft({
+      id: 'n2',
+      name: 'existing',
+      endpoint: 'https://app.other.net',
+      tunnelEndpoint: null,
+      liveEndpoint: null,
+      preferredRoute: 'direct',
+      accessMode: 'domain',
+      domain: 'app.other.net',
+      status: 'offline',
+      lastSeenAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    } as Node);
+    expect(existing.domainSource).toBe('manual');
+    expect(existing.domain).toBe('app.other.net');
   });
 
   it('Tunnel 空态链接指向设置页隧道分段', () => {
