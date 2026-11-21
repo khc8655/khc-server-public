@@ -108,10 +108,10 @@ export function InstalledAppsCard({ hubId }: { hubId: string }) {
       {target ? (
         <ConfirmAction
           open
-          action={action('catalog.uninstall')}
+          action={action('app.uninstall')}
           title={fmt(zh.catalog.uninstallConfirmTitle, { name: target.name })}
           body={zh.catalog.uninstallConfirmDesc}
-          confirmLabel={zh.catalog.uninstall}
+          confirmLabel={zh.actions['app.uninstall']}
           targetName={target.name}
           nameLabel={zh.catalog.colName}
           onCancel={() => setTarget(null)}
