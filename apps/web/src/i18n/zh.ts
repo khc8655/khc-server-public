@@ -124,8 +124,7 @@ export const zh = {
     'app.plan': '预览变更',
     'app.apply': '保存并生效',
     'app.install': '安装',
-    'catalog.install': '安装到节点',
-    'catalog.uninstall': '卸载应用',
+    'catalog.detail': '查看清单',
     'app.uninstall': '卸载',
     'app.rollback': '回滚',
     'peer.create': '添加 Peer',
@@ -1111,10 +1110,28 @@ export const zh = {
 
   catalog: {
     tab: '应用目录',
-    noticeTitle: '面板维护的应用清单',
+    noticeTitle: '适配过的应用（只读脚本库）',
     noticeDesc:
-      '清单里的脚本在「应用管理」中维护、存 D1，安装时由 Worker 读出正文随请求下发，浏览器不能直传任意 shell。安装是节点上的后台任务，密码类参数不会写入 D1 或日志。',
+      '每个应用带自己的 install/uninstall 脚本与参数（当前是二进制安装方式），脚本在「应用管理」维护、存 D1。这里只做查阅：安装与发布都发生在「节点 → 应用 → 发布应用」里，装在具体那台 VM 上。',
     colName: '应用',
+    colVersion: '版本',
+    colRuntime: '运行身份',
+    colPublish: '可发布端口',
+    colPublishValue: '{label} · {port}',
+    colPublishNone: '不发布',
+    viewDetail: '查看清单',
+    detailTitle: '应用清单：{name}',
+    detailRuntimeTitle: '安装方式与运行身份',
+    detailInstallMode:
+      '安装方式：二进制（下载校验固定 sha256，写 systemd user unit）；卸载脚本会清掉 unit、二进制、配置与数据。',
+    detailPublishTitle: '发布声明',
+    detailPublishDesc: '安装后可发布「{label}」：上游 127.0.0.1:{port}，站点与发布端口在发布时选。',
+    detailParamsTitle: '安装参数',
+    detailParamRequired: '安装时填写',
+    detailParamOptional: '可留空',
+    installElsewhereTitle: '安装不在这里',
+    installElsewhereDesc:
+      '去「节点 → 应用 → 发布应用」，上游来源选「从应用目录安装应用」，装完即可发布到这台机器。',
     colDesc: '说明',
     install: '安装',
     installFailed: '安装失败',
@@ -1190,7 +1207,31 @@ export const zh = {
     uninstallFailed: '卸载失败',
     uninstallSubmitted: '卸载任务已提交',
     uninstallConfirmTitle: '卸载 {name}？',
-    uninstallConfirmDesc: '将停止并删除该应用创建的服务与文件；此操作不可撤销。',
+    uninstallConfirmDesc:
+      '会执行该应用的卸载脚本：停掉并删除服务、unit、二进制、配置与数据；此操作不可撤销。',
+  },
+
+  hosted: {
+    installedTitle: '已安装的托管应用',
+    installedDesc:
+      '这台机器上装过的托管应用。安装入口在「发布应用 → 上游来源 = 应用目录」，这里只做查看与卸载。',
+    installedEmpty: '这台机器还没装托管应用',
+    catalogEmpty: '应用目录还没有适配过的应用；先去「设置 → 应用管理」添加清单。',
+    sourceLabel: '上游来源',
+    sourceHelp: '本机已有服务就手填端口；也可以现在装一个我们适配过的应用，装完自动填上游。',
+    sourceManual: '本机已有服务（手填端口）',
+    sourceApp: '从应用目录安装应用',
+    sourceLocalOnly: '安装只能落在本机（Agent 所在机器）；上游指向 Peer 时请手填端口。',
+    installHint: '安装到 {hub}：应用只监听 127.0.0.1，装完把它的端口填成上面站点的上游。',
+    appLabel: '应用',
+    appHelp: '列表来自「设置 → 应用目录」，只含我们适配过安装与卸载脚本的应用。',
+    appPlaceholder: '选择一个应用',
+    recipeOption: '{name} · 版本 {version}',
+    declaredPortTitle: '装完会占用的端口',
+    declaredPortDesc: '该应用监听 127.0.0.1:{port}（清单声明）；安装完成后自动填成上游端口。',
+    installAction: '安装 {name} 到本机',
+    installedNote: '{name} 已装好（127.0.0.1:{port}）',
+    installedNoteDesc: '上游端口已填好，点「保存并应用」把它发布出去。',
   },
 
   settings: {

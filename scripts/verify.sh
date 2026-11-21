@@ -28,6 +28,8 @@ echo "==> app catalog drift"
 node scripts/verify-app-catalog.mjs
 echo "==> app manifests"
 node scripts/verify-app-manifests.mjs
+echo "==> app manifest uninstall (cleanup)"
+./scripts/manifest-uninstall-test.sh
 echo "==> d1 migrations (local)"
 ./scripts/d1-migration-local-test.sh
 echo "==> installer lifecycle"
@@ -37,5 +39,5 @@ for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/docs-lint
 echo "==> docs lint"
 node scripts/docs-lint.mjs --strict
 echo "==> shell syntax"
-bash -n agent/install.sh agent/uninstall.sh agent/package.sh scripts/verify.sh scripts/host-ops-peer-e2e.sh scripts/install-lifecycle-test.sh scripts/install-system-test.sh scripts/d1-migration-local-test.sh scripts/caddy-tls-modes-e2e.sh scripts/build-agent-release.sh agent/recipes/demo-echo/install.sh agent/recipes/demo-echo/uninstall.sh agent/recipes/sing-box/install.sh agent/recipes/sing-box/uninstall.sh agent/recipes/generic-service/install.sh agent/recipes/generic-service/uninstall.sh
+bash -n agent/install.sh agent/uninstall.sh agent/package.sh scripts/verify.sh scripts/host-ops-peer-e2e.sh scripts/install-lifecycle-test.sh scripts/install-system-test.sh scripts/d1-migration-local-test.sh scripts/caddy-tls-modes-e2e.sh scripts/manifest-uninstall-test.sh scripts/build-agent-release.sh agent/recipes/demo-echo/install.sh agent/recipes/demo-echo/uninstall.sh agent/recipes/sing-box/install.sh agent/recipes/sing-box/uninstall.sh agent/recipes/generic-service/install.sh agent/recipes/generic-service/uninstall.sh
 echo "==> OK"
