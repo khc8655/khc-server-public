@@ -406,4 +406,18 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect((await screen.findAllByText('blog-cert')).length).toBeGreaterThan(0);
     expect(router.state.location.pathname).toBe('/hubs/tyo-1/sites');
   });
+
+  it('应用页支持直接打开「安装并发布应用」三步向导，并可从添加站点抽屉一键切换', async () => {
+    await renderRoute('/hubs/tyo-1/sites');
+    await userEvent.click(await screen.findByRole('button', { name: '安装并发布应用' }));
+    expect(await screen.findByRole('heading', { name: '安装并发布应用' })).toBeTruthy();
+
+    await userEvent.click(screen.getAllByRole('button', { name: '关闭' }).at(-1)!);
+    await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
+    expect(await screen.findByRole('heading', { name: '添加站点' })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
+    expect(await screen.findByRole('heading', { name: '安装并发布应用' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '添加站点' })).toBeNull();
+  });
 });

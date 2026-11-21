@@ -92,6 +92,39 @@ export function defaultValues(recipe: CatalogRecipe): Record<string, unknown> {
   return values;
 }
 
+/** 清单声明的本机端口（取参数默认值、当前填值或固定 port）。 */
+export function declaredPort(
+  recipe: CatalogRecipe,
+  values?: Record<string, unknown>,
+): number | null {
+  const decl = recipe.manifest.publish;
+  if (!decl) return null;
+  const paramDefault = decl.portParam
+    ? recipe.params.find((param) => param.key === decl.portParam)?.default
+    : decl.port;
+  const raw = decl.portParam && values && values[decl.portParam] !== undefined
+    ? values[decl.portParam]
+    : paramDefault;
+  const port = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+/** 证书 SAN 是否匹配目标域名（支持单级通配符 *.example.com）。 */
+export function certMatchesDomain(domains: readonly string[], target: string): boolean {
+  const host = target.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return false;
+  return domains.some((raw) => {
+    const pattern = raw.trim().toLowerCase().replace(/\.$/, '');
+    if (!pattern) return false;
+    if (pattern === host) return true;
+    if (!pattern.startsWith('*.')) return false;
+    const base = pattern.slice(2);
+    if (!base || !host.endsWith(`.${base}`)) return false;
+    const prefix = host.slice(0, host.length - base.length - 1);
+    return prefix.length > 0 && !prefix.includes('.');
+  });
+}
+
 /** recipe 的 installedAt 是 ISO 字符串（Agent 侧 datetime.isoformat）。 */
 export function installedTime(value?: string): string {
   if (!value) return '—';

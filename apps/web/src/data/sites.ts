@@ -976,6 +976,8 @@ export interface PublishSitePlan {
   listenPort: number;
   /** 反代目标 `host:port`，一般是 `127.0.0.1:<应用本地端口>` */
   upstream: string;
+  /** 可选 TLS 配置；缺省使用 Caddy 自动签发 HTTPS */
+  tls?: CaddyTls;
 }
 
 export interface PublishSiteOutcome {
@@ -987,7 +989,7 @@ export interface PublishSiteOutcome {
 /**
  * 写站点 → apply 一步到位，失败把配置回滚成发布前的样子。
  *
- * 两个调用方共用：添加节点时的「自动发布 HTTPS」与应用目录的「安装后发布」。
+ * 两个调用方共用：添加节点时的「自动发布 HTTPS」与应用向导的「安装并发布」。
  * apply 必须看 `envelope.ok`：Agent 业务失败是 200 + ok:false，只看是否抛错会误报成功。
  */
 export async function publishProxySite(
@@ -1001,7 +1003,7 @@ export async function publishProxySite(
     listenPort: plan.listenPort,
     enabled: true,
     upstreams: [plan.upstream],
-    tls: { mode: 'auto' },
+    tls: plan.tls ?? { mode: 'auto', cert: null },
   });
   if (!site) throw new Error('域名不合法，未写入站点');
   const current = await fetchAppConfig(hubId, CADDY_SITE_APP);
