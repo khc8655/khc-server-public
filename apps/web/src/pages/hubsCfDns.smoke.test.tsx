@@ -8,7 +8,7 @@ import { createAppRouter } from '../app/router';
 
 /**
  * 添加节点：接入方式统一表单（AccessForm）。
- * - 域名：只选已有解析记录，不代建 DNS；
+ * - 域名：可选已有解析记录，也可直接手填域名（无 DNS 账户时唯一路径）；本表单不代建 DNS；
  * - Tunnel：选择全局隧道配置，空态给出设置链接；
  * - IP：必须确认明文风险，payload 自动生成 http endpoint；
  * - 创建后「我已完成安装」触发探活，失败时给出 3 条排查提示。
@@ -60,8 +60,23 @@ let tunnels: Array<{
   updatedAt: number;
 }> = [];
 let probeReachable = false;
+/** 控制面 TLS 探测结果：一键发布用它判断「HTTPS 是否已生效」。 */
+let tlsVerified = false;
+/** 站点配置写入后的 sites（断言自动发布确实建了 tls=auto 的反代站点）。 */
+let savedSites: Array<Record<string, unknown>> = [];
+/** 模拟 apply 失败：验证一键发布会把站点配置回滚。 */
+let applyFails = false;
 /** 安装完成检查只看 Caddy；默认已就绪。 */
 let caddyInstalled = true;
+let accounts: Array<{
+  id: string;
+  name: string;
+  accountName: string | null;
+  hasToken: boolean;
+  enabled: boolean;
+  zones: Array<{ id: string; name: string }>;
+  enabledZoneIds: string[];
+}> = [];
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function mockApi() {
@@ -96,6 +111,17 @@ function mockApi() {
         });
       }
       if (url === '/api/v1/cf-dns/zones') return json({ zones });
+      if (url === '/api/v1/cf-dns/accounts') return json({ accounts });
+      if (url.startsWith('/api/v1/cf-dns/accounts/') && init?.method === 'PUT') {
+        // 就地「添加域名」= 把该 Zone 加进 enabledZoneIds，并让 Zone 列表立即可见。
+        const body = JSON.parse(String(init.body)) as { enabledZoneIds?: string[] };
+        const account = accounts[0]!;
+        account.enabledZoneIds = body.enabledZoneIds ?? account.enabledZoneIds;
+        zones = account.zones
+          .filter((zone) => account.enabledZoneIds.includes(zone.id))
+          .map((zone) => ({ ...zone, accountId: account.id, accountName: account.name }));
+        return json({ account });
+      }
       if (url.startsWith('/api/v1/cf-dns/records')) {
         if (init?.method === 'POST') {
           return json(
@@ -120,6 +146,7 @@ function mockApi() {
           route: 'direct',
           via: 'fetch',
           error: null,
+          tls: { state: tlsVerified ? 'verified' : 'unknown', endpoint: 'https://x', detail: null, checkedAt: 1 },
           state: {
             host: { hostname: 'node-9' },
             adapters: [
@@ -132,6 +159,36 @@ function mockApi() {
             ports: [],
           },
         });
+      }
+      if (url === '/api/v1/nodes/node-9/apps/caddy-site') {
+        if (init?.method === 'PUT') {
+          const payload = JSON.parse(String(init.body)) as { config: { sites: unknown[] } };
+          savedSites = payload.config.sites as Array<Record<string, unknown>>;
+          return json({
+            app: {
+              app: 'caddy-site',
+              schemaVersion: 1,
+              config: payload.config,
+              rev: 2,
+              appliedRev: 1,
+              updatedAt: 1,
+            },
+          });
+        }
+        return json({
+          app: {
+            app: 'caddy-site',
+            schemaVersion: 1,
+            config: { sites: [] },
+            rev: 1,
+            appliedRev: 1,
+            updatedAt: 1,
+          },
+        });
+      }
+      if (url === '/api/v1/nodes/node-9/apps/caddy-site/apply') {
+        if (applyFails) return json({ error: { code: 'apply_failed', message: 'caddy reload 失败' } }, 500);
+        return json({ ok: true, result: {} });
       }
       if (url === '/api/v1/agent/releases') {
         return json({
@@ -156,8 +213,12 @@ beforeEach(() => {
   zones = [];
   records = [];
   tunnels = [];
+  accounts = [];
   probeReachable = false;
   caddyInstalled = true;
+  tlsVerified = false;
+  savedSites = [];
+  applyFails = false;
   mockApi();
 });
 
@@ -226,10 +287,10 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
 
-    expect((screen.getByLabelText('HTTPS 端口') as HTMLSelectElement).value).toBe('443');
+    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('2053');
     expect(
-      (screen.getByLabelText('接入地址（自动生成）') as HTMLInputElement).value,
-    ).toBe('https://manual.example.com');
+      (screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
+    ).toBe('https://manual.example.com:2053');
 
     await submitCreate();
     await screen.findByText('节点已创建');
@@ -239,7 +300,7 @@ describe('添加节点：统一接入表单', () => {
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://manual.example.com',
+      endpoint: 'https://manual.example.com:2053',
       domain: 'manual.example.com',
     });
     expect(
@@ -259,6 +320,314 @@ describe('添加节点：统一接入表单', () => {
         installOptions: { withCaddy: true },
       });
     });
+  });
+
+  it('域名模式：没有 DNS 账户时直接手填域名，仍可建节点', async () => {
+    // zones 默认为空 = 未配置任何 DNS 账户（非 Cloudflare 用户的真实状态）。
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+
+    expect(await screen.findByText('没有 DNS 账户，可直接手填域名')).toBeTruthy();
+    // 没有账户时不出现「选择 / 手填」的开关，只有一条明确的输入路径。
+    expect(screen.queryByRole('button', { name: '已有解析记录' })).toBeNull();
+
+    await userEvent.type(await screen.findByLabelText('域名'), 'app.other.net');
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
+      'https://app.other.net:2053',
+    );
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      name: 'node-9',
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net:2053',
+      domain: 'app.other.net',
+    });
+    // 手填域名不产生任何 DNS 写入。
+    expect(
+      requests.some(
+        (item) => item.url.startsWith('/api/v1/cf-dns/records') && item.init?.method === 'POST',
+      ),
+    ).toBe(false);
+  });
+
+  it('域名模式：有账户时可切到手动输入，端口沿用所选值', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'manual.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    // 有账户时默认「已有解析记录」，可显式切到手填。
+    await userEvent.click(await screen.findByRole('button', { name: '手动输入域名' }));
+    await userEvent.type(await screen.findByLabelText('域名'), 'custom.example.org');
+    await userEvent.selectOptions(screen.getByLabelText('Agent 监听端口'), '8443');
+
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
+      'https://custom.example.org:8443',
+    );
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      accessMode: 'domain',
+      endpoint: 'https://custom.example.org:8443',
+      domain: 'custom.example.org',
+    });
+  });
+
+  it('域名模式：有账户但没启用域名时就地「添加域名」，建完自动选中', async () => {
+    accounts = [
+      {
+        id: 'acc-1',
+        name: '主账号',
+        accountName: null,
+        hasToken: true,
+        enabled: true,
+        zones: [{ id: 'z1', name: 'example.com' }],
+        enabledZoneIds: [],
+      },
+    ];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'app.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+
+    // 状态二：有账户、没有启用域名 —— 就地建，不跳出抽屉
+    expect(await screen.findByText('已有 DNS 账户，但还没有启用的域名')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '添加域名' }));
+
+    const addDialog = await screen.findByRole('dialog', { name: '添加域名' });
+    // 只有一个账户时自动选中，直接选域名
+    await userEvent.selectOptions(
+      within(addDialog).getByLabelText('域名（主账号）'),
+      'z1',
+    );
+    await userEvent.click(within(addDialog).getByRole('button', { name: '添加' }));
+
+    // 加完自动选中该 Zone，回到「选已有记录」状态
+    await waitFor(() => {
+      expect((screen.getByLabelText('Zone') as HTMLSelectElement).value).toBe('z1');
+    });
+    await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
+    expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
+      'https://app.example.com:2053',
+    );
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      accessMode: 'domain',
+      endpoint: 'https://app.example.com:2053',
+      domain: 'app.example.com',
+    });
+  });
+
+  it('域名模式：有账户但域名下没有记录时，一键改为手动输入', async () => {
+    accounts = [
+      {
+        id: 'acc-1',
+        name: '主账号',
+        accountName: null,
+        hasToken: true,
+        enabled: true,
+        zones: [{ id: 'z1', name: 'example.com' }],
+        enabledZoneIds: ['z1'],
+      },
+    ];
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+
+    // 该 Zone 没有 A/AAAA 记录：不让人卡在这里，直接给切换到手动输入的入口
+    expect(await screen.findByText(/该 Zone 下还没有可用的 A\/AAAA 记录/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '改为手动输入域名' }));
+    await userEvent.type(await screen.findByLabelText('域名'), 'app.elsewhere.net');
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    const post = requests.find(
+      (item) => item.url === '/api/v1/nodes' && item.init?.method === 'POST',
+    );
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      accessMode: 'domain',
+      domain: 'app.elsewhere.net',
+    });
+  });
+
+  it('一键发布：在线且 Caddy 就绪后自动建 tls=auto 站点并 apply', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'app.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    probeReachable = true;
+    tlsVerified = true;
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
+    // 勾选自动发布：默认发布端口 2083 与 Agent 的 2053 不撞，不会出现冲突提示
+    await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+    expect(screen.queryByText('发布端口和 Agent 监听端口撞了')).toBeNull();
+    expect((screen.getByLabelText('发布端口') as HTMLSelectElement).value).toBe('2083');
+    const upstream = screen.getByLabelText('上游端口');
+    await userEvent.clear(upstream);
+    await userEvent.type(upstream, '8080');
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    await userEvent.click(await screen.findByRole('button', { name: '我已完成安装' }));
+
+    // 站点写入 → apply → 控制面确认 HTTPS
+    await waitFor(() => {
+      expect(savedSites).toHaveLength(1);
+      expect(savedSites[0]).toMatchObject({
+        name: 'app.example.com',
+        kind: 'proxy',
+        domains: ['app.example.com'],
+        upstreams: ['127.0.0.1:8080'],
+        listenPort: 2083,
+        tls: { mode: 'auto' },
+      });
+    });
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (item) =>
+            item.url === '/api/v1/nodes/node-9/apps/caddy-site/apply' && item.init?.method === 'POST',
+        ),
+      ).toBe(true);
+    });
+    expect(await screen.findByText('站点已应用')).toBeTruthy();
+    // 完成提示里给的是发布地址（带发布端口），不是节点接入地址
+    expect(
+      screen.getByText(/打开 https:\/\/app\.example\.com:2083 应能访问/),
+    ).toBeTruthy();
+  });
+
+  it('一键发布失败：apply 报错时回滚站点配置，不留半套站点', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'app.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    probeReachable = true;
+    applyFails = true;
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
+    await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    await userEvent.click(await screen.findByRole('button', { name: '我已完成安装' }));
+
+    // 报错里明确「已回滚」，且最终落库的站点配置回到空
+    expect(await screen.findByText(/已回滚到发布前的站点配置/)).toBeTruthy();
+    await waitFor(() => {
+      expect(savedSites).toEqual([]);
+    });
+  });
+
+  it('一键发布：发布端口与 Agent 端口撞了时挡住提交，并给换端口的出口', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'app.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
+    await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+
+    const save = () =>
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: '添加节点',
+      }) as HTMLButtonElement;
+    expect(save().disabled).toBe(false);
+
+    // 手动把发布端口挑成 Agent 正在用的那条：一条端口只能一个进程，必须挡住
+    await userEvent.selectOptions(screen.getByLabelText('发布端口'), '2053');
+    expect(save().disabled).toBe(true);
+    expect(screen.getByText('发布端口和 Agent 监听端口撞了')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '改用 2083' }));
+    expect(save().disabled).toBe(false);
+    expect((screen.getByLabelText('发布端口') as HTMLSelectElement).value).toBe('2083');
+    expect(screen.queryByText('发布端口和 Agent 监听端口撞了')).toBeNull();
   });
 
   it('Tunnel 模式：选择全局配置，payload 只带 tunnelId', async () => {

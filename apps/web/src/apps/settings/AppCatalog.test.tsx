@@ -294,3 +294,171 @@ describe('应用目录（R1 运行时清单）', () => {
     expect(screen.queryByText('Agent 包中没有可用的 recipe。')).toBeNull();
   });
 });
+
+describe('应用目录 · 安装后发布（清单声明 publish）', () => {
+  const domainNode = {
+    ...node,
+    endpoint: 'https://app.example.com:2053',
+    domain: 'app.example.com',
+    accessMode: 'domain',
+  };
+
+  const magpieManifest = {
+    id: 'magpie',
+    enabled: true,
+    createdAt: 1,
+    updatedAt: 2,
+    manifest: {
+      name: 'magpie',
+      version: '0.1.4265',
+      runtime: { mode: 'create', user: 'khc-app-magpie', linger: true },
+      params: [
+        { key: 'port', type: 'integer', label: '网关端口', default: 3425 },
+        { key: 'web_port', type: 'integer', label: 'Web 管理页端口', default: 3430 },
+        { key: 'public_url', type: 'string', label: 'Caddy 发布后的对外地址（可选）', default: '' },
+      ],
+      scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+      sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+      publish: { label: 'Web 管理页', host: '127.0.0.1', portParam: 'web_port', port: 3430 },
+      writes: [],
+    },
+  };
+
+  let savedSites: Array<Record<string, unknown>> = [];
+  let taskPolls = 0;
+
+  beforeEach(() => {
+    requests = [];
+    savedSites = [];
+    taskPolls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === '/api/v1/nodes' && (!init || !init.method)) return json({ nodes: [domainNode] });
+        if (url === '/api/v1/app-manifests' && (!init || !init.method)) {
+          return json({ appManifests: [magpieManifest] });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_installed') {
+          return json({ ok: true, result: { installed: {} } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install') {
+          return json({ ok: true, accepted: true, taskId: 'task-9', result: { taskId: 'task-9' } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/tasks/task-9') {
+          taskPolls += 1;
+          // 提交后先查一次、刷新两次：前两次还在跑，第三次才完成 —— 发布只在 done 之后触发。
+          const state = taskPolls < 3 ? 'running' : 'done';
+          return json({
+            task: {
+              id: 'task-9',
+              state,
+              progress: state === 'done' ? 100 : 60,
+              logs: ['安装 magpie'],
+              result:
+                state === 'done'
+                  ? {
+                      access: [
+                        { label: 'Web 管理页（点击登录）', value: 'https://app.example.com:2083/' },
+                      ],
+                    }
+                  : {},
+              error: null,
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site') {
+          if (init?.method === 'PUT') {
+            const payload = JSON.parse(String(init.body)) as { config: { sites: unknown[] } };
+            savedSites = payload.config.sites as Array<Record<string, unknown>>;
+            return json({
+              app: {
+                app: 'caddy-site',
+                schemaVersion: 1,
+                config: payload.config,
+                rev: 2,
+                appliedRev: 1,
+                updatedAt: 1,
+              },
+            });
+          }
+          return json({
+            app: {
+              app: 'caddy-site',
+              schemaVersion: 1,
+              config: { sites: [] },
+              rev: 1,
+              appliedRev: 1,
+              updatedAt: 1,
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/apply') {
+          return json({ ok: true, result: {} });
+        }
+        return json({ error: { code: 'not_found', message: url } }, 404);
+      }),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('默认按清单声明的端口发布：安装参数带上对外地址，done 后自动建站点并 apply', async () => {
+    renderCatalog();
+    const names = await screen.findAllByText(/magpie/);
+    await userEvent.click(names.at(-1)!);
+
+    expect(await screen.findByText('安装后发布（Web 管理页）')).toBeTruthy();
+    // 默认发布端口避开 Agent 端口 2053；发布地址与上游一眼可见。
+    expect(await screen.findByDisplayValue('https://app.example.com:2083 → 127.0.0.1:3430')).toBeTruthy();
+    // 清单声明了 public_url：面板把它填成对外地址（可见，且在安装前就填好）。
+    expect(await screen.findByDisplayValue('https://app.example.com:2083')).toBeTruthy();
+
+    await userEvent.type(screen.getByLabelText('密码'), 's3cret');
+    await userEvent.click(screen.getAllByRole('button', { name: '安装' }).at(-1)!);
+    await waitFor(() => {
+      expect(
+        requests.filter((url) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install')
+          .length,
+      ).toBe(1);
+    });
+    const sent = JSON.parse(
+      (vi.mocked(fetch).mock.calls as Array<[string, RequestInit | undefined]>)
+        .find(([url]) => url === '/api/v1/nodes/tyo-1/apps/app-catalog/recipe_install')?.[1]
+        ?.body as string,
+    );
+    expect(sent.params.values.public_url).toBe('https://app.example.com:2083');
+
+    // 第一轮刷新：任务还在跑，绝不提前建站点。
+    await userEvent.click(screen.getByRole('button', { name: '刷新进度' }));
+    expect(await screen.findByText(/任务状态：running/)).toBeTruthy();
+    expect(
+      requests.filter((url) => url === '/api/v1/nodes/tyo-1/apps/caddy-site/apply').length,
+    ).toBe(0);
+
+    // 第二轮刷新：done → 建站点 + apply。
+    await userEvent.click(screen.getByRole('button', { name: '刷新进度' }));
+    expect(await screen.findByText(/任务状态：done/)).toBeTruthy();
+    await waitFor(() => {
+      expect(savedSites).toHaveLength(1);
+    });
+    expect(savedSites[0]).toMatchObject({
+      name: 'app.example.com',
+      domains: ['app.example.com'],
+      listenPort: 2083,
+      upstreams: ['127.0.0.1:3430'],
+      tls: { mode: 'auto' },
+    });
+    await waitFor(() => {
+      expect(
+        requests.filter((url) => url === '/api/v1/nodes/tyo-1/apps/caddy-site/apply').length,
+      ).toBe(1);
+    });
+    expect(await screen.findByText('已发布：https://app.example.com:2083')).toBeTruthy();
+    expect(await screen.findByText(/打开 https:\/\/app\.example\.com:2083 应能访问/)).toBeTruthy();
+  });
+});

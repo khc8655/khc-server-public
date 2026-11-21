@@ -5,7 +5,9 @@ import type { Node, NodeProbeItem } from '@khc/contracts';
 import { ApiError } from '../data/client';
 import { createHub, deleteHub, fetchHubState, probeHubs } from '../data/hubs';
 import { fetchAgentReleases, generateAgentCommand, type AgentCommandResult } from '../data/agent';
+import { buildDomainEndpoint, normalizeDomain } from '../data/endpoint';
 import { deleteCfDnsRecordsForNode, createCfDnsRecordForNode } from '../data/cfDns';
+import { publishProxySite } from '../data/sites';
 import {
   hubOutageDays,
   hubOutageLabel,
@@ -93,6 +95,19 @@ export default function HubsPage() {
   const [probeCaddy, setProbeCaddy] = useState<{ installed: boolean; running: boolean } | null>(
     null,
   );
+  /**
+   * 一键发布 HTTPS 的计划（添加节点时勾选「安装完成后自动发布」才有）：
+   * 节点在线且 Caddy 已装 → 写站点（tls=auto）→ apply → 用控制面 TLS 探测确认。
+   */
+  const [publishPlan, setPublishPlan] = useState<{
+    domain: string;
+    upstreamPort: number;
+    agentPort: number;
+    publishPort: number;
+  } | null>(null);
+  const [publishState, setPublishState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [publishStep, setPublishStep] = useState('');
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const draftIssue = accessDraftIssue(draft, { requireName: true });
 
@@ -236,6 +251,10 @@ export default function HubsPage() {
     setProbeState('idle');
     setProbeItem(null);
     setProbeError(null);
+    setPublishPlan(null);
+    setPublishState('idle');
+    setPublishStep('');
+    setPublishError(null);
     setDrawerOpen(true);
   };
 
@@ -251,6 +270,10 @@ export default function HubsPage() {
     setProbeState('idle');
     setProbeItem(null);
     setProbeError(null);
+    setPublishPlan(null);
+    setPublishState('idle');
+    setPublishStep('');
+    setPublishError(null);
     setFormError(null);
   };
 
@@ -269,9 +292,66 @@ export default function HubsPage() {
             subdomain: draft.dnsSubdomain.trim() || undefined,
           }
         : undefined;
+    const publishSelection =
+      draft.accessMode === 'domain' && draft.autoPublish && draft.domain.trim()
+        ? {
+            domain: normalizeDomain(draft.domain),
+            upstreamPort: Number(draft.upstreamPort),
+            agentPort: Number(draft.domainPort),
+            publishPort: Number(draft.publishPort),
+          }
+        : null;
     const data = await createMutation.mutateAsync(toCreatePayload(draft));
     // 只在用户显式选了 Zone 时代建 DNS；默认「不自动创建」不发请求。
     if (data.node.accessMode === 'ip' && dnsSelection) void autoCreateDns(data.node, dnsSelection);
+    // 发布计划要在草稿被重置前抓下来（onSuccess 会清空 draft）。
+    if (publishSelection) {
+      setPublishPlan(publishSelection);
+      setPublishState('idle');
+      setPublishStep('');
+      setPublishError(null);
+    }
+  };
+
+  /**
+   * 一键发布 HTTPS：节点在线 + Caddy 就绪后建站点并 apply。
+   *
+   * 写配置 + apply + 失败回滚都在 `publishProxySite` 里，与应用目录的「安装后发布」共用同一条路径，
+   * 不给主人留半套站点（P4 的验收要求：失败可回滚）。
+   */
+  const publishHttps = async (
+    nodeId: string,
+    plan: { domain: string; upstreamPort: number; agentPort: number; publishPort: number },
+  ) => {
+    // 一条端口只能一个进程：Agent 已占了同号端口时，Caddy 必然 bind 失败。
+    // 这种情况不写任何配置，直接说明「两条端口要错开」。
+    if (plan.publishPort === plan.agentPort) {
+      setPublishState('error');
+      setPublishStep('');
+      setPublishError(fmt(zh.hubs.publishPortConflict, { port: plan.publishPort }));
+      return;
+    }
+    setPublishState('running');
+    setPublishError(null);
+    setPublishStep(zh.hubs.publishStepSave);
+    try {
+      await publishProxySite(nodeId, {
+        domain: plan.domain,
+        listenPort: plan.publishPort,
+        upstream: `127.0.0.1:${plan.upstreamPort}`,
+      });
+      // apply 成功 = 站点已生效。证书由 Caddy 首次访问时签发，这里不谎称「HTTPS 已验证」：
+      // 控制面的 TLS 探测打的是节点接入地址（Agent），跟发布出去的应用是两回事。
+      setPublishState('done');
+      setPublishStep(zh.hubs.publishStepApplied);
+      await queryClient.invalidateQueries({ queryKey: ['hubs', nodeId] });
+    } catch (error) {
+      setPublishState('error');
+      setPublishStep('');
+      setPublishError(
+        `${error instanceof Error ? error.message : String(error)}${zh.hubs.publishRolledBack}`,
+      );
+    }
   };
 
   const checkInstalled = async () => {
@@ -280,6 +360,7 @@ export default function HubsPage() {
     setProbeError(null);
     setProbeAuthIssue(null);
     setProbeCaddy(null);
+    let caddyInstalled: boolean | null = null;
     try {
       const result = await probeHubs();
       const item = result.nodes.find((node) => node.id === createdNodeId) ?? null;
@@ -300,14 +381,24 @@ export default function HubsPage() {
         const caddyStatus = caddyAdapter?.status as
           | { installed?: boolean; running?: boolean }
           | undefined;
+        caddyInstalled = typeof caddyStatus?.installed === 'boolean' ? caddyStatus.installed : null;
         setProbeCaddy(
-          typeof caddyStatus?.installed === 'boolean'
-            ? { installed: caddyStatus.installed, running: caddyStatus.running === true }
-            : null,
+          caddyInstalled === null
+            ? null
+            : { installed: caddyInstalled, running: caddyStatus?.running === true },
         );
       }
       setProbeState('done');
       await queryClient.invalidateQueries({ queryKey: ['hubs'] });
+      // 勾选了「自动发布 HTTPS」：在线且 Caddy 就绪后直接进入发布，不让人再点一次。
+      if (item?.reachable && publishPlan) {
+        if (caddyInstalled === false) {
+          setPublishState('error');
+          setPublishError(zh.hubs.publishNeedCaddy);
+        } else {
+          await publishHttps(createdNodeId, publishPlan);
+        }
+      }
     } catch (error) {
       setProbeState('error');
       setProbeError(error instanceof Error ? error.message : zh.hubs.probeError);
@@ -606,6 +697,60 @@ export default function HubsPage() {
               ) : null}
               {probeState === 'error' && !probeAuthIssue ? (
                 <InlineError message={probeError ?? zh.hubs.probeError} />
+              ) : null}
+
+              {publishPlan ? (
+                <Stack gap={2}>
+                  <p className="ui-field-label">
+                    {fmt(zh.hubs.publishTitle, {
+                      url: buildDomainEndpoint(publishPlan.domain, String(publishPlan.publishPort)),
+                      port: publishPlan.upstreamPort,
+                    })}
+                  </p>
+                  <Row gap={2} wrap>
+                    <Badge
+                      tone="ok"
+                      dot
+                      label={fmt(zh.hubs.publishStepCreated, { domain: publishPlan.domain })}
+                    />
+                    <Badge
+                      tone={probeItem?.reachable ? 'ok' : 'neutral'}
+                      dot
+                      label={
+                        probeItem?.reachable
+                          ? zh.hubs.publishStepOnline
+                          : zh.hubs.publishStepOffline
+                      }
+                    />
+                    <Badge
+                      tone={
+                        publishState === 'done'
+                          ? 'ok'
+                          : publishState === 'error'
+                            ? 'danger'
+                            : 'neutral'
+                      }
+                      dot
+                      label={publishStep || zh.hubs.publishStepPendingTodo}
+                    />
+                  </Row>
+                  {publishState === 'error' ? (
+                    <InlineError message={publishError ?? zh.hubs.publishFailed} />
+                  ) : null}
+                  {publishState === 'done' ? (
+                    <span className="ui-field-help">
+                      {fmt(zh.hubs.publishDoneHint, {
+                        url: buildDomainEndpoint(
+                          publishPlan.domain,
+                          String(publishPlan.publishPort),
+                        ),
+                      })}
+                    </span>
+                  ) : null}
+                  {publishState === 'idle' ? (
+                    <span className="ui-field-help">{zh.hubs.publishIdleHint}</span>
+                  ) : null}
+                </Stack>
               ) : null}
             </Stack>
             {createdNodeId ? (

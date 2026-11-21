@@ -4,6 +4,7 @@ import type { Node } from '@khc/contracts';
 import {
   TUNNELS_SETTINGS_HREF,
   accessDraftIssue,
+  suggestPublishPort,
   initialAccessDraft,
   isAccessDraftSubmittable,
   toCreatePayload,
@@ -15,10 +16,11 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
   return {
     name: 'node-9',
     accessMode: 'domain',
+    domainSource: 'record',
     zoneId: 'z1',
     recordId: 'rec-1',
     domain: 'agent.example.com',
-    domainPort: '443',
+    domainPort: '2053',
     tunnelId: '',
     tunnelHostname: '',
     ipHost: '',
@@ -26,6 +28,9 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     insecureConfirmed: false,
     dnsZoneId: '',
     dnsSubdomain: '',
+    autoPublish: false,
+    upstreamPort: '8080',
+    publishPort: '2083',
     ...patch,
   };
 }
@@ -35,7 +40,7 @@ describe('AccessForm 纯函数', () => {
     expect(toCreatePayload(draft())).toEqual({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://agent.example.com',
+      endpoint: 'https://agent.example.com:2053',
       domain: 'agent.example.com',
     });
     expect(toPatchPayload(draft({ domainPort: '8443' }))).toEqual({
@@ -92,6 +97,76 @@ describe('AccessForm 纯函数', () => {
     expect(accessDraftIssue(ipDraft)).toBe('请确认明文 HTTP 风险');
     expect(isAccessDraftSubmittable(ipDraft)).toBe(false);
     expect(isAccessDraftSubmittable({ ...ipDraft, insecureConfirmed: true })).toBe(true);
+  });
+
+  it('域名模式：手动输入域名时不带 Zone / 记录，仍生成 https endpoint', () => {
+    const manual = draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'app.other.net' });
+    expect(toCreatePayload(manual)).toEqual({
+      name: 'node-9',
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net:2053',
+      domain: 'app.other.net',
+    });
+    expect(toPatchPayload({ ...manual, domainPort: '8443' })).toEqual({
+      accessMode: 'domain',
+      endpoint: 'https://app.other.net:8443',
+      domain: 'app.other.net',
+    });
+  });
+
+  it('域名模式：手动输入时框空 / 非法域名不可提交', () => {
+    expect(accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: '' }))).toBe(
+      '请填写域名',
+    );
+    expect(
+      accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'not a domain' })),
+    ).toBe('域名格式不正确');
+    expect(
+      isAccessDraftSubmittable(
+        draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'https://app.other.net/x' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('发布端口与 Agent 端口相同则不可提交；错开即可', () => {
+    const clash = draft({ autoPublish: true, domainPort: '2053', publishPort: '2053' });
+    expect(accessDraftIssue(clash)).toBe(
+      '发布端口不能与 Agent 监听端口相同：两个进程不能共用一个端口',
+    );
+    expect(isAccessDraftSubmittable(clash)).toBe(false);
+    expect(isAccessDraftSubmittable({ ...clash, publishPort: '2083' })).toBe(true);
+    // 不自动发布时不涉及第二条端口，同号也不影响保存
+    expect(isAccessDraftSubmittable({ ...clash, autoPublish: false })).toBe(true);
+  });
+
+  it('新节点默认两条端口都避开 443', () => {
+    const fresh = initialAccessDraft();
+    expect(fresh.domainPort).toBe('2053');
+    expect(fresh.publishPort).toBe('2083');
+    expect(fresh.domainPort).not.toBe('443');
+    expect(fresh.publishPort).not.toBe('443');
+    // 撞端口时的建议值要跳过 Agent 已经占用的那条
+    expect(suggestPublishPort('2053')).toBe('2083');
+    expect(suggestPublishPort('2083')).toBe('2053');
+  });
+
+  it('存量节点有域名时默认落到「手动输入」，域名可直接改', () => {
+    const existing = initialAccessDraft({
+      id: 'n2',
+      name: 'existing',
+      endpoint: 'https://app.other.net',
+      tunnelEndpoint: null,
+      liveEndpoint: null,
+      preferredRoute: 'direct',
+      accessMode: 'domain',
+      domain: 'app.other.net',
+      status: 'offline',
+      lastSeenAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    } as Node);
+    expect(existing.domainSource).toBe('manual');
+    expect(existing.domain).toBe('app.other.net');
   });
 
   it('Tunnel 空态链接指向设置页隧道分段', () => {

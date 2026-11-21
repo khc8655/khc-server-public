@@ -1,4 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { DEFAULT_DOMAIN_PORT } from '@khc/contracts';
 import type {
   CreateNodeRequest,
   Node,
@@ -6,38 +8,51 @@ import type {
   Tunnel,
   UpdateNodeRequest,
 } from '@khc/contracts';
-import { fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
+import { fetchCfDnsAccounts, fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
 import { listTunnels } from '../../data/tunnels';
+import { AddDomainDialog, type AddedDomain } from '../settings/AddDomainDialog';
 import {
   HTTPS_PORT_OPTIONS,
   buildDomainEndpoint,
   endpointHost,
+  isHttpsPort,
+  nodeByDomain,
   normalizeDomain,
   parseDomainEndpoint,
 } from '../../data/endpoint';
 import { classifyCfDnsRecords } from '../../pages/cfDnsRecords';
 import {
   Banner,
+  Button,
   Checkbox,
   Field,
   InlineError,
   Link,
+  Row,
   Segmented,
   Select,
   Stack,
   TextInput,
+  useToast,
 } from '../../ui';
-import { zh } from '../../i18n/zh';
+import { zh, fmt } from '../../i18n/zh';
+
+/** 域名模式下域名的来源：选择已有解析记录，或直接手动输入。 */
+export type DomainSource = 'record' | 'manual';
 
 /** AccessForm 的受控草稿；添加节点与修改接入方式共用。 */
 export interface NodeAccessDraft {
   name: string;
   accessMode: NodeAccessMode;
+  /** 域名模式：域名来源（选择已有记录 / 手动输入） */
+  domainSource: DomainSource;
   /** 域名模式：所选 Zone / 已有解析记录 */
   zoneId: string;
   recordId: string;
   domain: string;
   domainPort: string;
+  /** 应用对外端口（Caddy 监听）；默认避开 443 与 Agent 端口。 */
+  publishPort: string;
   /** 隧道模式：全局隧道配置 id / 域名（仅用于满足建节点契约的 endpoint 字段） */
   tunnelId: string;
   tunnelHostname: string;
@@ -48,6 +63,9 @@ export interface NodeAccessDraft {
   /** IP 直连模式：可选自动代建 DNS 记录（多凭据模型） */
   dnsZoneId: string;
   dnsSubdomain: string;
+  /** 域名模式（仅添加节点）：安装完成后自动建 Caddy 站点并反代到该端口 */
+  autoPublish: boolean;
+  upstreamPort: string;
 }
 
 const DOMAIN_RE = /^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
@@ -113,15 +131,32 @@ function endpointProtocol(endpoint: string): string | null {
  * - 能解析出域名 → 域名；
  * - 其余 endpoint（含 https 裸 IP）→ IP 直连，避免旧节点落到空域名表单。
  */
+/**
+ * 端口默认值：两处都避开 443。
+ *
+ * 443 是备案/端口策略盯得最紧的一条，也最容易被 Caddy 与 Agent 抢；默认让它空着，
+ * 既留给 ACME 的 TLS-ALPN-01 校验（要临时占 443），也留给以后想换标准端口的场景。
+ * 2053 / 2083 都在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。
+ */
+export const DEFAULT_AGENT_PORT = String(DEFAULT_DOMAIN_PORT);
+export const DEFAULT_PUBLISH_PORT = '2083';
+
+/** 发布端口与 Agent 端口相同时，给一个可一键切换的候选（跳过已被占用的那条）。 */
+export function suggestPublishPort(agentPort: string): string {
+  const candidates = [DEFAULT_PUBLISH_PORT, DEFAULT_AGENT_PORT, '2053', '2083', '8443'];
+  return candidates.find((port) => port !== agentPort) ?? DEFAULT_PUBLISH_PORT;
+}
+
 export function initialAccessDraft(node?: Node): NodeAccessDraft {
   if (!node) {
     return {
       name: '',
       accessMode: 'domain',
+      domainSource: 'record',
       zoneId: '',
       recordId: '',
       domain: '',
-      domainPort: '443',
+      domainPort: DEFAULT_AGENT_PORT,
       tunnelId: '',
       tunnelHostname: '',
       ipHost: '',
@@ -129,6 +164,9 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       insecureConfirmed: false,
       dnsZoneId: '',
       dnsSubdomain: '',
+      autoPublish: false,
+      upstreamPort: '8080',
+      publishPort: DEFAULT_PUBLISH_PORT,
     };
   }
 
@@ -165,6 +203,9 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
   return {
     name: node.name,
     accessMode,
+    // 存量节点的域名可能不来自某条受管记录（手动配置的域名、外部 DNS），
+    // 编辑时默认落到「手动输入」，让域名可直接改，而不是卡在空的记录选择器上。
+    domainSource: parsedDomain ? 'manual' : 'record',
     zoneId: '',
     recordId: '',
     domain: parsedDomain,
@@ -176,6 +217,10 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     insecureConfirmed: node.allowInsecure || protocol === 'http:',
     dnsZoneId: '',
     dnsSubdomain: '',
+    // 自动发布只在「添加节点」里成立；编辑接入方式不重走安装流程。
+    autoPublish: false,
+    upstreamPort: '8080',
+    publishPort: DEFAULT_PUBLISH_PORT,
   };
 }
 
@@ -191,6 +236,12 @@ export function accessDraftIssue(
     if (!domain) return zh.access.domainRequired;
     if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
+    if (draft.autoPublish) {
+      if (!portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
+      if (!portValid(draft.publishPort)) return zh.access.publishPortInvalid;
+      // 一条端口只能一个进程：Agent 与 Caddy 撞端口注定在 apply 时失败，表单里直接挡住。
+      if (draft.publishPort === draft.domainPort) return zh.access.publishPortConflictIssue;
+    }
     return null;
   }
 
@@ -282,9 +333,14 @@ export interface AccessFormProps {
 
 /**
  * 节点接入方式统一表单（D 配置表单）：域名（HTTPS）/ Tunnel / IP 直连。
- * 只选用已有 Zone + 解析记录，不在本表单新建 DNS 记录或隧道。
+ * 域名模式支持两种来源：选择已有解析记录（需要 DNS 账户），或直接手动输入域名
+ * （不依赖任何 DNS 账户，非 Cloudflare 用户也能建节点）。
+ * 本表单不在建节点的同时新建 DNS 记录或隧道，DNS 记录的集中管理在「设置 · 域名」。
  */
 export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProps) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [addDomainOpen, setAddDomainOpen] = useState(false);
   const zonesQuery = useQuery({
     queryKey: ['cfDns', 'zones'],
     queryFn: fetchCfDnsZones,
@@ -304,15 +360,52 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
     retry: false,
     enabled: draft.accessMode === 'tunnel',
   });
+  // 有没有 DNS 凭据决定域名模式走哪条路：选记录 / 就地添加域名 / 手填域名。
+  const accountsQuery = useQuery({
+    queryKey: ['cfDns', 'accounts'],
+    queryFn: fetchCfDnsAccounts,
+    retry: false,
+    enabled: draft.accessMode === 'domain',
+  });
 
   const update = (patch: Partial<NodeAccessDraft>) => onChange({ ...draft, ...patch });
 
   const zones = zonesQuery.data ?? [];
+  const accounts = accountsQuery.data ?? [];
   const records = recordsQuery.data?.records ?? [];
   const candidates = classifyCfDnsRecords(records, nodes);
   const selectedTunnel: Tunnel | undefined = (tunnelsQuery.data ?? []).find(
     (tunnel) => tunnel.id === draft.tunnelId,
   );
+  const normalizedDomain = normalizeDomain(draft.domain);
+  const domainReady = normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain);
+  /**
+   * 域名模式的三种状态（`docs/plans/domain-cert-ia-2026-11-21.md` §4）：
+   * - select：有可用域名 → 选已有记录，也可切到手填；
+   * - enable：有账户但一条域名都没启用 → 就地「添加域名」，不跳出抽屉；
+   * - no-account：连账户都没有 → 引导去设置页，同时允许直接手填域名建节点（不死路）。
+   */
+  const domainState: 'loading' | 'select' | 'enable' | 'no-account' | 'unavailable' =
+    zonesQuery.isLoading || accountsQuery.isLoading
+      ? 'loading'
+      : zones.length > 0
+        ? 'select'
+        : zonesQuery.isError
+          ? 'unavailable'
+          : accounts.length > 0
+            ? 'enable'
+            : 'no-account';
+  // 选不到记录时就只剩手填一条路，不再把开关摆出来让人点。
+  const manualOnly = domainState === 'enable' || domainState === 'no-account';
+  const domainSource: DomainSource = manualOnly ? 'manual' : draft.domainSource;
+  // 同一域名已绑到别的节点时提示占用；新建场景才有全量列表可比。
+  const occupiedNode = mode === 'create' ? nodeByDomain(nodes, normalizedDomain) : null;
+
+  const handleDomainAdded = (added: AddedDomain) => {
+    // 就地建完立刻选中：表单与设置页写的是同一份 cf_dns_accounts，不存在第二套真相。
+    update({ domainSource: 'record', zoneId: added.zoneId, recordId: '' });
+    toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: added.zoneName }) });
+  };
 
   return (
     <Stack gap={4}>
@@ -339,103 +432,194 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             { value: 'tunnel', label: zh.access.modeTunnel },
             { value: 'ip', label: zh.access.modeIp },
           ]}
-          onChange={(value) => update({ accessMode: value as NodeAccessMode })}
+          onChange={(value) => {
+            const next = value as NodeAccessMode;
+            // 从 IP 直连切过来时端口可能是个明文端口（8880），不在 HTTPS 候选里：
+            // 归一化成默认值，别让下拉显示一个不存在的选项。
+            const keepPort = isHttpsPort(draft.domainPort);
+            update(
+              next === 'domain' && !keepPort
+                ? { accessMode: next, domainPort: DEFAULT_AGENT_PORT }
+                : { accessMode: next },
+            );
+          }}
         />
       </Field>
 
       {draft.accessMode === 'domain' ? (
         <Stack gap={3}>
-          {zonesQuery.isLoading ? (
-            <span className="ui-muted">{zh.access.zonesLoading}</span>
-          ) : zonesQuery.error ? (
-            <Banner
-              tone="danger"
-              title={zh.access.zonesFailed}
-              description={(zonesQuery.error as Error).message}
-            />
-          ) : zones.length === 0 ? (
+          {domainState === 'enable' ? (
             <Banner
               tone="info"
-              title={zh.access.zonesEmpty}
-              description={zh.access.zonesEmptyHint}
+              title={zh.access.enableZoneTitle}
+              description={zh.access.enableZoneHint}
+              action={
+                <Button
+                  label={zh.cfDns.addDomainTitle}
+                  size="sm"
+                  onClick={() => setAddDomainOpen(true)}
+                />
+              }
+            />
+          ) : domainState === 'unavailable' ? (
+            <Banner
+              tone="warn"
+              title={zh.access.zonesFailedBanner}
+              description={zh.access.zonesFailedBannerHint}
+            />
+          ) : domainState === 'no-account' ? (
+            <Banner
+              tone="info"
+              title={zh.access.noZoneTitle}
+              description={zh.access.noZoneHint}
               action={<Link to={DOMAIN_SETTINGS_HREF} label={zh.access.goDomainSettings} />}
             />
-          ) : (
-            <Field id="access-zone" label={zh.access.zoneLabel} required>
-              <Select
-                id="access-zone"
-                value={draft.zoneId}
-                placeholder={zh.access.zonePlaceholder}
-                options={zones.map((zone) => ({
-                  value: zone.id,
-                  label: `${zone.name} · ${zone.accountName}`,
-                }))}
-                onChange={(zoneId) => update({ zoneId, recordId: '' })}
+          ) : domainState === 'select' ? (
+            <Field
+              id="access-domain-source"
+              label={zh.access.domainSourceLabel}
+              help={zh.access.domainSourceHelp}
+            >
+              <Segmented
+                value={domainSource}
+                ariaLabel={zh.access.domainSourceLabel}
+                options={[
+                  { value: 'record', label: zh.access.domainSourceRecord },
+                  { value: 'manual', label: zh.access.domainSourceManual },
+                ]}
+                onChange={(value) => update({ domainSource: value as DomainSource })}
               />
             </Field>
-          )}
+          ) : null}
 
-          {draft.zoneId ? (
-            recordsQuery.isLoading ? (
-              <span className="ui-muted">{zh.access.recordsLoading}</span>
-            ) : recordsQuery.error ? (
-              <Banner
-                tone="danger"
-                title={zh.access.recordsFailed}
-                description={zh.access.recordsFailedHint}
-                action={
-                  <button
-                    type="button"
-                    className="ui-link"
-                    onClick={() => void recordsQuery.refetch()}
-                  >
-                    {zh.common.retry}
-                  </button>
-                }
-              />
-            ) : candidates.length === 0 ? (
-              <span className="ui-muted">{zh.access.recordsEmpty}</span>
+          {domainSource === 'record' ? (
+            domainState === 'loading' ? (
+              <span className="ui-muted">{zh.access.zonesLoading}</span>
             ) : (
-              <Field
-                id="access-record"
-                label={zh.access.recordLabel}
-                help={zh.access.recordHelp}
-                required={!draft.domain}
-              >
+              <>
+              <Field id="access-zone" label={zh.access.zoneLabel} required>
                 <Select
-                  id="access-record"
-                  value={draft.recordId}
-                  placeholder={zh.access.recordPlaceholder}
-                  options={candidates.map((candidate) => ({
-                    value: candidate.record.id,
-                    label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}`,
-                    description: candidate.selectable
-                      ? undefined
-                      : candidate.conflict
-                        ? zh.access.recordConflict
-                        : candidate.boundNodeName
-                          ? zh.access.recordBound
-                          : undefined,
-                    disabled: !candidate.selectable,
+                  id="access-zone"
+                  value={draft.zoneId}
+                  placeholder={zh.access.zonePlaceholder}
+                  options={zones.map((zone) => ({
+                    value: zone.id,
+                    label: `${zone.name} · ${zone.accountName}`,
                   }))}
-                  onChange={(recordId) => {
-                    const hit = candidates.find((candidate) => candidate.record.id === recordId);
-                    update({
-                      recordId,
-                      domain: hit?.record.name ?? draft.domain,
-                      domainPort: '443',
-                    });
-                  }}
+                  onChange={(zoneId) => update({ zoneId, recordId: '' })}
                 />
               </Field>
-            )
-          ) : null}
 
-          {draft.domain ? (
-            <Field id="access-domain" label={zh.access.currentDomainLabel}>
-              <TextInput id="access-domain" value={draft.domain} readOnly onChange={() => {}} />
-            </Field>
-          ) : null}
+              <Row justify="end" gap={2}>
+                <Button
+                  label={zh.access.addDomain}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setAddDomainOpen(true)}
+                />
+              </Row>
+
+              {draft.zoneId ? (
+                recordsQuery.isLoading ? (
+                  <span className="ui-muted">{zh.access.recordsLoading}</span>
+                ) : recordsQuery.error ? (
+                  <Banner
+                    tone="danger"
+                    title={zh.access.recordsFailed}
+                    description={zh.access.recordsFailedHint}
+                    action={
+                      <button
+                        type="button"
+                        className="ui-link"
+                        onClick={() => void recordsQuery.refetch()}
+                      >
+                        {zh.common.retry}
+                      </button>
+                    }
+                  />
+                ) : candidates.length === 0 ? (
+                  <Stack gap={2}>
+                    <span className="ui-muted">{zh.access.recordsEmpty}</span>
+                    <Row justify="end">
+                      <Button
+                        label={zh.access.switchManual}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => update({ domainSource: 'manual' })}
+                      />
+                    </Row>
+                  </Stack>
+                ) : (
+                  <Field
+                    id="access-record"
+                    label={zh.access.recordLabel}
+                    help={zh.access.recordHelp}
+                    required={!draft.domain}
+                  >
+                    <Select
+                      id="access-record"
+                      value={draft.recordId}
+                      placeholder={zh.access.recordPlaceholder}
+                      options={candidates.map((candidate) => ({
+                        value: candidate.record.id,
+                        label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}`,
+                        description: candidate.selectable
+                          ? undefined
+                          : candidate.conflict
+                            ? zh.access.recordConflict
+                            : candidate.boundNodeName
+                              ? zh.access.recordBound
+                              : undefined,
+                        disabled: !candidate.selectable,
+                      }))}
+                      onChange={(recordId) => {
+                        const hit = candidates.find((candidate) => candidate.record.id === recordId);
+                        // 换记录只决定域名；端口保持用户所选，只有非法值才落回默认。
+                        update({
+                          recordId,
+                          domain: hit?.record.name ?? draft.domain,
+                          ...(isHttpsPort(draft.domainPort)
+                            ? {}
+                            : { domainPort: DEFAULT_AGENT_PORT }),
+                        });
+                      }}
+                    />
+                  </Field>
+                )
+              ) : null}
+
+              {draft.domain ? (
+                <Field id="access-domain" label={zh.access.currentDomainLabel}>
+                  <TextInput id="access-domain" value={draft.domain} readOnly onChange={() => {}} />
+                </Field>
+              ) : null}
+              </>
+            )
+          ) : (
+            <Stack gap={3}>
+              <Field
+                id="access-domain-input"
+                label={zh.access.domainInputLabel}
+                help={zh.access.domainInputHelp}
+                required
+              >
+                <TextInput
+                  id="access-domain-input"
+                  value={draft.domain}
+                  mono
+                  placeholder={zh.access.domainInputPlaceholder}
+                  onChange={(value) => update({ domain: value })}
+                />
+              </Field>
+              {occupiedNode ? (
+                <Banner
+                  tone="warn"
+                  title={fmt(zh.access.domainOccupiedTitle, { name: occupiedNode.name })}
+                  description={zh.access.domainOccupiedHint}
+                />
+              ) : null}
+            </Stack>
+          )}
 
           <Field id="access-domain-port" label={zh.access.domainPortLabel} help={zh.access.domainPortHelp}>
             <Select
@@ -446,19 +630,99 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             />
           </Field>
 
-          {draft.domain ? (
+          {domainReady ? (
             <Field id="access-domain-preview" label={zh.access.endpointPreviewLabel}>
               <TextInput
                 id="access-domain-preview"
-                value={buildDomainEndpoint(draft.domain, draft.domainPort)}
+                value={buildDomainEndpoint(normalizedDomain, draft.domainPort)}
                 mono
                 readOnly
                 onChange={() => {}}
               />
             </Field>
           ) : (
-            <span className="ui-muted">{zh.access.domainSelectHint}</span>
+            <span className="ui-muted">
+              {domainSource === 'record' ? zh.access.domainSelectHint : zh.access.domainInputHint}
+            </span>
           )}
+
+          {mode === 'create' ? (
+            <Stack gap={3}>
+              <Checkbox
+                checked={draft.autoPublish}
+                onChange={(checked) => update({ autoPublish: checked })}
+                label={zh.access.autoPublishLabel}
+                description={zh.access.autoPublishHelp}
+              />
+              {draft.autoPublish && draft.publishPort === draft.domainPort ? (
+                <Stack gap={2}>
+                  <Banner
+                    tone="warn"
+                    title={zh.access.publishPortConflictTitle}
+                    description={fmt(zh.access.publishPortConflictHint, { port: draft.domainPort })}
+                  />
+                  <Row gap={2}>
+                    <Button
+                      label={fmt(zh.access.publishPortConflictCta, {
+                        port: suggestPublishPort(draft.domainPort),
+                      })}
+                      size="sm"
+                      onClick={() =>
+                        update({ publishPort: suggestPublishPort(draft.domainPort) })
+                      }
+                    />
+                  </Row>
+                </Stack>
+              ) : null}
+              {draft.autoPublish ? (
+                <>
+                  <Field
+                    id="access-publish-port"
+                    label={zh.access.publishPortLabel}
+                    help={zh.access.publishPortHelp}
+                    required
+                  >
+                    <Select
+                      id="access-publish-port"
+                      value={draft.publishPort}
+                      options={HTTPS_PORT_OPTIONS.map((port) => ({ value: port, label: port }))}
+                      onChange={(publishPort) => update({ publishPort })}
+                    />
+                  </Field>
+                  <Field
+                    id="access-upstream-port"
+                    label={zh.access.upstreamPortLabel}
+                    help={zh.access.upstreamPortHelp}
+                    required
+                  >
+                    <TextInput
+                      id="access-upstream-port"
+                      value={draft.upstreamPort}
+                      mono
+                      inputMode="numeric"
+                      placeholder="8080"
+                      onChange={(value) => update({ upstreamPort: value })}
+                    />
+                  </Field>
+                  {domainReady ? (
+                    <Field
+                      id="access-publish-target"
+                      label={zh.access.publishTargetLabel}
+                      help={zh.access.publishTargetHelp}
+                    >
+                      <TextInput
+                        id="access-publish-target"
+                        value={`${buildDomainEndpoint(normalizedDomain, draft.publishPort)} → 127.0.0.1:${draft.upstreamPort}`}
+                        mono
+                        readOnly
+                        onChange={() => {}}
+                      />
+                    </Field>
+                  ) : null}
+                </>
+              ) : null}
+            </Stack>
+          ) : null}
         </Stack>
       ) : null}
 
@@ -618,6 +882,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
           ) : null}
         </Stack>
       ) : null}
+
+      {/* 入口 B 的就地「添加域名」：与设置页共用同一个弹窗组件，不复制管理 UI。 */}
+      <AddDomainDialog
+        open={addDomainOpen}
+        onClose={() => setAddDomainOpen(false)}
+        onAdded={handleDomainAdded}
+      />
     </Stack>
   );
 }

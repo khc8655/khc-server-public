@@ -9,6 +9,11 @@ import type { Node } from '@khc/contracts';
  */
 export const HTTPS_PORT_OPTIONS = ['443', '8443', '2053', '2083', '2087', '2096'] as const;
 
+/** 是否是下拉里提供的 HTTPS 端口（从 IP 模式切过来时用它判断要不要归一化）。 */
+export function isHttpsPort(port: string): boolean {
+  return (HTTPS_PORT_OPTIONS as readonly string[]).includes(port);
+}
+
 /** 能走 Cloudflare 代理（橙云）的 HTTPS 端口；其余端口需要 DNS only。 */
 export const CF_PROXIED_HTTPS_PORTS = ['443', '2053', '2083', '2087', '2096'] as const;
 

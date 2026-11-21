@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  Certificate,
   CfDnsAccount,
   CfDnsRecordCreateForZoneRequest,
   CfDnsRecordUpdateRequest,
@@ -9,6 +10,7 @@ import type {
   Node,
 } from '@khc/contracts';
 import {
+  checkCfDnsResolve,
   createCfDnsAccount,
   createCfDnsRecord,
   deleteCfDnsAccount,
@@ -19,6 +21,7 @@ import {
   updateCfDnsAccount,
   updateCfDnsRecord,
 } from '../../data/cfDns';
+import { fetchCertificates } from '../../data/certs';
 import { fetchHubs } from '../../data/hubs';
 import { ApiError } from '../../data/client';
 import { nodeByDomain } from '../../data/endpoint';
@@ -27,8 +30,10 @@ import { ConfirmAction } from '../../patterns';
 import {
   Banner,
   Button,
+  Card,
   Checkbox,
   Drawer,
+  EmptyState,
   Field,
   InlineError,
   Row,
@@ -41,6 +46,7 @@ import {
   type ColumnDef,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
+import { AddDomainDialog } from './AddDomainDialog';
 
 type DrawerState = {
   mode: 'create' | 'edit';
@@ -83,6 +89,12 @@ interface RecordFormState {
   error: string | null;
 }
 
+/** 单条记录的解析检测状态（点一次查一次，不轮询）。 */
+type ResolveCheckState =
+  | { status: 'checking' }
+  | { status: 'done'; resolved: boolean; answers: string[]; dnsStatus: number }
+  | { status: 'error'; message: string };
+
 /** 新建时允许只填子域标签（自动补当前 Zone），也允许填完整记录名。 */
 function resolveRecordName(input: string, zoneName: string): string | null {
   const name = input.trim().replace(/\.+$/, '');
@@ -109,11 +121,37 @@ function ZoneRecords({
   const queryClient = useQueryClient();
   const toast = useToast();
   const [form, setForm] = useState<RecordFormState | null>(null);
+  /** 解析检测结果：按记录 id 存，点一次查一次，不自动轮询。 */
+  const [checks, setChecks] = useState<Record<string, ResolveCheckState>>({});
   const query = useQuery({
     queryKey: ['cfDns', 'records', zone.id],
     queryFn: () => fetchCfDnsRecords(zone.id),
     retry: false,
   });
+
+  const runCheck = async (record: CfDnsZoneRecord) => {
+    setChecks((prev) => ({ ...prev, [record.id]: { status: 'checking' } }));
+    try {
+      const result = await checkCfDnsResolve({ name: record.name, type: record.type });
+      setChecks((prev) => ({
+        ...prev,
+        [record.id]: {
+          status: 'done',
+          resolved: result.resolved,
+          answers: result.answers,
+          dnsStatus: result.status,
+        },
+      }));
+    } catch (error) {
+      setChecks((prev) => ({
+        ...prev,
+        [record.id]: {
+          status: 'error',
+          message: error instanceof Error ? error.message : zh.cfDns.resolveFailed,
+        },
+      }));
+    }
+  };
 
   const openCreate = () => {
     setForm({
@@ -345,6 +383,7 @@ function ZoneRecords({
           {records.map((record) => {
             const bound = nodeByDomain(nodes, record.name);
             const editing = form?.mode === 'edit' && form.recordId === record.id;
+            const check = checks[record.id];
             return (
               <div className="ui-record" key={record.id}>
                 <Row justify="between" gap={2}>
@@ -356,6 +395,14 @@ function ZoneRecords({
                     <Tag label={record.proxied ? zh.cfDns.recordProxied : zh.cfDns.recordUnproxied} />
                   </div>
                   <Row gap={1}>
+                    <Button
+                      label={zh.cfDns.resolveCheck}
+                      variant="ghost"
+                      size="sm"
+                      loading={checks[record.id]?.status === 'checking'}
+                      disabled={editing}
+                      onClick={() => void runCheck(record)}
+                    />
                     <Button
                       label={zh.cfDns.recordEdit}
                       variant="ghost"
@@ -381,6 +428,16 @@ function ZoneRecords({
                     {record.managed ? <Tag label={zh.cfDns.recordManaged} /> : null}
                   </div>
                 ) : null}
+                {check?.status === 'done' ? (
+                  <div className="ui-record-tags">
+                    <Tag label={check.resolved ? zh.cfDns.resolveOk : zh.cfDns.resolveNotEffective} />
+                    {check.answers.length > 0 ? <Tag label={check.answers.join('、')} /> : null}
+                  </div>
+                ) : check?.status === 'error' ? (
+                  <div className="ui-record-tags">
+                    <Tag label={`${zh.cfDns.resolveFailed}：${check.message}`} />
+                  </div>
+                ) : null}
                 {editing ? formPanel(record.id) : null}
               </div>
             );
@@ -392,32 +449,186 @@ function ZoneRecords({
 }
 
 /**
- * 域名管理（设置页「域名」分段，B 列表对象）：
- * Cloudflare 凭据一行一条（名称 / 账号 / 已启用 Zone / Token 状态），行点开同一抽屉编辑；
- * Zone 用复选列表（不做 Zone→子域名级联），展开后可增改删单条解析记录；Token 只写不读。
+ * 域名行（账户下的一个已启用域名）：
+ * 名称 + 记录数 + 证书状态 + 绑定节点，「管理记录」进抽屉增删改。
+ * 记录数是唯一需要额外请求的列，未加载出来时显示「—」，不假装 0。
+ */
+function DomainRow({
+  zone,
+  nodes,
+  certs,
+  onManage,
+  onRemove,
+}: {
+  zone: CfDnsZoneRef;
+  nodes: Node[];
+  certs: Certificate[];
+  onManage: () => void;
+  onRemove: () => void;
+}) {
+  const recordsQuery = useQuery({
+    queryKey: ['cfDns', 'records', zone.id],
+    queryFn: () => fetchCfDnsRecords(zone.id),
+    retry: false,
+  });
+  const zoneName = zone.name.toLowerCase();
+  const matches = (domain: string) => {
+    const value = domain.toLowerCase();
+    return value === zoneName || value.endsWith(`.${zoneName}`);
+  };
+  const boundNodes = nodes.filter((node) => node.domain && matches(node.domain));
+  const cert = certs.find((item) => item.domains.some(matches));
+  const certValidUntil = cert?.notAfter ? new Date(cert.notAfter * 1000) : null;
+
+  return (
+    <div className="ui-record">
+      <Row justify="between" gap={2}>
+        <div className="ui-record-head">
+          <span className="ui-record-name" title={zone.name}>
+            {zone.name}
+          </span>
+          <Tag
+            label={
+              recordsQuery.data
+                ? fmt(zh.cfDns.recordsCount, { count: recordsQuery.data.records.length })
+                : zh.cfDns.domainRecordsUnknown
+            }
+          />
+          <Tag
+            label={
+              cert
+                ? certValidUntil
+                  ? fmt(zh.cfDns.domainCertUntil, {
+                      date: certValidUntil.toISOString().slice(0, 10),
+                    })
+                  : zh.cfDns.domainCertPresent
+                : zh.cfDns.domainNoCert
+            }
+          />
+          {boundNodes.length > 0 ? (
+            <Tag
+              label={fmt(zh.cfDns.domainBoundNodes, {
+                names: boundNodes.map((node) => node.name).join('、'),
+              })}
+            />
+          ) : null}
+        </div>
+        <Row gap={1}>
+          <Button label={zh.cfDns.domainManage} variant="ghost" size="sm" onClick={onManage} />
+          <Button label={zh.cfDns.domainRemove} variant="ghost" size="sm" onClick={onRemove} />
+        </Row>
+      </Row>
+    </div>
+  );
+}
+
+/** 账户卡片：一条凭据一张卡，卡内是它启用的域名。 */
+function AccountCard({
+  account,
+  nodes,
+  certs,
+  onEdit,
+  onDelete,
+  onManageDomain,
+  onRemoveDomain,
+  onAddDomain,
+}: {
+  account: CfDnsAccount;
+  nodes: Node[];
+  certs: Certificate[];
+  onEdit: () => void;
+  onDelete: () => void;
+  onManageDomain: (zone: CfDnsZoneRef) => void;
+  onRemoveDomain: (zone: CfDnsZoneRef) => void;
+  onAddDomain: () => void;
+}) {
+  const enabledZones = account.zones.filter((zone) => account.enabledZoneIds.includes(zone.id));
+  return (
+    <Card>
+      <Stack gap={3}>
+        <Row justify="between" gap={2}>
+          <div className="ui-record-head">
+            <span className="ui-record-name">{account.name}</span>
+            {account.accountName ? <Tag label={account.accountName} /> : null}
+            <Tag
+              label={account.hasToken ? zh.cfDns.tokenOk : zh.cfDns.tokenMissing}
+            />
+            {account.enabled ? null : <Tag label={zh.cfDns.statusDisabled} />}
+          </div>
+          <Row gap={1}>
+            <Button label={zh.cfDns.addDomainTitle} variant="ghost" size="sm" onClick={onAddDomain} />
+            <Button
+              label={actionLabel(action('cfDns.account.update'))}
+              variant="ghost"
+              size="sm"
+              onClick={onEdit}
+            />
+            <Button
+              label={actionLabel(action('cfDns.account.delete'))}
+              variant="ghost"
+              size="sm"
+              onClick={onDelete}
+            />
+          </Row>
+        </Row>
+
+        {enabledZones.length === 0 ? (
+          <span className="ui-muted">{zh.cfDns.accountNoDomain}</span>
+        ) : (
+          <div className="ui-record-list">
+            {enabledZones.map((zone) => (
+              <DomainRow
+                key={zone.id}
+                zone={zone}
+                nodes={nodes}
+                certs={certs}
+                onManage={() => onManageDomain(zone)}
+                onRemove={() => onRemoveDomain(zone)}
+              />
+            ))}
+          </div>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
+/**
+ * 域名管理（设置页「域名」分段，入口 A 的唯一管理面）：
+ * 账户 → 域名 → 解析记录 三级：一条凭据一张卡，卡内是它启用的域名（记录数 / 证书 / 绑定节点），
+ * 域名行的「管理记录」打开抽屉做单条记录的增改删与解析检测；凭据抽屉只管凭据本身。
+ * Token 只写不读；域名与记录都不在这里静默重建。
  */
 export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const accountsQuery = useQuery({ queryKey: ['cfDns', 'accounts'], queryFn: fetchCfDnsAccounts });
+  const certsQuery = useQuery({ queryKey: ['certs'], queryFn: fetchCertificates, retry: false });
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
+  /** 记录抽屉：某个账户下的某个域名。 */
+  const [domainTarget, setDomainTarget] = useState<{
+    account: CfDnsAccount;
+    zone: CfDnsZoneRef;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CfDnsAccount | null>(null);
   const [recordDeleteTarget, setRecordDeleteTarget] = useState<{
     zone: CfDnsZoneRef;
     record: CfDnsZoneRecord;
   } | null>(null);
-  /** 已展开解析记录的 Zone；只有展开的才请求 /cf-dns/records。 */
-  const [expandedZones, setExpandedZones] = useState<string[]>([]);
+  /** 「添加域名」弹窗：与添加节点抽屉共用同一个组件（单一实现）；从哪张账户卡进来就带上哪个账户。 */
+  const [addDomainFor, setAddDomainFor] = useState<string | null>(null);
+  const accounts = accountsQuery.data ?? [];
+  const certs = certsQuery.data ?? [];
   const nodesQuery = useQuery({
     queryKey: ['hubs'],
     queryFn: fetchHubs,
     retry: false,
-    enabled: Boolean(drawer) && expandedZones.length > 0,
+    // 域名行要显示「绑定节点」，账户卡一出现就需要节点列表。
+    enabled: accounts.length > 0 || Boolean(drawer),
   });
   const nodes = nodesQuery.data ?? [];
 
   const openCreate = () => {
-    setExpandedZones([]);
     setDrawer({
       mode: 'create',
       account: null,
@@ -436,7 +647,6 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
   }, [createSignal]);
 
   const openEdit = (account: CfDnsAccount) => {
-    setExpandedZones([]);
     setDrawer({
       mode: 'edit',
       account,
@@ -561,36 +771,17 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
     }
   };
 
-  const columns: ColumnDef<CfDnsAccount>[] = [
-    { key: 'name', type: 'name', header: zh.cfDns.colName, value: (item) => item.name },
-    {
-      key: 'account',
-      type: 'text',
-      header: zh.cfDns.colAccount,
-      priority: 'low',
-      value: (item) => item.accountName ?? '—',
-    },
-    {
-      key: 'zones',
-      type: 'text',
-      header: zh.cfDns.colZones,
-      value: (item) => `${item.enabledZoneIds.length}/${item.zones.length}`,
-    },
-    {
-      key: 'token',
-      type: 'status',
-      header: zh.cfDns.colToken,
-      status: (item) => ({
-        tone: item.hasToken ? 'ok' : 'warn',
-        label: item.hasToken ? zh.cfDns.tokenOk : zh.cfDns.tokenMissing,
-      }),
-    },
-    { key: 'actions', type: 'actions', header: '' },
-  ];
-
-  const handleAction = (ref: ActionRef, account: CfDnsAccount) => {
-    if (ref.id === 'cfDns.account.update') openEdit(account);
-    if (ref.id === 'cfDns.account.delete') setDeleteTarget(account);
+  /** 从面板移除一个域名：只取消勾选，不动 Cloudflare 上的记录。 */
+  const removeDomain = async (account: CfDnsAccount, zone: CfDnsZoneRef) => {
+    try {
+      await updateCfDnsAccount(account.id, {
+        enabledZoneIds: account.enabledZoneIds.filter((id) => id !== zone.id),
+      });
+      await invalidate();
+      toast.show({ message: fmt(zh.cfDns.domainRemovedToast, { name: zone.name }) });
+    } catch (error) {
+      toast.show({ message: errorText(error, zh.cfDns.domainRemoveError) });
+    }
   };
 
   return (
@@ -608,28 +799,38 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
         />
       ) : null}
 
-      <Table
-        rows={accountsQuery.isLoading ? undefined : (accountsQuery.data ?? [])}
-        columns={columns}
-        rowKey={(item) => item.id}
-        objectLabel={zh.cfDns.colName}
-        empty={{
-          icon: 'globe',
-          title: zh.cfDns.emptyTitle,
-          description: zh.cfDns.emptyHint,
-          action: (
+      {accountsQuery.isLoading ? (
+        <span className="ui-muted">{zh.cfDns.loadingAccounts}</span>
+      ) : accounts.length === 0 ? (
+        <EmptyState
+          icon="globe"
+          title={zh.cfDns.emptyTitle}
+          description={zh.cfDns.emptyHint}
+          action={
             <Button
               label={actionLabel(action('cfDns.account.create'))}
               variant="primary"
               icon="plus"
               onClick={openCreate}
             />
-          ),
-        }}
-        rowActions={(item) => [action('cfDns.account.update'), action('cfDns.account.delete')]}
-        onRowAction={(ref, item) => handleAction(ref, item)}
-        onRowOpen={openEdit}
-      />
+          }
+        />
+      ) : (
+        accounts.map((account) => (
+          <AccountCard
+            key={account.id}
+            account={account}
+            nodes={nodes}
+            certs={certs}
+            onEdit={() => openEdit(account)}
+            onDelete={() => setDeleteTarget(account)}
+            onManageDomain={(zone) => setDomainTarget({ account, zone })}
+            onRemoveDomain={(zone) => void removeDomain(account, zone)}
+            onAddDomain={() => setAddDomainFor(account.id)}
+          />
+        ))
+      )}
+
 
       {drawer ? (
         <Drawer
@@ -707,57 +908,24 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
                 <Stack gap={2}>
                   {drawer.zones.map((zone) => {
                     const checked = drawer.selectedZoneIds.includes(zone.id);
-                    const expanded = checked && expandedZones.includes(zone.id);
                     return (
-                      <Stack gap={1} key={zone.id}>
-                        <Row justify="between" gap={2}>
-                          <Checkbox
-                            checked={checked}
-                            onChange={(next) => {
-                              setDrawer((prev) =>
-                                prev
-                                  ? {
-                                      ...prev,
-                                      selectedZoneIds: next
-                                        ? [...prev.selectedZoneIds, zone.id]
-                                        : prev.selectedZoneIds.filter((id) => id !== zone.id),
-                                    }
-                                  : prev,
-                              );
-                              if (!next) {
-                                setExpandedZones((prev) => prev.filter((id) => id !== zone.id));
-                              }
-                            }}
-                            label={zone.name}
-                          />
-                          {checked ? (
-                            <Button
-                              label={expanded ? zh.cfDns.recordsHide : zh.cfDns.recordsShow}
-                              variant="ghost"
-                              size="sm"
-                              onClick={() =>
-                                setExpandedZones((prev) =>
-                                  prev.includes(zone.id)
-                                    ? prev.filter((id) => id !== zone.id)
-                                    : [...prev, zone.id],
-                                )
-                              }
-                            />
-                          ) : null}
-                        </Row>
-                        {expanded ? (
-                          <div className="ui-record-panel">
-                            <ZoneRecords
-                              zone={zone}
-                              nodes={nodes}
-                              onDelete={(record) => {
-                                setRecordDeleteTarget({ zone, record });
-                                setDrawer(null);
-                              }}
-                            />
-                          </div>
-                        ) : null}
-                      </Stack>
+                      <Checkbox
+                        key={zone.id}
+                        checked={checked}
+                        onChange={(next) =>
+                          setDrawer((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  selectedZoneIds: next
+                                    ? [...prev.selectedZoneIds, zone.id]
+                                    : prev.selectedZoneIds.filter((id) => id !== zone.id),
+                                }
+                              : prev,
+                          )
+                        }
+                        label={zone.name}
+                      />
                     );
                   })}
                 </Stack>
@@ -769,6 +937,25 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
             ) : null}
             {drawer.error ? <InlineError message={drawer.error} /> : null}
           </Stack>
+        </Drawer>
+      ) : null}
+
+      {domainTarget ? (
+        <Drawer
+          open
+          title={domainTarget.zone.name}
+          context={`${zh.cfDns.context} · ${domainTarget.account.name}`}
+          onClose={() => setDomainTarget(null)}
+          footer={<Button label={zh.common.close} onClick={() => setDomainTarget(null)} />}
+        >
+          <ZoneRecords
+            zone={domainTarget.zone}
+            nodes={nodes}
+            onDelete={(record) => {
+              setRecordDeleteTarget({ zone: domainTarget.zone, record });
+              setDomainTarget(null);
+            }}
+          />
         </Drawer>
       ) : null}
 
@@ -795,6 +982,15 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
           onConfirm={() => removeRecord(recordDeleteTarget.zone, recordDeleteTarget.record)}
         />
       ) : null}
+
+      <AddDomainDialog
+        open={addDomainFor !== null}
+        initialAccountId={addDomainFor ?? undefined}
+        onClose={() => setAddDomainFor(null)}
+        onAdded={(domain) => {
+          toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: domain.zoneName }) });
+        }}
+      />
     </Stack>
   );
 }

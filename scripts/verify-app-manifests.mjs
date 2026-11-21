@@ -39,7 +39,17 @@ const bad = (dir, msg) => problems.push(`${dir}: ${msg}`);
 const sha256 = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 
 /** 契约里的字面量，改契约时这里要跟着改（口径 drift 由本脚本第 2 项暴露）。 */
-const MANIFEST_KEYS = ['name', 'version', 'runtime', 'params', 'scripts', 'sha256', 'writes'];
+const MANIFEST_KEYS = [
+  'name',
+  'version',
+  'runtime',
+  'params',
+  'scripts',
+  'sha256',
+  'writes',
+  'publish',
+];
+const PUBLISH_KEYS = ['label', 'host', 'portParam', 'port'];
 const RUNTIME_KEYS = ['mode', 'user', 'linger'];
 const PARAM_KEYS = ['key', 'type', 'label', 'default', 'min', 'max', 'maxLength', 'pattern', 'secret'];
 const PARAM_TYPES = ['string', 'integer', 'boolean'];
@@ -94,6 +104,33 @@ function checkManifestShape(dir, id, root) {
     if (rt.linger !== undefined && typeof rt.linger !== 'boolean') bad(dir, 'runtime.linger 必须是布尔值');
     // create 模式要在节点上建同名系统账号，必须给出确定的用户名
     if (rt.mode === 'create' && !rt.user) bad(dir, 'runtime.mode=create 时必须指定 runtime.user');
+  }
+
+  if (m.publish !== undefined) {
+    const pb = m.publish;
+    if (typeof pb !== 'object' || pb === null || Array.isArray(pb)) {
+      bad(dir, 'manifest.publish 必须是对象');
+    } else {
+      checkUnknown(dir, pb, PUBLISH_KEYS, 'manifest.publish');
+      if (pb.label !== undefined && (typeof pb.label !== 'string' || !pb.label.trim() || pb.label.length > 64)) {
+        bad(dir, 'manifest.publish.label ≤64 字符');
+      }
+      if (pb.host !== undefined && typeof pb.host !== 'string') bad(dir, 'manifest.publish.host 必须是字符串');
+      if (pb.portParam !== undefined && !KEY_RE.test(String(pb.portParam))) {
+        bad(dir, 'manifest.publish.portParam 必须是安装参数名（小写字母开头）');
+      }
+      if (pb.port !== undefined && !(Number.isInteger(pb.port) && pb.port >= 1 && pb.port <= 65535)) {
+        bad(dir, 'manifest.publish.port 必须是 1–65535 的整数');
+      }
+      if (pb.portParam === undefined && pb.port === undefined) {
+        bad(dir, 'manifest.publish 需要 portParam 或 port 之一');
+      }
+      if (pb.portParam !== undefined && Array.isArray(m.params)) {
+        // 声明的端口参数必须真的存在，否则面板拿不到用户填的端口会静默用错端口
+        const keys = new Set(m.params.map((p) => (p && typeof p === 'object' ? p.key : null)));
+        if (!keys.has(pb.portParam)) bad(dir, `manifest.publish.portParam=${pb.portParam} 不在 params 里`);
+      }
+    }
   }
 
   if (!Array.isArray(m.params)) bad(dir, 'manifest.params 必须是数组');

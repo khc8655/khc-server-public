@@ -10,6 +10,15 @@ export const API_VERSION = 'v1' as const;
 /** 服务名，用于探活/版本响应的强校验 */
 export const SERVICE_NAME = 'khc-server' as const;
 
+/**
+ * 域名模式下 Agent 监听端口的默认值。
+ *
+ * 不用 443：443 是备案/端口策略盯得最紧的一条，还要留给 Caddy 与 ACME 的 TLS-ALPN-01
+ * 校验（校验必须临时占 443）。2053 在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。
+ * 面板表单默认值与 API「只给 domain」时的 endpoint 推导共用这一个值，避免两处默认打架。
+ */
+export const DEFAULT_DOMAIN_PORT = 2053;
+
 /** 统一错误格式：{"error":{"code","message","fields?"}} */
 export const apiErrorSchema = z.object({
   error: z.object({
@@ -1464,6 +1473,28 @@ export const cfDnsZoneRecordsResponseSchema = z.object({
 });
 export type CfDnsZoneRecordsResponse = z.infer<typeof cfDnsZoneRecordsResponseSchema>;
 
+/**
+ * POST /api/v1/cf-dns/resolve-check —— 从公网视角校验某个记录名当前解析成什么。
+ * 走 DoH（Cloudflare 1.1.1.1），不需要任何 DNS 凭据，用于「改完记录到底生效没有」。
+ */
+export const cfDnsResolveCheckRequestSchema = z.object({
+  name: z.string().trim().min(3).max(253),
+  type: z.enum(['A', 'AAAA', 'CNAME']).optional(),
+});
+export type CfDnsResolveCheckRequest = z.infer<typeof cfDnsResolveCheckRequestSchema>;
+
+export const cfDnsResolveCheckResponseSchema = z.object({
+  name: z.string(),
+  type: z.enum(['A', 'AAAA', 'CNAME']),
+  /** NOERROR 且拿到同类型应答才算已生效 */
+  resolved: z.boolean(),
+  answers: z.array(z.string()),
+  /** DoH 状态码：0 = NOERROR，3 = NXDOMAIN */
+  status: z.number().int(),
+  checkedAt: z.number().int().nonnegative(),
+});
+export type CfDnsResolveCheckResponse = z.infer<typeof cfDnsResolveCheckResponseSchema>;
+
 export const cfDnsAccountResponseSchema = z.object({
   account: cfDnsAccountSchema,
   /** 本次拉取到的全部 Zone（添加/刷新时返回，便于勾选） */
@@ -1625,6 +1656,30 @@ export const appManifestParamSchema = z
   .strict();
 export type AppManifestParam = z.infer<typeof appManifestParamSchema>;
 
+/**
+ * 应用「可发布」声明：告诉面板这个应用在本机哪条端口上提供 HTTP 服务，
+ * 以便安装完成后一键发布（Caddy 站点，上游指向本机这条端口）。
+ *
+ * - `portParam`：端口来自哪个安装参数（用户装的时候可能改过），优先用它；
+ * - `port`：没写 `portParam` 或拿不到参数值时用这个默认端口。
+ */
+export const appManifestPublishSchema = z
+  .object({
+    label: z.string().trim().min(1).max(64).optional(),
+    host: z.string().trim().min(1).max(64).default('127.0.0.1'),
+    portParam: z
+      .string()
+      .trim()
+      .regex(/^[a-z][a-z0-9_]*$/, '参数名必须是小写字母开头')
+      .optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.portParam) || Boolean(value.port), {
+    message: 'publish 需要 portParam 或 port 之一',
+  });
+export type AppManifestPublish = z.infer<typeof appManifestPublishSchema>;
+
 /** 应用定义本体。未知字段一律拒绝，避免悄悄把可执行内容塞进库。 */
 export const appManifestDefinitionSchema = z
   .object({
@@ -1635,6 +1690,7 @@ export const appManifestDefinitionSchema = z
     scripts: appManifestScriptsSchema,
     sha256: appManifestSha256Schema,
     writes: z.array(z.string().min(1).max(256)).max(32).default([]),
+    publish: appManifestPublishSchema.optional(),
   })
   .strict();
 export type AppManifestDefinition = z.infer<typeof appManifestDefinitionSchema>;

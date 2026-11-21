@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import {
+  DEFAULT_DOMAIN_PORT,
   agentStateSchema,
   createNodeRequestSchema,
   nodeListResponseSchema,
@@ -79,6 +80,41 @@ function assertProductionTls(
 function deriveAccessMode(endpoint: string, tunnelId: string | null | undefined): NodeAccessMode {
   if (tunnelId) return 'tunnel';
   return /^https:\/\//i.test(endpoint) ? 'domain' : 'ip';
+}
+
+/** endpoint 的主机名（小写、去尾点）；非法 URL 返回 null。 */
+function endpointHostname(endpoint: string): string | null {
+  try {
+    return new URL(endpoint).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 域名模式：endpoint 与 domain 必须指向同一主机。
+ *
+ * 两个字段都会落库（nodes.endpoint 用于探活，nodes.domain 用于解析占用判定与展示），
+ * 不一致等于存了两份互相矛盾的真相，后续排查会指向错误的地方。域名模式允许
+ * **不带** domain（老客户端），只有两者都存在时才做一致性校验。
+ */
+function assertDomainMatchesEndpoint(
+  accessMode: NodeAccessMode,
+  endpoint: string,
+  domain: string | null | undefined,
+): void {
+  if (accessMode !== 'domain') return;
+  if (!domain) return;
+  const host = endpointHostname(endpoint);
+  if (!host) return; // 形状问题由前置校验负责
+  const expected = domain.trim().toLowerCase().replace(/\.$/, '');
+  if (host === expected) return;
+  throw new AppError(
+    400,
+    'domain_mismatch',
+    `域名模式下接入地址的主机（${host}）必须与节点域名（${expected}）一致；请同时修改两者或改为「手动输入域名」重新生成`,
+    { endpoint: `主机应为 ${expected}`, domain: `应与 ${host} 一致` },
+  );
 }
 
 /**
@@ -287,17 +323,34 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
 
   router.post('/nodes', async (c) => {
     const body = await parseJsonBody(c, createNodeRequestSchema);
-    const accessMode = body.accessMode ?? deriveAccessMode(body.endpoint ?? '', body.tunnelId);
-    if (accessMode !== 'tunnel' && !body.endpoint) {
+    const accessMode =
+      body.accessMode ??
+      // 老约定不变：有 endpoint 就按隧道引用 / 协议推导（IP 直连也可以带域名标签）。
+      // 只有**没给 endpoint** 时才用「有 domain = 域名接入」推导，支持只填域名建节点。
+      (body.endpoint
+        ? deriveAccessMode(body.endpoint, body.tunnelId)
+        : body.domain
+          ? 'domain'
+          : deriveAccessMode('', body.tunnelId));
+    // 域名模式允许只给 domain：endpoint 由域名推导为 https://<domain>:2053，
+    // 让调用方不必为了一个必填字段再拼一次同样的域名。端口默认值见 DEFAULT_DOMAIN_PORT
+    // （避开 443：443 留给 Caddy 与 ACME 校验），与面板表单默认值同源。
+    const endpointInput =
+      body.endpoint ??
+      (accessMode === 'domain' && body.domain
+        ? `https://${body.domain}:${DEFAULT_DOMAIN_PORT}`
+        : '');
+    if (accessMode !== 'tunnel' && !endpointInput) {
       throw badRequest('非隧道接入必须提供 endpoint', { endpoint: '必填' });
     }
     const access = await resolveAccess(deps, {
-      endpoint: body.endpoint ?? '',
+      endpoint: endpointInput,
       tunnelEndpoint: body.tunnelEndpoint,
       accessMode,
       tunnelId: body.tunnelId ?? null,
       allowInsecure: body.allowInsecure ?? false,
     });
+    assertDomainMatchesEndpoint(accessMode, access.endpoint, body.domain);
     // §3.2：新建节点一律按 production 强制 TLS 校验；仅显式允许明文（IP 直连）时放行。
     assertProductionTls(
       c.env,
@@ -377,6 +430,18 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
         c.env,
         { endpoint: access.endpoint, tunnelEndpoint: patch.tunnelEndpoint },
         access.allowInsecure,
+      );
+    }
+    // 同上：只有本次显式改入口 / 改域名 / 切接入方式时才校验一致性，改名等请求完全不触发。
+    if (
+      patch.endpoint !== undefined ||
+      patch.domain !== undefined ||
+      accessMode !== current.accessMode
+    ) {
+      assertDomainMatchesEndpoint(
+        accessMode,
+        access.endpoint,
+        patch.domain !== undefined ? patch.domain : current.domain,
       );
     }
     // F-3：token 显式支持轮换（加密写入 tokenEnc），不再被 zod 静默剥离；
