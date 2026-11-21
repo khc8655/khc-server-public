@@ -20,7 +20,7 @@ import os
 from typing import Any, Mapping
 
 from khc import Adapter, Ctx, action_params
-from khc.app_manifests import ManifestError, run_manifest
+from khc.app_manifests import ManifestError, read_installed_manifests, run_manifest
 from khc.pkg import ensure_packages
 from khc.recipes import RecipeError, catalog_for_display, find_recipe, read_installed, run_recipe
 
@@ -62,7 +62,7 @@ class AppCatalog(Adapter):
         return []
 
     def status(self, ctx: Ctx) -> dict[str, Any]:
-        installed = read_installed(ctx)
+        installed = {**read_installed(ctx), **read_installed_manifests(ctx)}
         return {
             "installed": sorted(installed),
             "installedDetail": installed,
@@ -71,7 +71,7 @@ class AppCatalog(Adapter):
 
     def action_recipe_installed(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         return {
-            "installed": read_installed(ctx),
+            "installed": {**read_installed(ctx), **read_installed_manifests(ctx)},
             "recipes": catalog_for_display(_catalog_dir()),
             "cards": [],
         }

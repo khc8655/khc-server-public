@@ -244,10 +244,96 @@ describe('S3：控制面原生 ACME v2 + Cloudflare DNS-01', () => {
         propagationDelayMs: 0,
         pollIntervalMs: 0,
       }),
-    ).rejects.toThrow(/NXDOMAIN for _acme-challenge/);
+    ).rejects.toThrow(/NXDOMAIN for _acme-challenge.*DNS 传播延迟/);
 
     expect(mock.deletedRecords).toEqual(['txt_1']);
     expect(mock.txtRecords.size).toBe(0);
+  });
+
+  it('DNS-01 写入 TXT 后轮询双公共 DoH 直至生效再触发 ACME 校验', async () => {
+    const mock = createMockAcmeAndCf({});
+    let cfCalls = 0;
+    let googleCalls = 0;
+    const dohFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      const currentTxt = [...mock.txtRecords.values()].map((item) => item.content);
+      const payload =
+        url.includes('cloudflare-dns.com')
+          ? ((cfCalls += 1) >= 2 && currentTxt.length > 0
+              ? { Status: 0, Answer: [{ type: 16, data: `"${currentTxt[0]}"` }] }
+              : { Status: 3 })
+          : ((googleCalls += 1) >= 3 && currentTxt.length > 0
+              ? { Status: 0, Answer: [{ type: 16, data: `"${currentTxt[0]}"` }] }
+              : { Status: 3 });
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    };
+    const issued = await issueAcmeDns01({
+      domains: ['example.com'],
+      cfToken: 'cf-secret-tok',
+      zones: [{ id: 'zone_1', name: 'example.com' }],
+      acmeFetch: mock.acmeFetch,
+      cfFetch: mock.cfFetch,
+      dohFetch,
+      verifyDnsPropagation: true,
+      sleep: async () => {},
+      propagationDelayMs: 0,
+      propagationPollIntervalMs: 10,
+      propagationMaxWaitMs: 50,
+      pollIntervalMs: 0,
+    });
+    expect(issued.domains).toEqual(['example.com']);
+    expect(cfCalls).toBe(3);
+    expect(googleCalls).toBe(3);
+    expect(mock.deletedRecords).toEqual(['txt_1']);
+  });
+
+  it('DoH 轮询超时兜底后仍放行 ACME 校验而不误杀，全局导入 PEM 自动解析到期时间', async () => {
+    const mock = createMockAcmeAndCf({});
+    const dohFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ Status: 3 }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    const issued = await issueAcmeDns01({
+      domains: ['example.com'],
+      cfToken: 'cf-secret-tok',
+      zones: [{ id: 'zone_1', name: 'example.com' }],
+      acmeFetch: mock.acmeFetch,
+      cfFetch: mock.cfFetch,
+      dohFetch,
+      verifyDnsPropagation: true,
+      sleep: async () => {},
+      propagationDelayMs: 0,
+      propagationPollIntervalMs: 10,
+      propagationMaxWaitMs: 20,
+      pollIntervalMs: 0,
+    });
+    expect(issued.domains).toEqual(['example.com']);
+
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const validPem = makeFakeCertPem(0x17, '270219120000Z');
+    const created = await ctx.app.request(
+      '/api/v1/certs',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          name: 'imported-global',
+          domains: ['example.com'],
+          issuer: 'manual',
+          certPem: validPem,
+          keyPem: '-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n',
+        }),
+      },
+      ctx.env,
+    );
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { certificate: { notAfter: number | null } };
+    expect(body.certificate.notAfter).toBe(Math.floor(Date.UTC(2027, 1, 19, 12, 0, 0) / 1000));
   });
 
   it('路由 POST /certs/issue-dns01 与 POST /certs/:id/renew 完成全流程入库并更新到期', async () => {
