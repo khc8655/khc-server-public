@@ -1,6 +1,6 @@
 # plan: 设置信息架构重组（账号/域名/双轨证书）与安装发布主流程
 
-> 状态：已拍板 ｜ 最后核验：2026-11-21 ｜ 关联：docs/ui-redesign/page-specs.md、docs/design-v3.md、docs/hosted-apps.md
+> 状态：已实施 ｜ 最后核验：2026-11-21 ｜ 关联：docs/ui-redesign/page-specs.md、docs/design-v3.md、docs/hosted-apps.md
 
 ## 1. 背景与现状问题
 
