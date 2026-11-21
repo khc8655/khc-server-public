@@ -259,10 +259,10 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     expect((within(dialog).getByLabelText('当前域名') as HTMLInputElement).value).toBe(
       'agent.example.com',
     );
-    expect((within(dialog).getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('443');
+    expect((within(dialog).getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('2053');
     expect(
       (within(dialog).getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
-    ).toBe('https://agent.example.com');
+    ).toBe('https://agent.example.com:2053');
 
     await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));
     await waitFor(() => {
@@ -272,7 +272,7 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
       expect(patch).toBeTruthy();
       expect(JSON.parse(String(patch?.init?.body))).toMatchObject({
         accessMode: 'domain',
-        endpoint: 'https://agent.example.com',
+        endpoint: 'https://agent.example.com:2053',
         domain: 'agent.example.com',
       });
     });

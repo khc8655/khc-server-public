@@ -10,6 +10,15 @@ export const API_VERSION = 'v1' as const;
 /** 服务名，用于探活/版本响应的强校验 */
 export const SERVICE_NAME = 'khc-server' as const;
 
+/**
+ * 域名模式下 Agent 监听端口的默认值。
+ *
+ * 不用 443：443 是备案/端口策略盯得最紧的一条，还要留给 Caddy 与 ACME 的 TLS-ALPN-01
+ * 校验（校验必须临时占 443）。2053 在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。
+ * 面板表单默认值与 API「只给 domain」时的 endpoint 推导共用这一个值，避免两处默认打架。
+ */
+export const DEFAULT_DOMAIN_PORT = 2053;
+
 /** 统一错误格式：{"error":{"code","message","fields?"}} */
 export const apiErrorSchema = z.object({
   error: z.object({

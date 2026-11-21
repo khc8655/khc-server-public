@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import {
+  DEFAULT_DOMAIN_PORT,
   agentStateSchema,
   createNodeRequestSchema,
   nodeListResponseSchema,
@@ -331,10 +332,14 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
         : body.domain
           ? 'domain'
           : deriveAccessMode('', body.tunnelId));
-    // 域名模式允许只给 domain：endpoint 由域名推导为 https://<domain>（默认 443），
-    // 让调用方不必为了一个必填字段再拼一次同样的域名。
+    // 域名模式允许只给 domain：endpoint 由域名推导为 https://<domain>:2053，
+    // 让调用方不必为了一个必填字段再拼一次同样的域名。端口默认值见 DEFAULT_DOMAIN_PORT
+    // （避开 443：443 留给 Caddy 与 ACME 校验），与面板表单默认值同源。
     const endpointInput =
-      body.endpoint ?? (accessMode === 'domain' && body.domain ? `https://${body.domain}` : '');
+      body.endpoint ??
+      (accessMode === 'domain' && body.domain
+        ? `https://${body.domain}:${DEFAULT_DOMAIN_PORT}`
+        : '');
     if (accessMode !== 'tunnel' && !endpointInput) {
       throw badRequest('非隧道接入必须提供 endpoint', { endpoint: '必填' });
     }

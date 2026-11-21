@@ -287,10 +287,10 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
 
-    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('443');
+    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('2053');
     expect(
       (screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value,
-    ).toBe('https://manual.example.com');
+    ).toBe('https://manual.example.com:2053');
 
     await submitCreate();
     await screen.findByText('节点已创建');
@@ -300,7 +300,7 @@ describe('添加节点：统一接入表单', () => {
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://manual.example.com',
+      endpoint: 'https://manual.example.com:2053',
       domain: 'manual.example.com',
     });
     expect(
@@ -336,7 +336,7 @@ describe('添加节点：统一接入表单', () => {
 
     await userEvent.type(await screen.findByLabelText('域名'), 'app.other.net');
     expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
-      'https://app.other.net',
+      'https://app.other.net:2053',
     );
 
     await submitCreate();
@@ -347,7 +347,7 @@ describe('添加节点：统一接入表单', () => {
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://app.other.net',
+      endpoint: 'https://app.other.net:2053',
       domain: 'app.other.net',
     });
     // 手填域名不产生任何 DNS 写入。
@@ -444,7 +444,7 @@ describe('添加节点：统一接入表单', () => {
     });
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
     expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
-      'https://app.example.com',
+      'https://app.example.com:2053',
     );
 
     await submitCreate();
@@ -454,7 +454,7 @@ describe('添加节点：统一接入表单', () => {
     );
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({
       accessMode: 'domain',
-      endpoint: 'https://app.example.com',
+      endpoint: 'https://app.example.com:2053',
       domain: 'app.example.com',
     });
   });
@@ -517,10 +517,10 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
-    // 勾选自动发布并填上游端口；443 与 Agent 自己冲突，先点「改用 8443」把 443 让给 Caddy
+    // 勾选自动发布：默认发布端口 2083 与 Agent 的 2053 不撞，不会出现冲突提示
     await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
-    expect(await screen.findByText('443 已被节点自己占用')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: '改用 8443' }));
+    expect(screen.queryByText('发布端口和 Agent 监听端口撞了')).toBeNull();
+    expect((screen.getByLabelText('发布端口') as HTMLSelectElement).value).toBe('2083');
     const upstream = screen.getByLabelText('上游端口');
     await userEvent.clear(upstream);
     await userEvent.type(upstream, '8080');
@@ -537,6 +537,7 @@ describe('添加节点：统一接入表单', () => {
         kind: 'proxy',
         domains: ['app.example.com'],
         upstreams: ['127.0.0.1:8080'],
+        listenPort: 2083,
         tls: { mode: 'auto' },
       });
     });
@@ -548,7 +549,11 @@ describe('添加节点：统一接入表单', () => {
         ),
       ).toBe(true);
     });
-    expect(await screen.findByText('HTTPS 已生效')).toBeTruthy();
+    expect(await screen.findByText('站点已应用')).toBeTruthy();
+    // 完成提示里给的是发布地址（带发布端口），不是节点接入地址
+    expect(
+      screen.getByText(/打开 https:\/\/app\.example\.com:2083 应能访问/),
+    ).toBeTruthy();
   });
 
   it('一键发布失败：apply 报错时回滚站点配置，不留半套站点', async () => {
@@ -574,7 +579,6 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
     await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
-    await userEvent.click(await screen.findByRole('button', { name: '改用 8443' }));
 
     await submitCreate();
     await screen.findByText('节点已创建');
@@ -587,7 +591,7 @@ describe('添加节点：统一接入表单', () => {
     });
   });
 
-  it('一键发布：443 被 Agent 自己占用时挡住提交，并给「改用 8443」出口', async () => {
+  it('一键发布：发布端口与 Agent 端口撞了时挡住提交，并给换端口的出口', async () => {
     zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
     records = [
       {
@@ -613,14 +617,17 @@ describe('添加节点：统一接入表单', () => {
       within(screen.getByRole('dialog')).getByRole('button', {
         name: '添加节点',
       }) as HTMLButtonElement;
-    // 443 只能有一个进程：默认端口 443 时不允许提交
-    expect(save().disabled).toBe(true);
-    expect(screen.getByText('443 已被节点自己占用')).toBeTruthy();
-
-    await userEvent.click(screen.getByRole('button', { name: '改用 8443' }));
     expect(save().disabled).toBe(false);
-    expect((screen.getByLabelText('Agent 监听端口') as HTMLSelectElement).value).toBe('8443');
-    expect(screen.queryByText('443 已被节点自己占用')).toBeNull();
+
+    // 手动把发布端口挑成 Agent 正在用的那条：一条端口只能一个进程，必须挡住
+    await userEvent.selectOptions(screen.getByLabelText('发布端口'), '2053');
+    expect(save().disabled).toBe(true);
+    expect(screen.getByText('发布端口和 Agent 监听端口撞了')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '改用 2083' }));
+    expect(save().disabled).toBe(false);
+    expect((screen.getByLabelText('发布端口') as HTMLSelectElement).value).toBe('2083');
+    expect(screen.queryByText('发布端口和 Agent 监听端口撞了')).toBeNull();
   });
 
   it('Tunnel 模式：选择全局配置，payload 只带 tunnelId', async () => {

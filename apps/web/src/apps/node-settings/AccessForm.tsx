@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { DEFAULT_DOMAIN_PORT } from '@khc/contracts';
 import type {
   CreateNodeRequest,
   Node,
@@ -49,6 +50,8 @@ export interface NodeAccessDraft {
   recordId: string;
   domain: string;
   domainPort: string;
+  /** 应用对外端口（Caddy 监听）；默认避开 443 与 Agent 端口。 */
+  publishPort: string;
   /** 隧道模式：全局隧道配置 id / 域名（仅用于满足建节点契约的 endpoint 字段） */
   tunnelId: string;
   tunnelHostname: string;
@@ -127,6 +130,22 @@ function endpointProtocol(endpoint: string): string | null {
  * - 能解析出域名 → 域名；
  * - 其余 endpoint（含 https 裸 IP）→ IP 直连，避免旧节点落到空域名表单。
  */
+/**
+ * 端口默认值：两处都避开 443。
+ *
+ * 443 是备案/端口策略盯得最紧的一条，也最容易被 Caddy 与 Agent 抢；默认让它空着，
+ * 既留给 ACME 的 TLS-ALPN-01 校验（要临时占 443），也留给以后想换标准端口的场景。
+ * 2053 / 2083 都在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。
+ */
+export const DEFAULT_AGENT_PORT = String(DEFAULT_DOMAIN_PORT);
+export const DEFAULT_PUBLISH_PORT = '2083';
+
+/** 发布端口与 Agent 端口相同时，给一个可一键切换的候选（跳过已被占用的那条）。 */
+export function suggestPublishPort(agentPort: string): string {
+  const candidates = [DEFAULT_PUBLISH_PORT, DEFAULT_AGENT_PORT, '2053', '2083', '8443'];
+  return candidates.find((port) => port !== agentPort) ?? DEFAULT_PUBLISH_PORT;
+}
+
 export function initialAccessDraft(node?: Node): NodeAccessDraft {
   if (!node) {
     return {
@@ -136,7 +155,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       zoneId: '',
       recordId: '',
       domain: '',
-      domainPort: '443',
+      domainPort: DEFAULT_AGENT_PORT,
       tunnelId: '',
       tunnelHostname: '',
       ipHost: '',
@@ -146,6 +165,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       dnsSubdomain: '',
       autoPublish: false,
       upstreamPort: '8080',
+      publishPort: DEFAULT_PUBLISH_PORT,
     };
   }
 
@@ -199,6 +219,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     // 自动发布只在「添加节点」里成立；编辑接入方式不重走安装流程。
     autoPublish: false,
     upstreamPort: '8080',
+    publishPort: DEFAULT_PUBLISH_PORT,
   };
 }
 
@@ -214,10 +235,12 @@ export function accessDraftIssue(
     if (!domain) return zh.access.domainRequired;
     if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
-    if (draft.autoPublish && !portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
-    // 443 只能有一个进程：Agent 自己占着 443 时，Caddy 不可能再为同一域名建 443 站点。
-    // 这类组合注定在 apply 阶段失败，直接在表单里挡住并给一键改端口的出口。
-    if (draft.autoPublish && draft.domainPort === '443') return zh.access.publishPortConflictIssue;
+    if (draft.autoPublish) {
+      if (!portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
+      if (!portValid(draft.publishPort)) return zh.access.publishPortInvalid;
+      // 一条端口只能一个进程：Agent 与 Caddy 撞端口注定在 apply 时失败，表单里直接挡住。
+      if (draft.publishPort === draft.domainPort) return zh.access.publishPortConflictIssue;
+    }
     return null;
   }
 
@@ -408,7 +431,17 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             { value: 'tunnel', label: zh.access.modeTunnel },
             { value: 'ip', label: zh.access.modeIp },
           ]}
-          onChange={(value) => update({ accessMode: value as NodeAccessMode })}
+          onChange={(value) => {
+            const next = value as NodeAccessMode;
+            // 从 IP 直连切过来时端口可能是个明文端口（8880），不在 HTTPS 候选里：
+            // 归一化成默认值，别让下拉显示一个不存在的选项。
+            const keepPort = HTTPS_PORT_OPTIONS.includes(draft.domainPort);
+            update(
+              next === 'domain' && !keepPort
+                ? { accessMode: next, domainPort: DEFAULT_AGENT_PORT }
+                : { accessMode: next },
+            );
+          }}
         />
       </Field>
 
@@ -540,10 +573,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                       }))}
                       onChange={(recordId) => {
                         const hit = candidates.find((candidate) => candidate.record.id === recordId);
+                        // 换记录只决定域名；端口保持用户所选，只有非法值才落回默认。
                         update({
                           recordId,
                           domain: hit?.record.name ?? draft.domain,
-                          domainPort: '443',
+                          ...(HTTPS_PORT_OPTIONS.includes(draft.domainPort)
+                            ? {}
+                            : { domainPort: DEFAULT_AGENT_PORT }),
                         });
                       }}
                     />
@@ -617,49 +653,72 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                 label={zh.access.autoPublishLabel}
                 description={zh.access.autoPublishHelp}
               />
-              {draft.autoPublish && draft.domainPort === '443' ? (
+              {draft.autoPublish && draft.publishPort === draft.domainPort ? (
                 <Stack gap={2}>
                   <Banner
                     tone="warn"
                     title={zh.access.publishPortConflictTitle}
-                    description={zh.access.publishPortConflictHint}
+                    description={fmt(zh.access.publishPortConflictHint, { port: draft.domainPort })}
                   />
                   <Row gap={2}>
                     <Button
-                      label={zh.access.publishPortConflictCta}
+                      label={fmt(zh.access.publishPortConflictCta, {
+                        port: suggestPublishPort(draft.domainPort),
+                      })}
                       size="sm"
-                      onClick={() => update({ domainPort: '8443' })}
+                      onClick={() =>
+                        update({ publishPort: suggestPublishPort(draft.domainPort) })
+                      }
                     />
                   </Row>
                 </Stack>
               ) : null}
               {draft.autoPublish ? (
-                <Field
-                  id="access-upstream-port"
-                  label={zh.access.upstreamPortLabel}
-                  help={zh.access.upstreamPortHelp}
-                  required
-                >
-                  <TextInput
+                <>
+                  <Field
+                    id="access-publish-port"
+                    label={zh.access.publishPortLabel}
+                    help={zh.access.publishPortHelp}
+                    required
+                  >
+                    <Select
+                      id="access-publish-port"
+                      value={draft.publishPort}
+                      options={HTTPS_PORT_OPTIONS.map((port) => ({ value: port, label: port }))}
+                      onChange={(publishPort) => update({ publishPort })}
+                    />
+                  </Field>
+                  <Field
                     id="access-upstream-port"
-                    value={draft.upstreamPort}
-                    mono
-                    inputMode="numeric"
-                    placeholder="8080"
-                    onChange={(value) => update({ upstreamPort: value })}
-                  />
-                </Field>
-              ) : null}
-              {draft.autoPublish && domainReady ? (
-                <Field id="access-publish-target" label={zh.access.publishTargetLabel} help={zh.access.publishTargetHelp}>
-                  <TextInput
-                    id="access-publish-target"
-                    value={`${buildDomainEndpoint(normalizedDomain, '443')} → 127.0.0.1:${draft.upstreamPort}`}
-                    mono
-                    readOnly
-                    onChange={() => {}}
-                  />
-                </Field>
+                    label={zh.access.upstreamPortLabel}
+                    help={zh.access.upstreamPortHelp}
+                    required
+                  >
+                    <TextInput
+                      id="access-upstream-port"
+                      value={draft.upstreamPort}
+                      mono
+                      inputMode="numeric"
+                      placeholder="8080"
+                      onChange={(value) => update({ upstreamPort: value })}
+                    />
+                  </Field>
+                  {domainReady ? (
+                    <Field
+                      id="access-publish-target"
+                      label={zh.access.publishTargetLabel}
+                      help={zh.access.publishTargetHelp}
+                    >
+                      <TextInput
+                        id="access-publish-target"
+                        value={`${buildDomainEndpoint(normalizedDomain, draft.publishPort)} → 127.0.0.1:${draft.upstreamPort}`}
+                        mono
+                        readOnly
+                        onChange={() => {}}
+                      />
+                    </Field>
+                  ) : null}
+                </>
               ) : null}
             </Stack>
           ) : null}

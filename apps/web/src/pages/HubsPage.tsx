@@ -5,7 +5,7 @@ import type { Node, NodeProbeItem } from '@khc/contracts';
 import { ApiError } from '../data/client';
 import { createHub, deleteHub, fetchHubState, probeHubs } from '../data/hubs';
 import { fetchAgentReleases, generateAgentCommand, type AgentCommandResult } from '../data/agent';
-import { normalizeDomain } from '../data/endpoint';
+import { buildDomainEndpoint, normalizeDomain } from '../data/endpoint';
 import { deleteCfDnsRecordsForNode, createCfDnsRecordForNode } from '../data/cfDns';
 import { fetchAppConfig } from '../data/apps';
 import {
@@ -111,6 +111,7 @@ export default function HubsPage() {
     domain: string;
     upstreamPort: number;
     agentPort: number;
+    publishPort: number;
   } | null>(null);
   const [publishState, setPublishState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [publishStep, setPublishStep] = useState('');
@@ -305,6 +306,7 @@ export default function HubsPage() {
             domain: normalizeDomain(draft.domain),
             upstreamPort: Number(draft.upstreamPort),
             agentPort: Number(draft.domainPort),
+            publishPort: Number(draft.publishPort),
           }
         : null;
     const data = await createMutation.mutateAsync(toCreatePayload(draft));
@@ -327,14 +329,14 @@ export default function HubsPage() {
    */
   const publishHttps = async (
     nodeId: string,
-    plan: { domain: string; upstreamPort: number; agentPort: number },
+    plan: { domain: string; upstreamPort: number; agentPort: number; publishPort: number },
   ) => {
-    // 443 只有一个进程：Agent 自己在 443 上时，Caddy 建同域名 443 站点必然 bind 失败。
-    // 这种情况不写任何配置，直接给出可执行的处置办法（换 8443 再发）。
-    if (plan.agentPort === 443) {
+    // 一条端口只能一个进程：Agent 已占了同号端口时，Caddy 必然 bind 失败。
+    // 这种情况不写任何配置，直接说明「两条端口要错开」。
+    if (plan.publishPort === plan.agentPort) {
       setPublishState('error');
       setPublishStep('');
-      setPublishError(zh.hubs.publishPortConflict);
+      setPublishError(fmt(zh.hubs.publishPortConflict, { port: plan.publishPort }));
       return;
     }
     setPublishState('running');
@@ -351,7 +353,7 @@ export default function HubsPage() {
           name: plan.domain,
           kind: 'proxy',
           domains: [plan.domain],
-          listenPort: 443,
+          listenPort: plan.publishPort,
           enabled: true,
           upstreams: [`127.0.0.1:${plan.upstreamPort}`],
           tls: { mode: 'auto' },
@@ -362,16 +364,10 @@ export default function HubsPage() {
       }
       setPublishStep(zh.hubs.publishStepApply);
       await runCaddyAction(nodeId, 'apply');
-      setPublishStep(zh.hubs.publishStepVerify);
-      const state = await fetchHubState(nodeId);
-      if (state.tls?.state === 'verified') {
-        setPublishState('done');
-        setPublishStep(zh.hubs.publishStepVerified);
-      } else {
-        // 站点写入成功但证书还在签发：不是失败，如实说「已发布，HTTPS 待生效」。
-        setPublishState('done');
-        setPublishStep(zh.hubs.publishStepPending);
-      }
+      // apply 成功 = 站点已生效。证书由 Caddy 首次访问时签发，这里不谎称「HTTPS 已验证」：
+      // 控制面的 TLS 探测打的是节点接入地址（Agent），跟发布出去的应用是两回事。
+      setPublishState('done');
+      setPublishStep(zh.hubs.publishStepApplied);
       await queryClient.invalidateQueries({ queryKey: ['hubs', nodeId] });
     } catch (error) {
       // 回滚：把站点配置恢复成发布前，尽量让节点回到可预期状态。
@@ -739,7 +735,7 @@ export default function HubsPage() {
                 <Stack gap={2}>
                   <p className="ui-field-label">
                     {fmt(zh.hubs.publishTitle, {
-                      domain: publishPlan.domain,
+                      url: buildDomainEndpoint(publishPlan.domain, String(publishPlan.publishPort)),
                       port: publishPlan.upstreamPort,
                     })}
                   </p>
@@ -774,7 +770,14 @@ export default function HubsPage() {
                     <InlineError message={publishError ?? zh.hubs.publishFailed} />
                   ) : null}
                   {publishState === 'done' ? (
-                    <span className="ui-field-help">{zh.hubs.publishDoneHint}</span>
+                    <span className="ui-field-help">
+                      {fmt(zh.hubs.publishDoneHint, {
+                        url: buildDomainEndpoint(
+                          publishPlan.domain,
+                          String(publishPlan.publishPort),
+                        ),
+                      })}
+                    </span>
                   ) : null}
                   {publishState === 'idle' ? (
                     <span className="ui-field-help">{zh.hubs.publishIdleHint}</span>

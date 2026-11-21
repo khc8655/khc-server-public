@@ -98,7 +98,7 @@ describe('nodes CRUD（v3）', () => {
     expect(missingBody.error.fields?.endpoint).toBeTruthy();
   });
 
-  it('域名模式可以只给 domain：endpoint 由域名推导为 https://<domain>', async () => {
+  it('域名模式可以只给 domain：endpoint 由域名推导为 https://<domain>:2053（避开 443）', async () => {
     const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);
     const res = await ctx.app.request(
@@ -115,7 +115,7 @@ describe('nodes CRUD（v3）', () => {
       node: { endpoint: string; accessMode: string; domain: string };
     };
     expect(body.node.accessMode).toBe('domain');
-    expect(body.node.endpoint).toBe('https://app.other.net');
+    expect(body.node.endpoint).toBe('https://app.other.net:2053');
     expect(body.node.domain).toBe('app.other.net');
   });
 

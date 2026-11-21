@@ -4,6 +4,7 @@ import type { Node } from '@khc/contracts';
 import {
   TUNNELS_SETTINGS_HREF,
   accessDraftIssue,
+  suggestPublishPort,
   initialAccessDraft,
   isAccessDraftSubmittable,
   toCreatePayload,
@@ -19,7 +20,7 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     zoneId: 'z1',
     recordId: 'rec-1',
     domain: 'agent.example.com',
-    domainPort: '443',
+    domainPort: '2053',
     tunnelId: '',
     tunnelHostname: '',
     ipHost: '',
@@ -29,6 +30,7 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     dnsSubdomain: '',
     autoPublish: false,
     upstreamPort: '8080',
+    publishPort: '2083',
     ...patch,
   };
 }
@@ -38,7 +40,7 @@ describe('AccessForm 纯函数', () => {
     expect(toCreatePayload(draft())).toEqual({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://agent.example.com',
+      endpoint: 'https://agent.example.com:2053',
       domain: 'agent.example.com',
     });
     expect(toPatchPayload(draft({ domainPort: '8443' }))).toEqual({
@@ -102,7 +104,7 @@ describe('AccessForm 纯函数', () => {
     expect(toCreatePayload(manual)).toEqual({
       name: 'node-9',
       accessMode: 'domain',
-      endpoint: 'https://app.other.net',
+      endpoint: 'https://app.other.net:2053',
       domain: 'app.other.net',
     });
     expect(toPatchPayload({ ...manual, domainPort: '8443' })).toEqual({
@@ -126,15 +128,26 @@ describe('AccessForm 纯函数', () => {
     ).toBe(true);
   });
 
-  it('一键发布与 Agent 自己抢 443 时不可提交；改用 8443 后可提交', () => {
-    const clash = draft({ autoPublish: true, domainPort: '443' });
+  it('发布端口与 Agent 端口相同则不可提交；错开即可', () => {
+    const clash = draft({ autoPublish: true, domainPort: '2053', publishPort: '2053' });
     expect(accessDraftIssue(clash)).toBe(
-      '自动发布要把 443 留给 Caddy：请把 Agent 监听端口改为 8443，或取消自动发布',
+      '发布端口不能与 Agent 监听端口相同：两个进程不能共用一个端口',
     );
     expect(isAccessDraftSubmittable(clash)).toBe(false);
-    expect(isAccessDraftSubmittable({ ...clash, domainPort: '8443' })).toBe(true);
-    // 不自动发布时 443 仍然合法（Agent 独占 443 是域名模式的默认形态）
+    expect(isAccessDraftSubmittable({ ...clash, publishPort: '2083' })).toBe(true);
+    // 不自动发布时不涉及第二条端口，同号也不影响保存
     expect(isAccessDraftSubmittable({ ...clash, autoPublish: false })).toBe(true);
+  });
+
+  it('新节点默认两条端口都避开 443', () => {
+    const fresh = initialAccessDraft();
+    expect(fresh.domainPort).toBe('2053');
+    expect(fresh.publishPort).toBe('2083');
+    expect(fresh.domainPort).not.toBe('443');
+    expect(fresh.publishPort).not.toBe('443');
+    // 撞端口时的建议值要跳过 Agent 已经占用的那条
+    expect(suggestPublishPort('2053')).toBe('2083');
+    expect(suggestPublishPort('2083')).toBe('2053');
   });
 
   it('存量节点有域名时默认落到「手动输入」，域名可直接改', () => {
