@@ -15,6 +15,7 @@ import {
   HTTPS_PORT_OPTIONS,
   buildDomainEndpoint,
   endpointHost,
+  isHttpsPort,
   nodeByDomain,
   normalizeDomain,
   parseDomainEndpoint,
@@ -435,7 +436,7 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             const next = value as NodeAccessMode;
             // 从 IP 直连切过来时端口可能是个明文端口（8880），不在 HTTPS 候选里：
             // 归一化成默认值，别让下拉显示一个不存在的选项。
-            const keepPort = HTTPS_PORT_OPTIONS.includes(draft.domainPort);
+            const keepPort = isHttpsPort(draft.domainPort);
             update(
               next === 'domain' && !keepPort
                 ? { accessMode: next, domainPort: DEFAULT_AGENT_PORT }
@@ -577,7 +578,7 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                         update({
                           recordId,
                           domain: hit?.record.name ?? draft.domain,
-                          ...(HTTPS_PORT_OPTIONS.includes(draft.domainPort)
+                          ...(isHttpsPort(draft.domainPort)
                             ? {}
                             : { domainPort: DEFAULT_AGENT_PORT }),
                         });
