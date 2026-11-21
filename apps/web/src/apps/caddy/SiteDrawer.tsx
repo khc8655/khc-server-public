@@ -3,7 +3,10 @@
  * 只做展示与本地校验提示；保存/应用/删除由页面控制器注入。
  */
 import { useState, type ReactNode } from 'react';
+import type { Node } from '@khc/contracts';
 import { DEFAULT_REDIRECT_CODE, parseList } from '../../data/sites';
+import { buildDomainEndpoint } from '../../data/endpoint';
+import { AppInstallPanel } from '../hosted-apps/AppInstallPanel';
 import { paths } from '../../registry/routes';
 import { AdvancedSection } from '../../patterns';
 import {
@@ -157,7 +160,9 @@ export function SiteDrawer({
   errors,
   saveError,
   saving,
+  hubId,
   hubName,
+  node,
   offlineReason,
   certificates,
   peers,
@@ -171,7 +176,10 @@ export function SiteDrawer({
   errors: SiteErrors;
   saveError: string | null;
   saving: boolean;
+  /** 用于「从应用目录安装」：安装落在 Agent 所在的这台机器上 */
+  hubId: string;
   hubName: string;
+  node: Node | undefined;
   offlineReason?: string;
   certificates: { id: string; name: string; domains: string[]; notAfter: number | null }[];
   peers: { name: string; host: string }[];
@@ -182,6 +190,9 @@ export function SiteDrawer({
   onDelete: () => Promise<void>;
 }) {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  /** 上游怎么来：手填本机端口，还是从应用目录装一个（只在目标 = 本机时提供） */
+  const [upstreamSource, setUpstreamSource] = useState<'manual' | 'app'>('manual');
+  const [installedNote, setInstalledNote] = useState<{ name: string; port: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const handleDelete = async () => {
@@ -253,6 +264,10 @@ export function SiteDrawer({
     const host = target === 'local' ? '127.0.0.1' : target;
     onChange({ upstreams: joinUpstream(host, upstreamPort) });
   };
+  const siteDomain = parseList(form.domains)[0] ?? '';
+  const publicUrlPreview = siteDomain
+    ? buildDomainEndpoint(siteDomain, String(form.listenPort ?? 443))
+    : '';
   return (
     <Drawer
       open
@@ -381,6 +396,49 @@ export function SiteDrawer({
                 </div>
               </Field>
             ) : null}
+            {selectedTarget === 'local' ? (
+              <>
+                <Field
+                  id="site-upstream-source"
+                  label={zh.hosted.sourceLabel}
+                  help={zh.hosted.sourceHelp}
+                >
+                  <Select
+                    id="site-upstream-source"
+                    value={upstreamSource}
+                    options={[
+                      { value: 'manual', label: zh.hosted.sourceManual },
+                      { value: 'app', label: zh.hosted.sourceApp },
+                    ]}
+                    onChange={(value) => setUpstreamSource(value === 'app' ? 'app' : 'manual')}
+                    ariaLabel={zh.hosted.sourceLabel}
+                  />
+                </Field>
+                {upstreamSource === 'app' ? (
+                  <AppInstallPanel
+                    hubId={hubId}
+                    node={node}
+                    publicUrl={publicUrlPreview}
+                    onInstalled={(port, name) => {
+                      onChange({ upstreams: joinUpstream('127.0.0.1', port) });
+                      setInstalledNote({ name, port });
+                    }}
+                  />
+                ) : null}
+                {installedNote ? (
+                  <Banner
+                    tone="ok"
+                    title={fmt(zh.hosted.installedNote, {
+                      name: installedNote.name,
+                      port: String(installedNote.port),
+                    })}
+                    description={zh.hosted.installedNoteDesc}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <p className="ui-text-caption">{zh.hosted.sourceLocalOnly}</p>
+            )}
             <Field id="site-target-port" label={zh.sites.targetPort} help={zh.sites.targetPortHelp} required>
               <NumberInput
                 id="site-target-port"
