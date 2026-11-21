@@ -38,6 +38,25 @@
 
 装载方式目前只有一种：二进制（下载 + 固定 sha256 校验 + systemd user unit）。清单的 `runtime` 决定用新建应用账号还是 root，`scripts` 决定装什么；将来适配 Docker 等方式时，在这一层加声明并在执行器侧渲染成对应的 unit/容器，面板流程不变。
 
+### 3.1 脚本里的下载必须自带超时
+
+magpie 的二进制是 **91MB** 的 GitHub release。清单脚本里的 `curl` 若只写 `-fsSL`，在国内机器上会一直挂着不报错，只能等任务 900 秒上限——现象就是**面板进度停在 1%，日志一行不出**。所以脚本里统一这么写：
+
+```bash
+curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
+     --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL"
+```
+
+- `--connect-timeout` 管连不上；`--max-time` 管总时长；
+- `--speed-limit/--speed-time` 管「连着但几乎不动」（连续 60 秒低于 8KB/s 主动放弃）；
+- 失败时要打印**已下载多少字节**并给出排查命令，不能只 `exit 1`。
+
+写新清单时照抄这一段。拉不动 GitHub 的机器，可先给节点配代理，或手工把二进制放到清单声明的位置（sha256 必须与清单一致，否则执行器拒绝）。
+
+### 3.2 执行器：慢脚本要边跑边出日志
+
+清单脚本走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行回写任务日志，跑的过程中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。此前的 `subprocess.run(capture_output=True)` 会整段缓冲，脚本不退出就一行日志都没有，卡住时完全看不出卡在哪。超时与取消也必须能真的杀掉进程——实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**（实测那样 0.8 秒超时对 `sleep 5` 不生效）。
+
 ## 4. 一键发布（清单里的 `publish`）
 
 `publish` 只声明一件事：哪个本机端口对外发。域名来自节点，发布端口由用户选。

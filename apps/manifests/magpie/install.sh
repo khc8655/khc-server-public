@@ -55,14 +55,28 @@ URL="https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-
 if [ ! -x "$BIN" ]; then
   TMP="$(mktemp "${TMPDIR:-/tmp}/khc-magpie.XXXXXX")"
   trap 'rm -f -- "$TMP"' EXIT
-  echo "下载 $URL"
+  # 91MB 的 GitHub release：不限连接/总时长就会一直挂着不出错（国内出站尤其明显），
+  # 面板那边只能看到进度停在 1%。这里给足三道闸：连接超时、总时长、低速率判死。
+  DL_MAX="${KHC_DL_MAX_TIME:-600}"
+  echo "下载 $URL（约 90MB，最长等 ${DL_MAX}s）"
+  dl_fail() {
+    local got
+    got="$(wc -c < "$TMP" 2>/dev/null || echo 0)"
+    echo "下载失败：$1；已下载 ${got} 字节（完整文件应为 91MB 级别）" >&2
+    echo "排查：在该机器执行 curl -I $URL 看能否出站；拉不动就给节点配代理，" >&2
+    echo "      或手工把二进制放到 $BIN（sha256 须为 ${SHA}）" >&2
+    exit 1
+  }
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 2 -o "$TMP" "$URL"
+    # --speed-limit 8KB + --speed-time 60：连续 60 秒低于 8KB/s 视为卡死，主动放弃
+    curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time "$DL_MAX" \
+      --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL" || dl_fail "curl 失败"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$TMP" "$URL"
+    wget -q --tries=3 --timeout=30 --read-timeout=60 -O "$TMP" "$URL" || dl_fail "wget 失败"
   else
     echo "需要 curl 或 wget" >&2; exit 1
   fi
+  [ -s "$TMP" ] || dl_fail "下载到的是空文件"
   ACTUAL="$(sha256sum "$TMP" | awk '{print $1}')"
   if [ "$ACTUAL" != "$SHA" ]; then
     echo "sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装" >&2
@@ -71,6 +85,7 @@ if [ ! -x "$BIN" ]; then
   install -m 0755 "$TMP" "$BIN"
   rm -f -- "$TMP"
   trap - EXIT
+  echo "二进制已就位：$BIN"
 fi
 
 # ---- 2. web 登录 key：可指定，未指定则生成一次并复用（重装后登录链接不变）----

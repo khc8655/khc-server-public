@@ -27,6 +27,7 @@ import importlib.util
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -143,6 +144,111 @@ def default_command_runner(
     return RunResult(cmd=[str(part) for part in cmd], rc=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
 
 
+def default_streaming_runner(
+    cmd: list[str],
+    *,
+    timeout: float = 120,
+    env: Optional[Mapping[str, str]] = None,
+    cwd: Optional[str] = None,
+    on_line: Optional[Callable[[str], None]] = None,
+    max_lines: int = 400,
+    tail_chars: int = 8000,
+    cancel_event: Optional[threading.Event] = None,
+) -> RunResult:
+    """逐行读取子进程输出并实时回调，供长任务（下载/解包/安装）使用。
+
+    与 default_command_runner 的区别只在「看得见过程」：stdout/stderr 合并后逐行回调，
+    面板能在跑的过程中显示进展。
+
+    注意：**不能用 ``stream.readline()``** —— 它会在没有换行时阻塞，超时与取消的检查
+    就永远轮不到（实测：``bash -c "echo x; sleep 5"`` 在 0.8s 超时下依然 rc=0）。
+    这里用 select 轮询 + os.read 分片读，保证 timeout / cancel 到点就能真的杀进程。
+    """
+    argv = [str(part) for part in cmd]
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+            env=env,
+            cwd=cwd,
+        )
+    except FileNotFoundError:
+        return RunResult(cmd=argv, rc=127, stdout="", stderr=f"command not found: {cmd[0]}")
+    except OSError as exc:
+        return RunResult(cmd=argv, rc=126, stdout="", stderr=f"{exc}")
+
+    fd = proc.stdout.fileno() if proc.stdout is not None else -1
+    chunks: list[str] = []
+    extra_err: list[str] = []
+    emitted = 0
+    pending = ""
+    deadline = time.monotonic() + float(timeout)
+
+    def emit(line: str) -> None:
+        nonlocal emitted
+        text = line.rstrip()
+        if not text:
+            return
+        if emitted < max_lines:
+            if on_line is not None:
+                on_line(text)
+            emitted += 1
+            if emitted == max_lines and on_line is not None:
+                on_line(f"…输出过长，后续只进任务结果（最多 {tail_chars} 字符）")
+
+    try:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                proc.kill()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                extra_err.append(f"command timed out after {timeout}s")
+                break
+            # 最多等 0.2s，保证取消/超时能被及时响应
+            ready, _, _ = select.select([fd] if fd >= 0 else [], [], [], min(0.2, remaining))
+            if not ready:
+                continue
+            try:
+                data = os.read(fd, 1 << 16)
+            except OSError:
+                break
+            if not data:
+                break
+            text = data.decode("utf-8", errors="replace")
+            chunks.append(text)
+            pending += text
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                emit(line)
+    finally:
+        try:
+            if proc.stdout is not None:
+                proc.stdout.close()
+        except Exception:  # noqa: BLE001 - 关闭失败不影响结果
+            pass
+        if proc.poll() is None:
+            # 正常读完（EOF）也要确保进程已回收；异常路径上面已 kill
+            try:
+                rc = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                rc = proc.wait()
+        else:
+            rc = proc.returncode
+
+    if pending.strip():
+        emit(pending)
+
+    stdout = "".join(chunks)
+    if len(stdout) > tail_chars:
+        stdout = stdout[-tail_chars:]
+    return RunResult(cmd=argv, rc=rc, stdout=stdout, stderr="".join(extra_err))
+
+
 def default_downloader(url: str, dest: str, *, timeout: float = 300) -> None:
     """用 urllib 下载到 dest（临时路径）。异常由 Ctx 包装成 DownloadFailed。"""
 
@@ -184,6 +290,9 @@ class Ctx:
         self._progress_cb = progress
         self._cancel_event = cancel_event or threading.Event()
         self._runner = command_runner or default_command_runner
+        # 注入的 runner（单测 / 演练）没有流式版本；run_streaming 需要回退到它，
+        # 否则测试里伪造的命令执行会被真实子进程取代。
+        self._streaming_runner = None if command_runner is not None else default_streaming_runner
         self._downloader = downloader or default_downloader
         self._sleep = sleep
         # 单调时钟截止点；None 表示不限制（task 模式）。
@@ -286,6 +395,61 @@ class Ctx:
                     "stderr": tail(result.stderr),
                 },
             )
+        return result
+
+    def run_streaming(
+        self,
+        cmd: Iterable[str],
+        *,
+        timeout: float = 120,
+        env: Optional[Mapping[str, str]] = None,
+        cwd: Optional[str] = None,
+        max_lines: int = 400,
+        tail_chars: int = 8000,
+    ) -> RunResult:
+        """边跑边把输出写进任务日志（长任务专用）。
+
+        普通 ``run`` 走 subprocess.run(capture_output)，脚本进程不退出就一行日志都没有：
+        装 magpie 这类要下载 90MB 的步骤，面板上只能看到进度停在 1%，卡住也看不出卡在哪。
+        这里改成逐行读取 + 每行立刻 ctx.log，让「正在下载/校验/启动」这类进度可见。
+
+        输出仍然完整收集（受 tail_chars 限制），返回的 RunResult 与 run() 同形，
+        调用方按原有方式判断 rc / stdout。
+        """
+        self.check_cancel()
+        argv = [str(part) for part in cmd]
+        if not argv:
+            raise CommandFailed("empty command")
+        self.log("$ " + " ".join(shlex.quote(part) for part in argv))
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise CommandFailed(
+                    "同步动作超过 Worker 窗口，已中止并回滚",
+                    code="sync_deadline_exceeded",
+                    details={"command": argv[:4]},
+                )
+            timeout = min(float(timeout), max(1.0, remaining))
+
+        if self._streaming_runner is None:
+            # 注入了 runner：沿用普通 run，保持测试与演练的可注入性。
+            return self.run(argv, check=False, timeout=timeout, env=env, cwd=cwd)
+
+        merged_env = None
+        if env is not None:
+            merged_env = dict(os.environ)
+            merged_env.update({str(k): str(v) for k, v in env.items()})
+        result = self._streaming_runner(
+            argv,
+            timeout=timeout,
+            env=merged_env,
+            cwd=cwd,
+            on_line=self.log,
+            max_lines=max_lines,
+            tail_chars=tail_chars,
+            cancel_event=self._cancel_event,
+        )
+        self.check_cancel()
         return result
 
     # -- systemd ------------------------------------------------------------
@@ -767,6 +931,7 @@ __all__ = [
     "Unit",
     "apply_defaults",
     "default_command_runner",
+    "default_streaming_runner",
     "default_downloader",
     "load_adapter_file",
     "load_adapters",

@@ -71,7 +71,7 @@ function checkManifestShape(dir, id, root) {
     bad(dir, 'manifest.json 顶层必须是对象');
     return null;
   }
-  checkUnknown(dir, root, ['id', 'manifest', 'enabled'], '顶层');
+  checkUnknown(dir, root, ['id', 'manifest', 'enabled', 'priorManifests'], '顶层');
   if (root.id !== id) bad(dir, `id=${JSON.stringify(root.id)} 与目录名不一致`);
   if (typeof id !== 'string' || !ID_RE.test(id) || id.length > 48) {
     bad(dir, `目录名不是合法应用 id（小写字母开头 slug，≤48）：${id}`);
