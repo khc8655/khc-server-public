@@ -405,7 +405,7 @@ def _run_as_root(
         script_path,
     ]
     try:
-        result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT + 10)
+        result = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT + 10)
         if getattr(result, "rc", 0) == 124:
             ctx.run(["systemctl", "stop", unit], check=False, timeout=15)
         return result
@@ -520,7 +520,9 @@ def run_manifest(
         # runuser 不带 -l，保留调用方环境，KHC_PARAM_* 因此能完整传到脚本。
         # 这样参数不出现在命令行里，也不会被 ctx.run 的日志记录。
         cmd = ["runuser", "-u", user, "--", "bash", script_path]
-        result = ctx.run(cmd, check=False, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
+        # 流式：装应用常有下载/解包这类慢步骤，整段缓冲会让面板长时间停在 1%，
+        # 出问题也看不出卡在哪一步。
+        result = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
     stdout = _redact(result.stdout or "", secrets)
     stderr = _redact(result.stderr or "", secrets)
     if result.rc != 0:
