@@ -89,6 +89,7 @@ import {
   type SiteImportResult,
 } from './siteTransfer';
 import { SiteDrawer } from './SiteDrawer';
+import { InstalledAppsCard } from '../hosted-apps/InstalledAppsCard';
 import { installTaskText } from '../installTaskText';
 import {
   buildSite,
@@ -1390,6 +1391,8 @@ export default function SitesPage() {
             onRowOpen={(row) => openEdit(row.site)}
           />
 
+          <InstalledAppsCard hubId={hubId} />
+
           {listeningPorts.length > 0 ? (
             <Card title={zh.services.listeningTitle}>
               <Stack gap={2}>
@@ -1594,7 +1597,9 @@ export default function SitesPage() {
           errors={errors}
           saveError={saveError}
           saving={saving}
+          hubId={hubId}
           hubName={hubName}
+          node={hubQuery.data}
           offlineReason={writeDisabledReason}
           certificates={certs}
           peers={peerTargets}
