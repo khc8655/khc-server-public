@@ -164,6 +164,16 @@ export interface CertificateAcmeMeta {
   keyType: 'rsa' | 'ec' | null;
 }
 
+export function isCertificateRenewable(cert: {
+  sourceNodeId: string | null;
+  acmeProvider?: string | null;
+  acmeCredentialKey?: string | null;
+}): boolean {
+  if (!cert.acmeProvider || !cert.acmeCredentialKey) return false;
+  if (cert.acmeProvider === 'cf-dns01') return true;
+  return Boolean(cert.sourceNodeId);
+}
+
 export interface CertificateRecord extends Certificate {
   certPemEnc: string;
   keyPemEnc: string;

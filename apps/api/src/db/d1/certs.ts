@@ -1,10 +1,11 @@
 import type { Certificate } from '@khc/contracts';
-import type {
-  CertificateMaterial,
-  CertificateRecord,
-  CertificateRepo,
-  NewCertificate,
-  UpdateCertificate,
+import {
+  isCertificateRenewable,
+  type CertificateMaterial,
+  type CertificateRecord,
+  type CertificateRepo,
+  type NewCertificate,
+  type UpdateCertificate,
 } from '../../domain/repos';
 import { decryptSecret, encryptSecret } from '../../lib/crypto';
 import { misconfigured } from '../../lib/errors';
@@ -45,7 +46,11 @@ function mapCertificate(row: CertificateRow): Certificate {
     acmeCredentialKey: row.acme_credential_key,
     acmeCa: row.acme_ca,
     acmeKeyType,
-    renewable: Boolean(row.source_node_id && row.acme_provider && row.acme_credential_key),
+    renewable: isCertificateRenewable({
+      sourceNodeId: row.source_node_id,
+      acmeProvider: row.acme_provider,
+      acmeCredentialKey: row.acme_credential_key,
+    }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -136,9 +141,11 @@ export class D1CertificateRepo implements CertificateRepo {
       acmeCredentialKey: record.acmeCredentialKey,
       acmeCa: record.acmeCa,
       acmeKeyType: record.acmeKeyType,
-      renewable: Boolean(
-        record.sourceNodeId && record.acmeProvider && record.acmeCredentialKey,
-      ),
+      renewable: isCertificateRenewable({
+        sourceNodeId: record.sourceNodeId,
+        acmeProvider: record.acmeProvider,
+        acmeCredentialKey: record.acmeCredentialKey,
+      }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

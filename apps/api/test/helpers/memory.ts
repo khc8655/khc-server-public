@@ -214,14 +214,15 @@ export class MemoryAuditRepo implements AuditRepo {
 // ---------------------------------------------------------------------------
 // C3：内存证书库 / 设置
 // ---------------------------------------------------------------------------
-import type {
-  CertificateMaterial,
-  CertificateRecord,
-  CertificateRepo,
-  NewCertificate,
-  SettingRecord,
-  SettingsRepo,
-  UpdateCertificate,
+import {
+  isCertificateRenewable,
+  type CertificateMaterial,
+  type CertificateRecord,
+  type CertificateRepo,
+  type NewCertificate,
+  type SettingRecord,
+  type SettingsRepo,
+  type UpdateCertificate,
 } from '../../src/domain/repos';
 import type { AppApplyError, Certificate, Setting } from '@khc/contracts';
 
@@ -251,9 +252,11 @@ export class MemoryCertificateRepo implements CertificateRepo {
       acmeCredentialKey: input.acme?.credentialKey ?? null,
       acmeCa: input.acme?.ca ?? null,
       acmeKeyType: input.acme?.keyType ?? null,
-      renewable: Boolean(
-        input.sourceNodeId && input.acme?.provider && input.acme?.credentialKey,
-      ),
+      renewable: isCertificateRenewable({
+        sourceNodeId: input.sourceNodeId,
+        acmeProvider: input.acme?.provider ?? null,
+        acmeCredentialKey: input.acme?.credentialKey ?? null,
+      }),
       createdAt: ts,
       updatedAt: ts,
     };

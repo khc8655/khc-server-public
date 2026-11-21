@@ -293,6 +293,40 @@ export async function updateRecord(
   };
 }
 
+/** POST /zones/:id/dns_records（TXT 记录：ACME DNS-01 校验临时记录）。 */
+export async function createTxtRecord(
+  fetcher: CfFetch,
+  token: string,
+  input: {
+    zoneId: string;
+    name: string;
+    content: string;
+    comment?: string;
+    ttl?: number;
+  },
+): Promise<{ id: string; name: string; content: string }> {
+  const { body } = await call(fetcher, `${CF_API_BASE}/zones/${input.zoneId}/dns_records`, token, {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'TXT',
+      name: input.name,
+      content: input.content,
+      comment: input.comment ?? 'khc-server acme dns-01',
+      proxied: false,
+      ttl: input.ttl ?? 60,
+    }),
+  });
+  const result = body.result as Record<string, unknown> | undefined;
+  if (!result?.id) {
+    throw new AppError(502, 'cf_dns_api', 'Cloudflare 创建 TXT 记录响应缺少 id');
+  }
+  return {
+    id: String(result.id),
+    name: input.name,
+    content: input.content,
+  };
+}
+
 /** DELETE /zones/:id/dns_records/:recordId（幂等：记录已不存在 404 视为成功）。 */
 export async function deleteRecord(
   fetcher: CfFetch,

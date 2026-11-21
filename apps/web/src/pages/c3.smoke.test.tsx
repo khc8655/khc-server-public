@@ -86,9 +86,11 @@ const caddyConfig = {
 
 let requests: { url: string; init?: RequestInit }[] = [];
 let serviceActive = true;
+let extraCerts: Record<string, unknown>[] = [];
 
 function mockApi() {
   requests = [];
+  extraCerts = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -146,7 +148,57 @@ function mockApi() {
         };
         return json({ certificate: created });
       }
-      if (url === '/api/v1/certs') return json({ certificates: [certificate] });
+      if (url === '/api/v1/certs/issue-dns01' && init?.method === 'POST') {
+        return json({
+          certificate: {
+            ...certificate,
+            id: 'cert_cf1',
+            name: 'wild-cf',
+            domains: ['*.example.com'],
+            issuer: 'acme',
+            sourceNodeId: null,
+            acmeProvider: 'cf-dns01',
+            acmeCredentialKey: 'acc_1',
+            acmeCa: 'letsencrypt',
+            acmeKeyType: 'ec',
+            renewable: true,
+          },
+        });
+      }
+      if (url === '/api/v1/cf-dns/accounts') {
+        return json({
+          accounts: [
+            {
+              id: 'acc_1',
+              name: '主账号',
+              accountName: 'Owner',
+              hasToken: true,
+              enabled: true,
+              zones: [{ id: 'z1', name: 'example.com' }],
+              enabledZoneIds: ['z1'],
+            },
+          ],
+        });
+      }
+      if (url === '/api/v1/certs/cert_cf1/renew' && init?.method === 'POST') {
+        return json({
+          certificate: {
+            ...certificate,
+            id: 'cert_cf1',
+            name: 'wild-cf',
+            domains: ['*.example.com'],
+            issuer: 'acme',
+            sourceNodeId: null,
+            acmeProvider: 'cf-dns01',
+            acmeCredentialKey: 'acc_1',
+            acmeCa: 'letsencrypt',
+            acmeKeyType: 'ec',
+            renewable: true,
+            notAfter: NOW + 90 * 86_400,
+          },
+        });
+      }
+      if (url === '/api/v1/certs') return json({ certificates: extraCerts.length > 0 ? extraCerts : [certificate] });
       if (url === '/api/v1/settings') return json({ settings });
       if (url === '/api/v1/nodes/tyo-1/apps') {
         return json({
@@ -247,6 +299,7 @@ describe('C3 页面', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '签发证书' }));
     const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: '自签' }));
     await userEvent.type(within(dialog).getByLabelText('证书名称'), 'new-cert');
     await userEvent.type(within(dialog).getByLabelText('域名'), 'blog.example.dev');
     await userEvent.click(within(dialog).getByRole('button', { name: '签发' }));
@@ -266,6 +319,64 @@ describe('C3 页面', () => {
     expect(body.certPem).toContain('BEGIN CERTIFICATE');
     expect(body.keyPem).toContain('BEGIN PRIVATE KEY');
     expect(body.notAfter).toBe(Math.floor(Date.parse('2027-10-26T01:00:00Z') / 1000));
+  });
+
+  it('控制面 Cloudflare DNS-01 签发全局通配符证书（无需节点）', async () => {
+    await renderRoute('/settings?tab=certs');
+    await screen.findByRole('heading', { name: '设置' });
+
+    await userEvent.click(screen.getByRole('button', { name: '签发证书' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect((within(dialog).getByLabelText('Cloudflare 账号') as HTMLSelectElement).value).toBe('acc_1');
+    });
+    expect(within(dialog).queryByLabelText('节点')).toBeNull();
+
+    await userEvent.type(within(dialog).getByLabelText('证书名称'), 'wild-cf');
+    await userEvent.type(within(dialog).getByLabelText('域名'), '*.example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: '签发' }));
+
+    expect(await screen.findByText('证书已入库')).toBeTruthy();
+    const post = requests.find(
+      (item) => item.url === '/api/v1/certs/issue-dns01' && item.init?.method === 'POST',
+    );
+    expect(post).toBeTruthy();
+    expect(JSON.parse(String(post?.init?.body))).toEqual({
+      name: 'wild-cf',
+      domains: ['*.example.com'],
+      accountId: 'acc_1',
+      ca: 'letsencrypt',
+    });
+  });
+
+  it('CF DNS-01 全球证书详情展示面板 DNS-01 来源并支持一键续期', async () => {
+    extraCerts = [
+      {
+        ...certificate,
+        id: 'cert_cf1',
+        name: 'wild-cf',
+        domains: ['*.example.com'],
+        issuer: 'acme',
+        sourceNodeId: null,
+        acmeProvider: 'cf-dns01',
+        acmeCredentialKey: 'acc_1',
+        acmeCa: 'letsencrypt',
+        acmeKeyType: 'ec',
+        renewable: true,
+      },
+    ];
+    await renderRoute('/settings?tab=certs');
+    await userEvent.click((await screen.findAllByText('wild-cf'))[0]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getAllByText('面板 DNS-01').length).toBeGreaterThan(0);
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '续期' }));
+    expect(await screen.findByText('证书已续期')).toBeTruthy();
+    expect(
+      requests.some(
+        (item) => item.url === '/api/v1/certs/cert_cf1/renew' && item.init?.method === 'POST',
+      ),
+    ).toBe(true);
   });
 
   it('Caddy 服务抽屉展示状态并导出配置', async () => {

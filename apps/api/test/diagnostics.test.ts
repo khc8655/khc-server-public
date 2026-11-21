@@ -1014,4 +1014,59 @@ describe('诊断 API 路由', () => {
     expect(res.status).toBe(503);
     expect(ctx.agent.requests).toHaveLength(0);
   });
+
+  it('使用控制面 CF DNS-01 全局证书时，节点未装 acme.sh 降级为 info（不报错）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    const cert = await ctx.certs.create({
+      name: 'wild-cf',
+      domains: ['*.example.com'],
+      issuer: 'acme',
+      notAfter: Math.floor(Date.now() / 1000) + 60 * 86_400,
+      certPem: '-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n',
+      keyPem: '-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n',
+      sourceNodeId: null,
+      acme: { provider: 'cf-dns01', credentialKey: 'acc_1', ca: 'letsencrypt', keyType: 'ec' },
+    });
+    await ctx.apps.put(id, 'caddy-site', {
+      config: { sites: [{ domain: 'app.example.com', tls: { mode: 'manual', cert: { $cert: cert.id } } }] },
+      schemaVersion: 1,
+      actor: 'test',
+    });
+    await ctx.apps.setAppliedRev(id, 'caddy-site', 1);
+
+    const state = okState();
+    state.adapters = [
+      {
+        name: 'certificates',
+        version: '1.0.0',
+        status: {
+          problems: [
+            {
+              code: 'acme_failed',
+              severity: 'error',
+              title: 'acme.sh 未安装',
+              hint: 'missing acme.sh',
+              evidence: { reason: 'env_missing' },
+            },
+          ],
+        },
+      },
+    ];
+    ctx.agent.handler = async () => ({ status: 200, body: { ok: true, ...state } });
+
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${id}/diagnostics`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { checks: DiagnosticCheck[] };
+    const acmeCheck = body.checks.find((item) => item.id === 'problem.certificates.acme_failed');
+    expect(acmeCheck).toBeTruthy();
+    expect(acmeCheck?.code).toBe('khc.certificates.acme_failed');
+    expect(acmeCheck?.severity).toBe('info');
+    expect(acmeCheck?.title).toContain('可选');
+  });
 });

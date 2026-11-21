@@ -1014,6 +1014,15 @@ export const createCertificateRequestSchema = z.object({
 });
 export type CreateCertificateRequest = z.infer<typeof createCertificateRequestSchema>;
 
+/** 控制面直连 Cloudflare DNS-01 签发 ACME 证书（无需节点安装 acme.sh）。 */
+export const issueCfDnsCertificateRequestSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  domains: z.array(z.string().trim().min(1).max(255)).min(1).max(100),
+  accountId: z.string().trim().min(1).max(128),
+  ca: z.enum(['letsencrypt', 'letsencrypt_staging']).default('letsencrypt'),
+});
+export type IssueCfDnsCertificateRequest = z.infer<typeof issueCfDnsCertificateRequestSchema>;
+
 /** 续期成功后替换证书材料（元数据沿用，不需要重新提交） */
 export const updateCertificateRequestSchema = z.object({
   certPem: z.string().min(1).max(64 * 1024),
