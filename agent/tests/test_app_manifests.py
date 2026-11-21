@@ -13,7 +13,7 @@ from unittest import mock
 from khc.adapters import Ctx, RunResult
 from khc import app_manifests as mod
 from khc.app_manifests import (
-    APP_ROOT, ManifestError, run_manifest, validate_manifest,
+    APP_ROOT, ManifestError, read_installed_manifests, run_manifest, validate_manifest,
 )
 
 from .support import make_paths
@@ -202,15 +202,30 @@ class ManifestTests(unittest.TestCase):
         self.assertIn(os.path.join(mod.APP_ROOT, "home", "khc-app-new"), useradd)
         self.assertIn("/usr/sbin/nologin", useradd)
 
-    def test_create_mode_requires_password_only_when_creating_account(self):
-        runner = RecordingRunner()
-        with mock.patch.object(mod.pwd, "getpwnam", side_effect=KeyError("x")):
-            with self.assertRaises(ManifestError):
-                self.install(runner, runtime_user="khc-app-new", runtime_password=None)
-        self.assertEqual(runner.calls, [])
+    def test_create_mode_skips_chpasswd_when_password_omitted(self):
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        with mock.patch.object(mod.pwd, "getpwnam", side_effect=[KeyError("x")] + [account("khc-app-new")] * 8):
+            out = self.install(runner, runtime_user="khc-app-new", runtime_password=None)
+        self.assertEqual(out["user"], "khc-app-new")
+        self.assertTrue(any("useradd" in " ".join(c) for c in runner.calls))
+        self.assertFalse(any("chpasswd" in " ".join(c) for c in runner.calls))
         # 账号已由面板建好：沿用时不改密码，也就不需要密码（卸载靠这一点）。
-        out = self.install(RecordingRunner(stdout="KHC_RESULT={}\n"), runtime_password=None)
-        self.assertEqual(out["user"], APP_USER)
+        out_reused = self.install(RecordingRunner(stdout="KHC_RESULT={}\n"), runtime_password=None)
+        self.assertEqual(out_reused["user"], APP_USER)
+
+    def test_read_installed_manifests_tracks_install_and_uninstall(self):
+        runner = RecordingRunner(stdout="KHC_RESULT={}\n")
+        ctx = self.ctx(runner)
+        self.assertEqual(read_installed_manifests(ctx), {})
+        self.install(runner, manifest_id="magpie")
+        installed = read_installed_manifests(ctx)
+        self.assertIn("magpie", installed)
+        self.assertEqual(installed["magpie"]["version"], "0.1.0")
+        self.assertEqual(installed["magpie"]["source"], "manifest")
+        self.assertTrue(installed["magpie"]["installedAt"])
+        # 卸载后自动从已安装清单移除
+        run_manifest(ctx, manifest=manifest(), manifest_id="magpie", action="uninstall")
+        self.assertEqual(read_installed_manifests(ctx), {})
 
     def test_uninstall_reuses_identity_recorded_at_install(self):
         self.install(RecordingRunner(stdout="KHC_RESULT={}\n"), runtime_mode="root")

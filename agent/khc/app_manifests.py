@@ -27,6 +27,7 @@ import os
 import pwd
 import re
 import shlex
+import time
 from secrets import token_hex
 from typing import Any, Mapping, Optional
 
@@ -35,6 +36,7 @@ from .util import (
     KhcError,
     atomic_write,
     ensure_dir,
+    iso_utc,
     load_json,
     save_json,
     tail,
@@ -229,6 +231,53 @@ def _record_path(ctx: Ctx, manifest_id: str, instance: str) -> str:
     return os.path.join(ctx.paths.data_dir, "app-manifests", f"{manifest_id}--{instance}.json")
 
 
+def _mtime_iso(path: str) -> str:
+    try:
+        return iso_utc(os.stat(path).st_mtime)
+    except OSError:
+        return ""
+
+
+def read_installed_manifests(ctx: Ctx) -> dict[str, dict[str, Any]]:
+    """读取控制面下发应用清单的已安装记录，供 status 与 recipe_installed 返回。"""
+    directory = os.path.join(ctx.paths.data_dir, "app-manifests")
+    if not os.path.isdir(directory):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for filename in sorted(os.listdir(directory)):
+        if not filename.endswith(".json"):
+            continue
+        path = os.path.join(directory, filename)
+        data = load_json(path, default=None)
+        if not isinstance(data, Mapping):
+            continue
+        stem = filename[: -len(".json")]
+        parts = stem.split("--", 1)
+        manifest_id = data.get("manifestId") if isinstance(data.get("manifestId"), str) else parts[0]
+        if not isinstance(manifest_id, str) or not manifest_id:
+            continue
+        instance = (
+            data.get("instance")
+            if isinstance(data.get("instance"), str) and data.get("instance")
+            else (parts[1] if len(parts) > 1 and parts[1] else manifest_id)
+        )
+        key = manifest_id if instance == manifest_id else f"{manifest_id}/{instance}"
+        installed_at = data.get("installedAt")
+        entry: dict[str, Any] = {
+            "version": str(data.get("version") or "—"),
+            "installedAt": installed_at if isinstance(installed_at, str) and installed_at else _mtime_iso(path),
+            "source": "manifest",
+            "manifestId": manifest_id,
+            "instance": instance,
+        }
+        if isinstance(data.get("mode"), str):
+            entry["mode"] = data["mode"]
+        if isinstance(data.get("user"), str):
+            entry["user"] = data["user"]
+        out[key] = entry
+    return out
+
+
 def _account(user: str):
     """解析应用用户；不存在即中止，绝不静默退回 root。"""
     try:
@@ -307,9 +356,6 @@ def resolve_runtime_user(
             _enable_linger(ctx, user)
         return user
 
-    if not isinstance(runtime_password, str) or not runtime_password:
-        raise ManifestError("新建用户必须提供密码", details={"field": "runtimePassword"})
-
     # useradd 要写 /etc/passwd，必须在沙箱外执行。全程 argv 数组，不拼 shell。
     # 家目录必须真实存在且可写：systemd user manager 只搜 $HOME/.config/systemd/user，
     # 这个路径由 user@.service 启动时固定，脚本里临时改 XDG_CONFIG_HOME 无效。
@@ -333,18 +379,20 @@ def resolve_runtime_user(
             "创建应用用户失败",
             details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
         )
-    # 密码经 stdin 传给 chpasswd，不落命令行（ps 也看不到）。
-    chpasswd = SYSTEMD_RUN_PREFIX + [
-        "--unit=khc-app-chpasswd",
-        "--property=RuntimeMaxSec=60",
-        "/usr/sbin/chpasswd",
-    ]
-    result = ctx.run(chpasswd, check=False, timeout=90, input=f"{user}:{runtime_password}\n")
-    if result.rc != 0:
-        raise ManifestError(
-            "设置应用用户密码失败",
-            details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
-        )
+    # 仅在显式提供密码时调用 chpasswd；未传密码则保留 nologin 系统账号锁定态，不设口令。
+    if isinstance(runtime_password, str) and runtime_password:
+        # 密码经 stdin 传给 chpasswd，不落命令行（ps 也看不到）。
+        chpasswd = SYSTEMD_RUN_PREFIX + [
+            "--unit=khc-app-chpasswd",
+            "--property=RuntimeMaxSec=60",
+            "/usr/sbin/chpasswd",
+        ]
+        result = ctx.run(chpasswd, check=False, timeout=90, input=f"{user}:{runtime_password}\n")
+        if result.rc != 0:
+            raise ManifestError(
+                "设置应用用户密码失败",
+                details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
+            )
     if checked.get("linger"):
         _enable_linger(ctx, user)
     return user
@@ -537,7 +585,18 @@ def run_manifest(
     save_json(result_file, {"manifestId": manifest_id, "instance": name, "action": action}, mode=0o600)
     if action == "install":
         ensure_dir(os.path.dirname(record_path), mode=0o700)
-        save_json(record_path, {"mode": mode, "user": user, "version": checked["version"]}, mode=0o600)
+        save_json(
+            record_path,
+            {
+                "manifestId": manifest_id,
+                "instance": name,
+                "mode": mode,
+                "user": user,
+                "version": checked["version"],
+                "installedAt": iso_utc(time.time()),
+            },
+            mode=0o600,
+        )
     else:
         try:
             os.unlink(record_path)

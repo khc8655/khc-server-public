@@ -19,7 +19,7 @@ import {
 } from '@khc/contracts';
 import type { AppBindings, AppDeps, Env } from '../types';
 import type { CertificateMaterial, StoredNode } from '../domain/repos';
-import { issueAcmeDns01 } from '../lib/acme-dns01';
+import { issueAcmeDns01, parseLeafCertNotAfter } from '../lib/acme-dns01';
 import { resolveSecretRefs } from '../lib/secret-refs';
 import { loadCfAccounts, type CfAccountRuntime } from './cfDns';
 import { newIdempotencyKey } from '../lib/crypto';
@@ -255,7 +255,7 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
       name: body.name,
       domains: body.domains,
       issuer: body.issuer,
-      notAfter: body.notAfter ?? null,
+      notAfter: body.notAfter ?? parseLeafCertNotAfter(body.certPem),
       certPem: body.certPem,
       keyPem: body.keyPem,
       sourceNodeId: body.sourceNodeId ?? null,
@@ -404,10 +404,11 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
     const id = c.req.param('id');
     const body = await parseJsonBody(c, updateCertificateRequestSchema);
     assertPem(body.certPem, body.keyPem);
+    const resolvedNotAfter = body.notAfter ?? parseLeafCertNotAfter(body.certPem);
     const certificate = await deps.certs.update(id, {
       certPem: body.certPem,
       keyPem: body.keyPem,
-      ...(body.notAfter === undefined ? {} : { notAfter: body.notAfter }),
+      ...(resolvedNotAfter === null ? {} : { notAfter: resolvedNotAfter }),
       ...(body.domains === undefined ? {} : { domains: body.domains }),
       ...(body.issuer === undefined ? {} : { issuer: body.issuer }),
     });

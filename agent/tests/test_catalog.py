@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from khc.adapters import Ctx
 from khc.recipes import (
     DEFAULT_CATALOG_DIR,
     RecipeError,
@@ -28,7 +29,7 @@ from khc.recipes import (
     validate_params,
 )
 
-from .support import ADAPTERS_DIR
+from .support import ADAPTERS_DIR, make_paths
 
 REPO_ROOT = os.path.dirname(os.path.dirname(DEFAULT_CATALOG_DIR))
 
@@ -127,6 +128,30 @@ class CatalogPathTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(install), install)
             self.assertEqual(install, os.path.join(override, "demo-echo", "install.sh"))
             self.assertNotIn("demo-echo/demo-echo", install.replace(os.sep, "/"))
+
+
+class AppCatalogManifestVisibilityTests(unittest.TestCase):
+    """P0-1 回归：通过 manifest 安装后，status 与 recipe_installed 均可见。"""
+
+    def test_status_and_recipe_installed_include_manifest_records(self):
+        tmp = tempfile.mkdtemp(prefix="khc-catalog-manifest-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        paths = make_paths(tmp)
+        record_dir = os.path.join(paths.data_dir, "app-manifests")
+        os.makedirs(record_dir, exist_ok=True)
+        with open(os.path.join(record_dir, "magpie--magpie.json"), "w", encoding="utf-8") as fh:
+            json.dump({"manifestId": "magpie", "instance": "magpie", "version": "0.1.4265", "mode": "create", "user": "khc-app-magpie"}, fh)
+
+        ctx = Ctx(paths)
+        adapter = APP_CATALOG.AppCatalog()
+        status = adapter.status(ctx)
+        self.assertIn("magpie", status["installed"])
+        self.assertEqual(status["installedDetail"]["magpie"]["version"], "0.1.4265")
+
+        res = adapter.action_recipe_installed(ctx, {})
+        self.assertIn("magpie", res["installed"])
+        self.assertEqual(res["installed"]["magpie"]["version"], "0.1.4265")
+        self.assertTrue(res["installed"]["magpie"]["installedAt"])
 
 
 if __name__ == "__main__":

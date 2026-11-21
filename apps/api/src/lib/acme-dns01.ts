@@ -10,6 +10,7 @@
 import type { CfDnsZoneRef } from '@khc/contracts';
 import { AppError, badRequest } from './errors';
 import { createTxtRecord, deleteRecord, listZones, type CfFetch } from './cf-dns';
+import { resolveTxtViaPublicDoh } from './doh';
 
 export type AcmeCa = 'letsencrypt' | 'letsencrypt_staging';
 export type AcmeFetch = (url: string, init?: RequestInit) => Promise<Response>;
@@ -430,8 +431,12 @@ export interface IssueAcmeDns01Input {
   ca?: AcmeCa;
   acmeFetch?: AcmeFetch;
   cfFetch?: CfFetch;
+  dohFetch?: typeof fetch;
+  verifyDnsPropagation?: boolean;
   sleep?: AcmeSleep;
   propagationDelayMs?: number;
+  propagationPollIntervalMs?: number;
+  propagationMaxWaitMs?: number;
   pollIntervalMs?: number;
   maxPollAttempts?: number;
 }
@@ -443,14 +448,82 @@ export interface IssuedCertificateMaterial {
   domains: string[];
 }
 
+interface PendingDnsChallenge {
+  authUrl: string;
+  challengeUrl: string;
+  txtName: string;
+  txtValue: string;
+}
+
+async function waitForTxtPropagation(
+  challenges: PendingDnsChallenge[],
+  opts: {
+    verifyDnsPropagation: boolean;
+    dohFetch: typeof fetch;
+    sleep: AcmeSleep;
+    initialDelayMs: number;
+    pollIntervalMs: number;
+    maxWaitMs: number;
+  },
+): Promise<void> {
+  if (challenges.length === 0) return;
+  if (opts.initialDelayMs > 0) {
+    await opts.sleep(opts.initialDelayMs);
+  }
+  if (!opts.verifyDnsPropagation) return;
+
+  const interval = Math.max(opts.pollIntervalMs, 0);
+  const maxAttempts = Math.max(1, Math.ceil(opts.maxWaitMs / Math.max(interval, 1)) + 1);
+  // 同一轮可能多个域名共用同个 _acme-challenge 主机（如 example.com 与 *.example.com）
+  const uniqueNames = [...new Set(challenges.map((c) => c.txtName))];
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const snapshots = await Promise.all(
+      uniqueNames.map(async (txtName) => ({
+        txtName,
+        result: await resolveTxtViaPublicDoh(txtName, opts.dohFetch),
+      })),
+    );
+    const byName = new Map(snapshots.map((item) => [item.txtName, item.result]));
+    const allPropagated = challenges.every((ch) => {
+      const seen = byName.get(ch.txtName);
+      return Boolean(
+        seen &&
+          seen.cloudflare.includes(ch.txtValue) &&
+          seen.google.includes(ch.txtValue),
+      );
+    });
+    if (allPropagated) {
+      if (interval > 0) await opts.sleep(Math.min(1000, interval));
+      return;
+    }
+    if (attempt + 1 < maxAttempts && interval > 0) {
+      await opts.sleep(interval);
+    }
+  }
+}
+
+function formatDns01ChallengeError(detail: string | undefined): string {
+  const base = detail ?? '记录尚未生效或校验失败';
+  if (/nxdomain|dns problem/i.test(base)) {
+    return `DNS-01 域名校验未通过：${base}（可能是 DNS 传播延迟，请稍后重试；若反复失败请检查 Cloudflare Token 的 Zone→DNS→Edit 权限与域名归属）`;
+  }
+  return `DNS-01 域名校验未通过：${base}`;
+}
+
 export async function issueAcmeDns01(
   input: IssueAcmeDns01Input,
 ): Promise<IssuedCertificateMaterial> {
   const domains = normalizeAcmeDomains(input.domains);
   const ca: AcmeCa = input.ca ?? 'letsencrypt';
   const acmeFetch = input.acmeFetch ?? defaultAcmeFetch;
+  const dohFetch = input.dohFetch ?? fetch;
+  const verifyDnsPropagation =
+    input.verifyDnsPropagation ?? (input.dohFetch !== undefined || input.acmeFetch === undefined);
   const sleep = input.sleep ?? defaultSleep;
-  const propagationDelayMs = input.propagationDelayMs ?? 1500;
+  const propagationDelayMs = input.propagationDelayMs ?? 5000;
+  const propagationPollIntervalMs = input.propagationPollIntervalMs ?? 2500;
+  const propagationMaxWaitMs = input.propagationMaxWaitMs ?? 20000;
   const pollIntervalMs = input.pollIntervalMs ?? 1500;
   const maxPollAttempts = input.maxPollAttempts ?? 15;
 
@@ -495,7 +568,7 @@ export async function issueAcmeDns01(
       throw new AppError(502, 'acme_order', 'ACME 订单响应缺少 authorizations 或 finalize');
     }
 
-    const pendingChallenges: Array<{ authUrl: string; challengeUrl: string }> = [];
+    const pendingChallenges: PendingDnsChallenge[] = [];
 
     for (const authUrl of authUrls) {
       const auth = await client.post<{
@@ -525,19 +598,25 @@ export async function issueAcmeDns01(
       const keyAuth = `${dns01.token}.${client.thumbprint}`;
       const digest = await crypto.subtle.digest('SHA-256', encoder.encode(keyAuth));
       const txtValue = base64UrlEncode(new Uint8Array(digest));
+      const txtName = `_acme-challenge.${baseHost(identValue)}`;
 
       const txt = await createTxtRecord(cfFetch, input.cfToken, {
         zoneId: zone.id,
-        name: `_acme-challenge.${baseHost(identValue)}`,
+        name: txtName,
         content: txtValue,
       });
       createdRecords.push({ zoneId: zone.id, recordId: txt.id });
-      pendingChallenges.push({ authUrl, challengeUrl: dns01.url });
+      pendingChallenges.push({ authUrl, challengeUrl: dns01.url, txtName, txtValue });
     }
 
-    if (pendingChallenges.length > 0 && propagationDelayMs > 0) {
-      await sleep(propagationDelayMs);
-    }
+    await waitForTxtPropagation(pendingChallenges, {
+      verifyDnsPropagation,
+      dohFetch,
+      sleep,
+      initialDelayMs: propagationDelayMs,
+      pollIntervalMs: propagationPollIntervalMs,
+      maxWaitMs: propagationMaxWaitMs,
+    });
 
     for (const item of pendingChallenges) {
       await client.post(item.challengeUrl, {});
@@ -559,7 +638,7 @@ export async function issueAcmeDns01(
           throw new AppError(
             502,
             'acme_challenge_failed',
-            `DNS-01 域名校验未通过：${detail ?? '记录尚未生效或校验失败'}`,
+            formatDns01ChallengeError(detail),
           );
         }
         await sleep(pollIntervalMs);

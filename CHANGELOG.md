@@ -2,6 +2,12 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.29.0] - 2026-11-22
+### Fixed
+- 修复通过应用清单向导安装应用后，Agent（`0.6.5`）的 `recipe_installed` 与 `status` 未读取 `app-manifests` 记录导致界面不显示已安装应用及卸载按钮的缺陷，并允许 `nologin` 应用账号免传密码创建。
+- 修复控制面 Cloudflare DNS-01 签发/续期仅固定等待 1.5s 触发 ACME 校验导致 `NXDOMAIN` 的问题，改为等待后轮询公共 DoH（Cloudflare + Google）确认 `_acme-challenge` TXT 生效并补充排查提示。
+- 修复全局导入 PEM 证书时未解析 `notAfter` 导致列表固定显示「未设置」的问题。
+
 ## [0.28.0] - 2026-11-21
 ### Added
 - 新增全球证书「续期后自动同步到关联 Hub」开关（D1 0015）、关联节点查询、`POST /certs/:id/sync` 一键同步回执，并将 14 天内到期证书待办直达对应证书详情抽屉（S4）。

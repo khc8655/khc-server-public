@@ -10,8 +10,9 @@
 
 /** DoH JSON 接口；固定 Cloudflare，避免不同用户网络下结果口径不一致。 */
 const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
+const GOOGLE_DOH_ENDPOINT = 'https://dns.google/resolve';
 
-const TYPE_CODES = { A: 1, AAAA: 28, CNAME: 5 } as const;
+const TYPE_CODES = { A: 1, AAAA: 28, CNAME: 5, TXT: 16 } as const;
 export type DohRecordType = keyof typeof TYPE_CODES;
 
 export interface DohResult {
@@ -23,6 +24,51 @@ export interface DohResult {
 interface DohResponseBody {
   Status?: number;
   Answer?: Array<{ type?: number; data?: string }>;
+}
+
+/** 解析 DNS JSON 应答里的 TXT 字符串（移除外层引号并拼接多段引号片段）。 */
+function normalizeTxtAnswer(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = trimmed.match(/"([^"]*)"/g);
+  if (quoted && quoted.length > 0) {
+    return quoted.map((part) => part.slice(1, -1)).join('');
+  }
+  return trimmed;
+}
+
+async function queryDohJson(
+  endpoint: string,
+  name: string,
+  type: DohRecordType,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<DohResult> {
+  const target = name.trim().toLowerCase().replace(/\.$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(
+      `${endpoint}?name=${encodeURIComponent(target)}&type=${type}`,
+      { headers: { accept: 'application/dns-json' }, signal: controller.signal },
+    );
+    if (!response.ok) {
+      throw new Error(`DoH 查询失败（HTTP ${response.status}）`);
+    }
+    const body = (await response.json()) as DohResponseBody;
+    const code = TYPE_CODES[type];
+    const answers = (body.Answer ?? [])
+      .filter((answer) => answer.type === code && typeof answer.data === 'string')
+      .map((answer) => {
+        const text = answer.data as string;
+        return type === 'TXT' ? normalizeTxtAnswer(text) : text;
+      });
+    return {
+      status: typeof body.Status === 'number' ? body.Status : -1,
+      answers,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -37,26 +83,24 @@ export async function resolveDnsName(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5_000,
 ): Promise<DohResult> {
-  const target = name.trim().toLowerCase().replace(/\.$/, '');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetchImpl(
-      `${DOH_ENDPOINT}?name=${encodeURIComponent(target)}&type=${type}`,
-      { headers: { accept: 'application/dns-json' }, signal: controller.signal },
-    );
-    if (!response.ok) {
-      throw new Error(`DoH 查询失败（HTTP ${response.status}）`);
-    }
-    const body = (await response.json()) as DohResponseBody;
-    const code = TYPE_CODES[type];
-    return {
-      status: typeof body.Status === 'number' ? body.Status : -1,
-      answers: (body.Answer ?? [])
-        .filter((answer) => answer.type === code && typeof answer.data === 'string')
-        .map((answer) => answer.data as string),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  return queryDohJson(DOH_ENDPOINT, name, type, fetchImpl, timeoutMs);
+}
+
+/**
+ * 并行通过 Cloudflare 与 Google 公共 DoH 检查 TXT 记录是否已在公网递归解析生效；
+ * 单个 DoH 端失败或超时时静默返回空数组，不阻断上层 ACME 质询流程。
+ */
+export async function resolveTxtViaPublicDoh(
+  name: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 4_000,
+): Promise<{ cloudflare: string[]; google: string[] }> {
+  const [cf, google] = await Promise.allSettled([
+    queryDohJson(DOH_ENDPOINT, name, 'TXT', fetchImpl, timeoutMs),
+    queryDohJson(GOOGLE_DOH_ENDPOINT, name, 'TXT', fetchImpl, timeoutMs),
+  ]);
+  return {
+    cloudflare: cf.status === 'fulfilled' ? cf.value.answers : [],
+    google: google.status === 'fulfilled' ? google.value.answers : [],
+  };
 }
