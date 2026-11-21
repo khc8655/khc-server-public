@@ -556,6 +556,7 @@ function AccountCard({
             {account.enabled ? null : <Tag label={zh.cfDns.statusDisabled} />}
           </div>
           <Row gap={1}>
+            <Button label={zh.cfDns.addDomainTitle} variant="ghost" size="sm" onClick={onAddDomain} />
             <Button
               label={actionLabel(action('cfDns.account.update'))}
               variant="ghost"
@@ -572,10 +573,7 @@ function AccountCard({
         </Row>
 
         {enabledZones.length === 0 ? (
-          <Row justify="between" gap={2}>
-            <span className="ui-muted">{zh.cfDns.accountNoDomain}</span>
-            <Button label={zh.cfDns.addDomainTitle} size="sm" icon="plus" onClick={onAddDomain} />
-          </Row>
+          <span className="ui-muted">{zh.cfDns.accountNoDomain}</span>
         ) : (
           <div className="ui-record-list">
             {enabledZones.map((zone) => (
@@ -617,8 +615,8 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
     zone: CfDnsZoneRef;
     record: CfDnsZoneRecord;
   } | null>(null);
-  /** 「添加域名」弹窗：与添加节点抽屉共用同一个组件（单一实现）。 */
-  const [addDomainOpen, setAddDomainOpen] = useState(false);
+  /** 「添加域名」弹窗：与添加节点抽屉共用同一个组件（单一实现）；从哪张账户卡进来就带上哪个账户。 */
+  const [addDomainFor, setAddDomainFor] = useState<string | null>(null);
   const accounts = accountsQuery.data ?? [];
   const certs = certsQuery.data ?? [];
   const nodesQuery = useQuery({
@@ -801,17 +799,6 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
         />
       ) : null}
 
-      {accounts.length > 0 ? (
-        <Row justify="end" gap={2}>
-          <Button
-            label={zh.cfDns.addDomainTitle}
-            size="sm"
-            icon="plus"
-            onClick={() => setAddDomainOpen(true)}
-          />
-        </Row>
-      ) : null}
-
       {accountsQuery.isLoading ? (
         <span className="ui-muted">{zh.cfDns.loadingAccounts}</span>
       ) : accounts.length === 0 ? (
@@ -839,7 +826,7 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
             onDelete={() => setDeleteTarget(account)}
             onManageDomain={(zone) => setDomainTarget({ account, zone })}
             onRemoveDomain={(zone) => void removeDomain(account, zone)}
-            onAddDomain={() => setAddDomainOpen(true)}
+            onAddDomain={() => setAddDomainFor(account.id)}
           />
         ))
       )}
@@ -997,8 +984,9 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
       ) : null}
 
       <AddDomainDialog
-        open={addDomainOpen}
-        onClose={() => setAddDomainOpen(false)}
+        open={addDomainFor !== null}
+        initialAccountId={addDomainFor ?? undefined}
+        onClose={() => setAddDomainFor(null)}
         onAdded={(domain) => {
           toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: domain.zoneName }) });
         }}

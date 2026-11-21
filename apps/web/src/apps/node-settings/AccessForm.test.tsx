@@ -126,6 +126,17 @@ describe('AccessForm 纯函数', () => {
     ).toBe(true);
   });
 
+  it('一键发布与 Agent 自己抢 443 时不可提交；改用 8443 后可提交', () => {
+    const clash = draft({ autoPublish: true, domainPort: '443' });
+    expect(accessDraftIssue(clash)).toBe(
+      '自动发布要把 443 留给 Caddy：请把 HTTPS 端口改为 8443，或取消自动发布',
+    );
+    expect(isAccessDraftSubmittable(clash)).toBe(false);
+    expect(isAccessDraftSubmittable({ ...clash, domainPort: '8443' })).toBe(true);
+    // 不自动发布时 443 仍然合法（Agent 独占 443 是域名模式的默认形态）
+    expect(isAccessDraftSubmittable({ ...clash, autoPublish: false })).toBe(true);
+  });
+
   it('存量节点有域名时默认落到「手动输入」，域名可直接改', () => {
     const existing = initialAccessDraft({
       id: 'n2',

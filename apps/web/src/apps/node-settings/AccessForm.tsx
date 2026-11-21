@@ -215,6 +215,9 @@ export function accessDraftIssue(
     if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
     if (draft.autoPublish && !portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
+    // 443 只能有一个进程：Agent 自己占着 443 时，Caddy 不可能再为同一域名建 443 站点。
+    // 这类组合注定在 apply 阶段失败，直接在表单里挡住并给一键改端口的出口。
+    if (draft.autoPublish && draft.domainPort === '443') return zh.access.publishPortConflictIssue;
     return null;
   }
 
@@ -630,6 +633,22 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     onChange={(value) => update({ upstreamPort: value })}
                   />
                 </Field>
+              ) : null}
+              {draft.autoPublish && draft.domainPort === '443' ? (
+                <Stack gap={2}>
+                  <Banner
+                    tone="warn"
+                    title={zh.access.publishPortConflictTitle}
+                    description={zh.access.publishPortConflictHint}
+                  />
+                  <Row gap={2}>
+                    <Button
+                      label={zh.access.publishPortConflictCta}
+                      size="sm"
+                      onClick={() => update({ domainPort: '8443' })}
+                    />
+                  </Row>
+                </Stack>
               ) : null}
             </Stack>
           ) : null}

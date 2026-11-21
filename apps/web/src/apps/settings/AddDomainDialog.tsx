@@ -24,10 +24,13 @@ export function AddDomainDialog({
   open,
   onClose,
   onAdded,
+  initialAccountId,
 }: {
   open: boolean;
   onClose: () => void;
   onAdded: (domain: AddedDomain) => void;
+  /** 从某个账户卡进来时带上该账户，少一次选择。 */
+  initialAccountId?: string;
 }) {
   const queryClient = useQueryClient();
   const accountsQuery = useQuery({
@@ -57,10 +60,11 @@ export function AddDomainDialog({
     if (!open) return;
     setError(null);
     setZoneId('');
-    // 只有一个凭据时直接选中，少点一次。
-    if (accounts.length === 1) setAccountId((prev) => prev || accounts[0]!.id);
+    // 从账户卡进来 / 只有一个凭据时直接选中，少点一次。
+    if (initialAccountId) setAccountId(initialAccountId);
+    else if (accounts.length === 1) setAccountId((prev) => prev || accounts[0]!.id);
     // 只在打开或账户数量变化时重置；用户在弹窗内的选择不被打断。
-  }, [open, accounts.length]);
+  }, [open, accounts.length, initialAccountId]);
 
   const submit = async () => {
     if (!account || !zoneId) return;

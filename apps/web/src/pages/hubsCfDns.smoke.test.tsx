@@ -517,8 +517,10 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
-    // 勾选自动发布并填上游端口
+    // 勾选自动发布并填上游端口；443 与 Agent 自己冲突，先点「改用 8443」把 443 让给 Caddy
     await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+    expect(await screen.findByText('443 已被节点自己占用')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '改用 8443' }));
     const upstream = screen.getByLabelText('上游端口');
     await userEvent.clear(upstream);
     await userEvent.type(upstream, '8080');
@@ -572,6 +574,7 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
     await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+    await userEvent.click(await screen.findByRole('button', { name: '改用 8443' }));
 
     await submitCreate();
     await screen.findByText('节点已创建');
@@ -582,6 +585,42 @@ describe('添加节点：统一接入表单', () => {
     await waitFor(() => {
       expect(savedSites).toEqual([]);
     });
+  });
+
+  it('一键发布：443 被 Agent 自己占用时挡住提交，并给「改用 8443」出口', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    records = [
+      {
+        id: 'rec-1',
+        type: 'A',
+        name: 'app.example.com',
+        content: '198.51.100.20',
+        proxied: false,
+        comment: null,
+        managed: false,
+      },
+    ];
+    await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
+    await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
+    await userEvent.click(screen.getByRole('checkbox', { name: /安装完成后自动发布 HTTPS/ }));
+
+    const save = () =>
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: '添加节点',
+      }) as HTMLButtonElement;
+    // 443 只能有一个进程：默认端口 443 时不允许提交
+    expect(save().disabled).toBe(true);
+    expect(screen.getByText('443 已被节点自己占用')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '改用 8443' }));
+    expect(save().disabled).toBe(false);
+    expect((screen.getByLabelText('HTTPS 端口') as HTMLSelectElement).value).toBe('8443');
+    expect(screen.queryByText('443 已被节点自己占用')).toBeNull();
   });
 
   it('Tunnel 模式：选择全局配置，payload 只带 tunnelId', async () => {

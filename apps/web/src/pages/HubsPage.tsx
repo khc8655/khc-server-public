@@ -107,9 +107,11 @@ export default function HubsPage() {
    * 一键发布 HTTPS 的计划（添加节点时勾选「安装完成后自动发布」才有）：
    * 节点在线且 Caddy 已装 → 写站点（tls=auto）→ apply → 用控制面 TLS 探测确认。
    */
-  const [publishPlan, setPublishPlan] = useState<{ domain: string; upstreamPort: number } | null>(
-    null,
-  );
+  const [publishPlan, setPublishPlan] = useState<{
+    domain: string;
+    upstreamPort: number;
+    agentPort: number;
+  } | null>(null);
   const [publishState, setPublishState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [publishStep, setPublishStep] = useState('');
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -302,6 +304,7 @@ export default function HubsPage() {
         ? {
             domain: normalizeDomain(draft.domain),
             upstreamPort: Number(draft.upstreamPort),
+            agentPort: Number(draft.domainPort),
           }
         : null;
     const data = await createMutation.mutateAsync(toCreatePayload(draft));
@@ -322,7 +325,18 @@ export default function HubsPage() {
    * 顺序固定「写配置 → apply → 探测」，任一步失败都把配置回滚成发布前的样子，
    * 不给主人留半套站点（P4 的验收要求：失败可回滚）。
    */
-  const publishHttps = async (nodeId: string, plan: { domain: string; upstreamPort: number }) => {
+  const publishHttps = async (
+    nodeId: string,
+    plan: { domain: string; upstreamPort: number; agentPort: number },
+  ) => {
+    // 443 只有一个进程：Agent 自己在 443 上时，Caddy 建同域名 443 站点必然 bind 失败。
+    // 这种情况不写任何配置，直接给出可执行的处置办法（换 8443 再发）。
+    if (plan.agentPort === 443) {
+      setPublishState('error');
+      setPublishStep('');
+      setPublishError(zh.hubs.publishPortConflict);
+      return;
+    }
     setPublishState('running');
     setPublishError(null);
     setPublishStep(zh.hubs.publishStepRead);
@@ -738,7 +752,11 @@ export default function HubsPage() {
                     <Badge
                       tone={probeItem?.reachable ? 'ok' : 'neutral'}
                       dot
-                      label={zh.hubs.publishStepOnline}
+                      label={
+                        probeItem?.reachable
+                          ? zh.hubs.publishStepOnline
+                          : zh.hubs.publishStepOffline
+                      }
                     />
                     <Badge
                       tone={

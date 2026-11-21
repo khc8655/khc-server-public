@@ -434,6 +434,7 @@ export const zh = {
     publishTitle: '一键发布 HTTPS：{domain} → 127.0.0.1:{port}',
     publishStepCreated: '节点已创建（{domain}）',
     publishStepOnline: 'Agent 在线',
+    publishStepOffline: 'Agent 待上线',
     publishStepPendingTodo: 'HTTPS 待发布',
     publishStepRead: '读取现有站点配置…',
     publishStepSave: '写入 Caddy 站点…',
@@ -447,6 +448,8 @@ export const zh = {
     publishRolledBack: '（已回滚到发布前的站点配置）',
     publishNeedCaddy: 'Caddy 未安装，无法自动建站点；装好 Caddy 后到节点「应用」页手动添加站点。',
     publishInvalidSite: '站点配置不合法，已跳过发布',
+    publishPortConflict:
+      '节点接入地址占着 443（https://域名），Caddy 无法再为同一域名建 443 站点，发布已中止、未写入任何配置。请先在节点设置里把接入地址改成 https://域名:8443 再重试。',
     createdToast: '节点已添加',
     deleteTitle: '删除节点 {name}？',
     deleteNameLabel: '输入节点名 {name} 以确认',
@@ -1456,6 +1459,11 @@ export const zh = {
     upstreamPortLabel: '上游端口',
     upstreamPortHelp: '节点上实际提供服务的端口，Caddy 反代到 127.0.0.1:<端口>。',
     upstreamPortInvalid: '上游端口需为 1–65535',
+    publishPortConflictTitle: '443 已被节点自己占用',
+    publishPortConflictHint:
+      'Agent 的接入地址就是用这个域名的 443，Caddy 无法再在同一条 443 上建应用站点。把节点接入地址换成 8443（Agent 走 8443），443 留给 Caddy 与应用；证书各自独立签发。',
+    publishPortConflictCta: '改用 8443',
+    publishPortConflictIssue: '自动发布要把 443 留给 Caddy：请把 HTTPS 端口改为 8443，或取消自动发布',
     tunnelsLoading: '正在读取隧道配置…',
     tunnelsFailed: '读取隧道配置失败',
     tunnelsEmpty: '还没有隧道配置',
