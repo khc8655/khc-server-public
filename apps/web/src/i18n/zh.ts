@@ -444,6 +444,8 @@ export const zh = {
     publishStepPending: '站点已发布，证书签发中',
     publishDoneHint:
       '访问 https://域名 应返回 200；证书由 Caddy 首次访问时自动申请，显示「证书签发中」时稍后刷新即可。',
+    publishIdleHint:
+      '节点上线后点「我已完成安装」就会自动发布；关掉这个面板不会再自动发布，可到节点「应用」页手动加站点。',
     publishFailed: '自动发布失败',
     publishRolledBack: '（已回滚到发布前的站点配置）',
     publishNeedCaddy: 'Caddy 未安装，无法自动建站点；装好 Caddy 后到节点「应用」页手动添加站点。',

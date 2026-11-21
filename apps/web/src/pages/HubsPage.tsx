@@ -776,6 +776,9 @@ export default function HubsPage() {
                   {publishState === 'done' ? (
                     <span className="ui-field-help">{zh.hubs.publishDoneHint}</span>
                   ) : null}
+                  {publishState === 'idle' ? (
+                    <span className="ui-field-help">{zh.hubs.publishIdleHint}</span>
+                  ) : null}
                 </Stack>
               ) : null}
             </Stack>
