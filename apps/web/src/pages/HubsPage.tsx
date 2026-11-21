@@ -7,15 +7,7 @@ import { createHub, deleteHub, fetchHubState, probeHubs } from '../data/hubs';
 import { fetchAgentReleases, generateAgentCommand, type AgentCommandResult } from '../data/agent';
 import { buildDomainEndpoint, normalizeDomain } from '../data/endpoint';
 import { deleteCfDnsRecordsForNode, createCfDnsRecordForNode } from '../data/cfDns';
-import { fetchAppConfig } from '../data/apps';
-import {
-  CADDY_SITE_APP,
-  normalizeCaddyConfig,
-  normalizeCaddySite,
-  runCaddyAction,
-  saveCaddyConfig,
-  type CaddySite,
-} from '../data/sites';
+import { publishProxySite } from '../data/sites';
 import {
   hubOutageDays,
   hubOutageLabel,
@@ -322,9 +314,9 @@ export default function HubsPage() {
   };
 
   /**
-   * 一键发布 HTTPS：节点在线 + Caddy 就绪后自动建站点并 apply。
+   * 一键发布 HTTPS：节点在线 + Caddy 就绪后建站点并 apply。
    *
-   * 顺序固定「写配置 → apply → 探测」，任一步失败都把配置回滚成发布前的样子，
+   * 写配置 + apply + 失败回滚都在 `publishProxySite` 里，与应用目录的「安装后发布」共用同一条路径，
    * 不给主人留半套站点（P4 的验收要求：失败可回滚）。
    */
   const publishHttps = async (
@@ -341,47 +333,23 @@ export default function HubsPage() {
     }
     setPublishState('running');
     setPublishError(null);
-    setPublishStep(zh.hubs.publishStepRead);
-    let previous: CaddySite[] | null = null;
+    setPublishStep(zh.hubs.publishStepSave);
     try {
-      const current = await fetchAppConfig(nodeId, CADDY_SITE_APP);
-      const config = normalizeCaddyConfig(current?.config ?? null);
-      previous = config.sites;
-      const exists = config.sites.some((site) => site.domains.includes(plan.domain));
-      if (!exists) {
-        const site = normalizeCaddySite({
-          name: plan.domain,
-          kind: 'proxy',
-          domains: [plan.domain],
-          listenPort: plan.publishPort,
-          enabled: true,
-          upstreams: [`127.0.0.1:${plan.upstreamPort}`],
-          tls: { mode: 'auto' },
-        });
-        if (!site) throw new Error(zh.hubs.publishInvalidSite);
-        setPublishStep(zh.hubs.publishStepSave);
-        await saveCaddyConfig(nodeId, { sites: [...config.sites, site] });
-      }
-      setPublishStep(zh.hubs.publishStepApply);
-      await runCaddyAction(nodeId, 'apply');
+      await publishProxySite(nodeId, {
+        domain: plan.domain,
+        listenPort: plan.publishPort,
+        upstream: `127.0.0.1:${plan.upstreamPort}`,
+      });
       // apply 成功 = 站点已生效。证书由 Caddy 首次访问时签发，这里不谎称「HTTPS 已验证」：
       // 控制面的 TLS 探测打的是节点接入地址（Agent），跟发布出去的应用是两回事。
       setPublishState('done');
       setPublishStep(zh.hubs.publishStepApplied);
       await queryClient.invalidateQueries({ queryKey: ['hubs', nodeId] });
     } catch (error) {
-      // 回滚：把站点配置恢复成发布前，尽量让节点回到可预期状态。
-      if (previous) {
-        try {
-          await saveCaddyConfig(nodeId, { sites: previous });
-          await runCaddyAction(nodeId, 'apply');
-        } catch {
-          /* 回滚失败不掩盖原始错误，下面的提示同时说明这一点 */
-        }
-      }
       setPublishState('error');
+      setPublishStep('');
       setPublishError(
-        `${error instanceof Error ? error.message : String(error)}${previous ? zh.hubs.publishRolledBack : ''}`,
+        `${error instanceof Error ? error.message : String(error)}${zh.hubs.publishRolledBack}`,
       );
     }
   };

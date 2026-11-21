@@ -31,6 +31,7 @@
 | 文档 | 内容 |
 |---|---|
 | `docs/caddy-management.md` | Caddy 站点与服务 |
+| `docs/hosted-apps.md` | 托管应用（应用清单、面板安装、一键发布） |
 | `docs/port-forward.md` | 端口转发 |
 | `docs/cf-dns.md` | Cloudflare DNS 集成 |
 | `docs/host-ops.md` | 主机运维（含 `host-ops-async.md` 长动作） |

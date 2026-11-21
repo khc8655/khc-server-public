@@ -1656,6 +1656,30 @@ export const appManifestParamSchema = z
   .strict();
 export type AppManifestParam = z.infer<typeof appManifestParamSchema>;
 
+/**
+ * 应用「可发布」声明：告诉面板这个应用在本机哪条端口上提供 HTTP 服务，
+ * 以便安装完成后一键发布（Caddy 站点，上游指向本机这条端口）。
+ *
+ * - `portParam`：端口来自哪个安装参数（用户装的时候可能改过），优先用它；
+ * - `port`：没写 `portParam` 或拿不到参数值时用这个默认端口。
+ */
+export const appManifestPublishSchema = z
+  .object({
+    label: z.string().trim().min(1).max(64).optional(),
+    host: z.string().trim().min(1).max(64).default('127.0.0.1'),
+    portParam: z
+      .string()
+      .trim()
+      .regex(/^[a-z][a-z0-9_]*$/, '参数名必须是小写字母开头')
+      .optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.portParam) || Boolean(value.port), {
+    message: 'publish 需要 portParam 或 port 之一',
+  });
+export type AppManifestPublish = z.infer<typeof appManifestPublishSchema>;
+
 /** 应用定义本体。未知字段一律拒绝，避免悄悄把可执行内容塞进库。 */
 export const appManifestDefinitionSchema = z
   .object({
@@ -1666,6 +1690,7 @@ export const appManifestDefinitionSchema = z
     scripts: appManifestScriptsSchema,
     sha256: appManifestSha256Schema,
     writes: z.array(z.string().min(1).max(256)).max(32).default([]),
+    publish: appManifestPublishSchema.optional(),
   })
   .strict();
 export type AppManifestDefinition = z.infer<typeof appManifestDefinitionSchema>;

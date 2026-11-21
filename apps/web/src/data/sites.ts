@@ -969,6 +969,61 @@ export function upsertSite(config: CaddyConfig, site: CaddySite, previousName?: 
   return { ...config, sites };
 }
 
+export interface PublishSitePlan {
+  /** 站点域名，同时作为站点名（同名站点视为「重新指向」，覆盖而不是再建一个） */
+  domain: string;
+  /** Caddy 对外监听的端口（发布端口），必须与 Agent 监听端口不同 */
+  listenPort: number;
+  /** 反代目标 `host:port`，一般是 `127.0.0.1:<应用本地端口>` */
+  upstream: string;
+}
+
+export interface PublishSiteOutcome {
+  site: CaddySite;
+  /** 发布前已存在同名站点（本次是覆盖） */
+  replaced: boolean;
+}
+
+/**
+ * 写站点 → apply 一步到位，失败把配置回滚成发布前的样子。
+ *
+ * 两个调用方共用：添加节点时的「自动发布 HTTPS」与应用目录的「安装后发布」。
+ * apply 必须看 `envelope.ok`：Agent 业务失败是 200 + ok:false，只看是否抛错会误报成功。
+ */
+export async function publishProxySite(
+  hubId: string,
+  plan: PublishSitePlan,
+): Promise<PublishSiteOutcome> {
+  const site = normalizeCaddySite({
+    name: plan.domain,
+    kind: 'proxy',
+    domains: [plan.domain],
+    listenPort: plan.listenPort,
+    enabled: true,
+    upstreams: [plan.upstream],
+    tls: { mode: 'auto' },
+  });
+  if (!site) throw new Error('域名不合法，未写入站点');
+  const current = await fetchAppConfig(hubId, CADDY_SITE_APP);
+  const config = normalizeCaddyConfig(current?.config ?? null);
+  const previous = config.sites;
+  const replaced = previous.some((item) => item.name === site.name);
+  try {
+    await saveCaddyConfig(hubId, upsertSite(config, site));
+    const applied = await runCaddyAction(hubId, 'apply');
+    if (!applied.ok) throw new Error(envelopeErrorText(applied) ?? '站点应用失败');
+  } catch (error) {
+    try {
+      await saveCaddyConfig(hubId, { sites: previous });
+      await runCaddyAction(hubId, 'apply');
+    } catch {
+      /* 回滚失败不掩盖原始错误：调用方仍会拿到第一条失败原因 */
+    }
+    throw error;
+  }
+  return { site, replaced };
+}
+
 export function removeSite(config: CaddyConfig, name: string): CaddyConfig {
   return { ...config, sites: config.sites.filter((site) => site.name !== name) };
 }

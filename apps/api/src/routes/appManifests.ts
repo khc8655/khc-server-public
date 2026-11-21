@@ -8,6 +8,7 @@ import {
 import type { AppBindings, AppDeps } from '../types';
 import { conflict, notFound } from '../lib/errors';
 import { assertManifestSha256 } from '../lib/app-manifests';
+import { ensureBuiltinAppManifests } from '../lib/builtin-manifests';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 
@@ -23,13 +24,15 @@ export function appManifestRoutes(deps: AppDeps): Hono<AppBindings> {
   router.use('/app-manifests', requireAuth);
   router.use('/app-manifests/*', requireAuth);
 
-  router.get('/app-manifests', async (c) =>
-    c.json(
+  router.get('/app-manifests', async (c) => {
+    // 内置应用（如 magpie）开箱可见：缺就补一行，已有记录不动。
+    await ensureBuiltinAppManifests(deps);
+    return c.json(
       appManifestListResponseSchema.parse({
         appManifests: await deps.appManifests.list(),
       }),
-    ),
-  );
+    );
+  });
 
   router.post('/app-manifests', async (c) => {
     const body = await parseJsonBody(c, createAppManifestRequestSchema);

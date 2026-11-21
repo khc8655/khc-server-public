@@ -436,9 +436,7 @@ export const zh = {
     publishStepOnline: 'Agent 在线',
     publishStepOffline: 'Agent 待上线',
     publishStepPendingTodo: 'HTTPS 待发布',
-    publishStepRead: '读取现有站点配置…',
-    publishStepSave: '写入 Caddy 站点…',
-    publishStepApply: '应用配置并重载 Caddy…',
+    publishStepSave: '写入站点并应用 Caddy 配置…',
     publishStepApplied: '站点已应用',
     publishDoneHint:
       '打开 {url} 应能访问；证书由 Caddy 首次访问时签发，若提示证书错误等几秒再刷新。',
@@ -447,7 +445,6 @@ export const zh = {
     publishFailed: '自动发布失败',
     publishRolledBack: '（已回滚到发布前的站点配置）',
     publishNeedCaddy: 'Caddy 未安装，无法自动建站点；装好 Caddy 后到节点「应用」页手动添加站点。',
-    publishInvalidSite: '站点配置不合法，已跳过发布',
     publishPortConflict:
       '发布端口与 Agent 监听端口相同（{port}），Caddy 抢不到这条端口，发布已中止、未写入任何配置。请把两者改成不同的端口再重试。',
     createdToast: '节点已添加',
@@ -1162,6 +1159,27 @@ export const zh = {
     paramMaxLength: '{label}长度不能超过 {max}',
     paramPattern: '{label}格式不正确',
     fixParams: '请先修正参数后再安装',
+
+    publishSection: '安装后发布（{label}）',
+    publishFallbackLabel: '本机端口',
+    publishToggle: '安装完成后自动发布到 HTTPS',
+    publishToggleDesc:
+      '安装任务完成后自动建 Caddy 站点：外部访问走节点域名，转发到本机 {upstream}；失败会回滚站点配置。',
+    publishPortLabel: '发布端口',
+    publishPortHelp: 'Caddy 监听这条端口，不能与 Agent 监听端口（{port}）相同。',
+    publishTargetLabel: '发布地址（自动生成）',
+    publishTargetHelp: '浏览器访问这个地址；证书由 Caddy 首次访问时签发。',
+    publishNoDomainTitle: '该节点还没有域名，暂时不能发布 HTTPS',
+    publishNoDomainDesc:
+      '仍可以直接安装（应用只监听 127.0.0.1）；要对外发布，先去节点设置「接入」里填入域名。',
+    publishNoPort: '清单没有给出可发布的本机端口：请确认 publish 声明的端口参数已有取值。',
+    publishRunning: '正在发布站点…',
+    publishRunningHint: '正在为 {url} 建站点并应用 Caddy 配置…',
+    publishDoneTitle: '已发布：{url}',
+    publishDoneHint:
+      '打开 {url} 应能访问；证书由 Caddy 首次访问时签发，若提示证书错误等几秒再刷新。',
+    publishFailed: '发布失败',
+    publishRetry: '重试发布',
 
     installedTitle: '已安装应用',
     installedEmpty: '该节点暂无已安装应用',
