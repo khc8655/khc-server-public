@@ -11,6 +11,8 @@ import {
   cfDnsRecordItemResponseSchema,
   cfDnsRecordResponseSchema,
   cfDnsRecordUpdateRequestSchema,
+  cfDnsResolveCheckRequestSchema,
+  cfDnsResolveCheckResponseSchema,
   cfDnsStatusResponseSchema,
   cfDnsTestResponseSchema,
   cfDnsZoneListResponseSchema,
@@ -26,7 +28,8 @@ import { encryptSecret, decryptSecret } from '../lib/crypto';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { requireNode } from './helpers';
-import { newId } from '../lib/ids';
+import { newId, nowSec } from '../lib/ids';
+import { resolveDnsName } from '../lib/doh';
 import {
   KHC_RECORD_COMMENT,
   createRecord,
@@ -532,9 +535,38 @@ export function cfDnsRoutes(deps: AppDeps): Hono<AppBindings> {
     return c.json(cfDnsZoneListResponseSchema.parse({ zones }));
   });
 
+  /**
+   * 解析检测：从公网视角（DoH）问「这个记录名现在解析成什么」。
+   * 不读凭据、不碰 Cloudflare API —— 手填域名的用户也能自查是否生效。
+   */
+  router.post('/cf-dns/resolve-check', async (c) => {
+    const body = await parseJsonBody(c, cfDnsResolveCheckRequestSchema);
+    const type = body.type ?? 'A';
+    let result;
+    try {
+      result = await resolveDnsName(body.name, type);
+    } catch (error) {
+      throw new AppError(
+        502,
+        'dns_resolve_failed',
+        `解析检测失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const name = body.name.trim().toLowerCase().replace(/\.$/, '');
+    return c.json(
+      cfDnsResolveCheckResponseSchema.parse({
+        name,
+        type,
+        resolved: result.status === 0 && result.answers.length > 0,
+        answers: result.answers,
+        status: result.status,
+        checkedAt: nowSec(),
+      }),
+    );
+  });
+
   // 读取已启用 Zone 的现有解析记录（只读；添加节点时选择已有记录）。
-  router.get('/cf-dns/records', async (c) => {
-    const zoneId = c.req.query('zoneId')?.trim();
+  router.get('/cf-dns/records', async (c) => {    const zoneId = c.req.query('zoneId')?.trim();
     if (!zoneId) throw badRequest('缺少 zoneId');
     const selection = await resolveZoneSelection(deps, c.env, zoneId);
     if (!selection) {

@@ -1464,6 +1464,28 @@ export const cfDnsZoneRecordsResponseSchema = z.object({
 });
 export type CfDnsZoneRecordsResponse = z.infer<typeof cfDnsZoneRecordsResponseSchema>;
 
+/**
+ * POST /api/v1/cf-dns/resolve-check —— 从公网视角校验某个记录名当前解析成什么。
+ * 走 DoH（Cloudflare 1.1.1.1），不需要任何 DNS 凭据，用于「改完记录到底生效没有」。
+ */
+export const cfDnsResolveCheckRequestSchema = z.object({
+  name: z.string().trim().min(3).max(253),
+  type: z.enum(['A', 'AAAA', 'CNAME']).optional(),
+});
+export type CfDnsResolveCheckRequest = z.infer<typeof cfDnsResolveCheckRequestSchema>;
+
+export const cfDnsResolveCheckResponseSchema = z.object({
+  name: z.string(),
+  type: z.enum(['A', 'AAAA', 'CNAME']),
+  /** NOERROR 且拿到同类型应答才算已生效 */
+  resolved: z.boolean(),
+  answers: z.array(z.string()),
+  /** DoH 状态码：0 = NOERROR，3 = NXDOMAIN */
+  status: z.number().int(),
+  checkedAt: z.number().int().nonnegative(),
+});
+export type CfDnsResolveCheckResponse = z.infer<typeof cfDnsResolveCheckResponseSchema>;
+
 export const cfDnsAccountResponseSchema = z.object({
   account: cfDnsAccountSchema,
   /** 本次拉取到的全部 Zone（添加/刷新时返回，便于勾选） */

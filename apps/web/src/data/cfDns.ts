@@ -9,6 +9,8 @@ import {
   cfDnsRecordItemResponseSchema,
   cfDnsRecordResponseSchema,
   cfDnsRecordUpdateRequestSchema,
+  cfDnsResolveCheckRequestSchema,
+  cfDnsResolveCheckResponseSchema,
   cfDnsStatusResponseSchema,
   cfDnsTestResponseSchema,
   cfDnsZoneListResponseSchema,
@@ -16,6 +18,7 @@ import {
   type CfDnsAccount,
   type CfDnsRecordCreateForZoneRequest,
   type CfDnsRecordUpdateRequest,
+  type CfDnsResolveCheckResponse,
   type CfDnsZoneOption,
   type CfDnsZoneRecord,
   type CfDnsZoneRef,
@@ -155,6 +158,19 @@ export async function deleteCfDnsRecord(zoneId: string, recordId: string): Promi
     `/api/v1/cf-dns/records/${encodeURIComponent(zoneId)}/${encodeURIComponent(recordId)}`,
     { method: 'DELETE' },
   );
+}
+
+/** 解析检测（DoH）：从公网视角看这个记录名现在解析成什么，不需要凭据。 */
+export async function checkCfDnsResolve(input: {
+  name: string;
+  type?: 'A' | 'AAAA' | 'CNAME';
+}): Promise<CfDnsResolveCheckResponse> {
+  const payload = cfDnsResolveCheckRequestSchema.parse(input);
+  const body = await apiRequest<unknown>('/api/v1/cf-dns/resolve-check', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return cfDnsResolveCheckResponseSchema.parse(body);
 }
 
 export interface CfDnsRecordResult {

@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import type {
   CreateNodeRequest,
   Node,
@@ -6,8 +7,9 @@ import type {
   Tunnel,
   UpdateNodeRequest,
 } from '@khc/contracts';
-import { fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
+import { fetchCfDnsAccounts, fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
 import { listTunnels } from '../../data/tunnels';
+import { AddDomainDialog, type AddedDomain } from '../settings/AddDomainDialog';
 import {
   HTTPS_PORT_OPTIONS,
   buildDomainEndpoint,
@@ -19,14 +21,17 @@ import {
 import { classifyCfDnsRecords } from '../../pages/cfDnsRecords';
 import {
   Banner,
+  Button,
   Checkbox,
   Field,
   InlineError,
   Link,
+  Row,
   Segmented,
   Select,
   Stack,
   TextInput,
+  useToast,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 
@@ -54,6 +59,9 @@ export interface NodeAccessDraft {
   /** IP 直连模式：可选自动代建 DNS 记录（多凭据模型） */
   dnsZoneId: string;
   dnsSubdomain: string;
+  /** 域名模式（仅添加节点）：安装完成后自动建 Caddy 站点并反代到该端口 */
+  autoPublish: boolean;
+  upstreamPort: string;
 }
 
 const DOMAIN_RE = /^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
@@ -136,6 +144,8 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       insecureConfirmed: false,
       dnsZoneId: '',
       dnsSubdomain: '',
+      autoPublish: false,
+      upstreamPort: '8080',
     };
   }
 
@@ -186,6 +196,9 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     insecureConfirmed: node.allowInsecure || protocol === 'http:',
     dnsZoneId: '',
     dnsSubdomain: '',
+    // 自动发布只在「添加节点」里成立；编辑接入方式不重走安装流程。
+    autoPublish: false,
+    upstreamPort: '8080',
   };
 }
 
@@ -201,6 +214,7 @@ export function accessDraftIssue(
     if (!domain) return zh.access.domainRequired;
     if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
+    if (draft.autoPublish && !portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
     return null;
   }
 
@@ -297,6 +311,9 @@ export interface AccessFormProps {
  * 本表单不在建节点的同时新建 DNS 记录或隧道，DNS 记录的集中管理在「设置 · 域名」。
  */
 export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProps) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [addDomainOpen, setAddDomainOpen] = useState(false);
   const zonesQuery = useQuery({
     queryKey: ['cfDns', 'zones'],
     queryFn: fetchCfDnsZones,
@@ -316,10 +333,18 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
     retry: false,
     enabled: draft.accessMode === 'tunnel',
   });
+  // 有没有 DNS 凭据决定域名模式走哪条路：选记录 / 就地添加域名 / 手填域名。
+  const accountsQuery = useQuery({
+    queryKey: ['cfDns', 'accounts'],
+    queryFn: fetchCfDnsAccounts,
+    retry: false,
+    enabled: draft.accessMode === 'domain',
+  });
 
   const update = (patch: Partial<NodeAccessDraft>) => onChange({ ...draft, ...patch });
 
   const zones = zonesQuery.data ?? [];
+  const accounts = accountsQuery.data ?? [];
   const records = recordsQuery.data?.records ?? [];
   const candidates = classifyCfDnsRecords(records, nodes);
   const selectedTunnel: Tunnel | undefined = (tunnelsQuery.data ?? []).find(
@@ -328,13 +353,32 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const normalizedDomain = normalizeDomain(draft.domain);
   const domainReady = normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain);
   /**
-   * 没有可用 Zone（未配账户 / 全部读取失败）时只剩「手动输入」一条路：
-   * 不再用一条横幅把「添加节点」堵死，非 Cloudflare 用户也能直接填自己的域名。
+   * 域名模式的三种状态（`docs/plans/domain-cert-ia-2026-11-21.md` §4）：
+   * - select：有可用域名 → 选已有记录，也可切到手填；
+   * - enable：有账户但一条域名都没启用 → 就地「添加域名」，不跳出抽屉；
+   * - no-account：连账户都没有 → 引导去设置页，同时允许直接手填域名建节点（不死路）。
    */
-  const manualOnly = zonesQuery.isSuccess ? zones.length === 0 : zonesQuery.isError;
+  const domainState: 'loading' | 'select' | 'enable' | 'no-account' | 'unavailable' =
+    zonesQuery.isLoading || accountsQuery.isLoading
+      ? 'loading'
+      : zones.length > 0
+        ? 'select'
+        : zonesQuery.isError
+          ? 'unavailable'
+          : accounts.length > 0
+            ? 'enable'
+            : 'no-account';
+  // 选不到记录时就只剩手填一条路，不再把开关摆出来让人点。
+  const manualOnly = domainState === 'enable' || domainState === 'no-account';
   const domainSource: DomainSource = manualOnly ? 'manual' : draft.domainSource;
   // 同一域名已绑到别的节点时提示占用；新建场景才有全量列表可比。
   const occupiedNode = mode === 'create' ? nodeByDomain(nodes, normalizedDomain) : null;
+
+  const handleDomainAdded = (added: AddedDomain) => {
+    // 就地建完立刻选中：表单与设置页写的是同一份 cf_dns_accounts，不存在第二套真相。
+    update({ domainSource: 'record', zoneId: added.zoneId, recordId: '' });
+    toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: added.zoneName }) });
+  };
 
   return (
     <Stack gap={4}>
@@ -367,14 +411,33 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
 
       {draft.accessMode === 'domain' ? (
         <Stack gap={3}>
-          {manualOnly ? (
+          {domainState === 'enable' ? (
+            <Banner
+              tone="info"
+              title={zh.access.enableZoneTitle}
+              description={zh.access.enableZoneHint}
+              action={
+                <Button
+                  label={zh.cfDns.addDomainTitle}
+                  size="sm"
+                  onClick={() => setAddDomainOpen(true)}
+                />
+              }
+            />
+          ) : domainState === 'unavailable' ? (
+            <Banner
+              tone="warn"
+              title={zh.access.zonesFailedBanner}
+              description={zh.access.zonesFailedBannerHint}
+            />
+          ) : domainState === 'no-account' ? (
             <Banner
               tone="info"
               title={zh.access.noZoneTitle}
               description={zh.access.noZoneHint}
               action={<Link to={DOMAIN_SETTINGS_HREF} label={zh.access.goDomainSettings} />}
             />
-          ) : (
+          ) : domainState === 'select' ? (
             <Field
               id="access-domain-source"
               label={zh.access.domainSourceLabel}
@@ -390,32 +453,34 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                 onChange={(value) => update({ domainSource: value as DomainSource })}
               />
             </Field>
-          )}
+          ) : null}
 
           {domainSource === 'record' ? (
-            <>
-              {zonesQuery.isLoading ? (
-                <span className="ui-muted">{zh.access.zonesLoading}</span>
-              ) : zonesQuery.error ? (
-                <Banner
-                  tone="danger"
-                  title={zh.access.zonesFailed}
-                  description={(zonesQuery.error as Error).message}
+            domainState === 'loading' ? (
+              <span className="ui-muted">{zh.access.zonesLoading}</span>
+            ) : (
+              <>
+              <Field id="access-zone" label={zh.access.zoneLabel} required>
+                <Select
+                  id="access-zone"
+                  value={draft.zoneId}
+                  placeholder={zh.access.zonePlaceholder}
+                  options={zones.map((zone) => ({
+                    value: zone.id,
+                    label: `${zone.name} · ${zone.accountName}`,
+                  }))}
+                  onChange={(zoneId) => update({ zoneId, recordId: '' })}
                 />
-              ) : (
-                <Field id="access-zone" label={zh.access.zoneLabel} required>
-                  <Select
-                    id="access-zone"
-                    value={draft.zoneId}
-                    placeholder={zh.access.zonePlaceholder}
-                    options={zones.map((zone) => ({
-                      value: zone.id,
-                      label: `${zone.name} · ${zone.accountName}`,
-                    }))}
-                    onChange={(zoneId) => update({ zoneId, recordId: '' })}
-                  />
-                </Field>
-              )}
+              </Field>
+
+              <Row justify="end" gap={2}>
+                <Button
+                  label={zh.access.addDomain}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setAddDomainOpen(true)}
+                />
+              </Row>
 
               {draft.zoneId ? (
                 recordsQuery.isLoading ? (
@@ -436,7 +501,17 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     }
                   />
                 ) : candidates.length === 0 ? (
-                  <span className="ui-muted">{zh.access.recordsEmpty}</span>
+                  <Stack gap={2}>
+                    <span className="ui-muted">{zh.access.recordsEmpty}</span>
+                    <Row justify="end">
+                      <Button
+                        label={zh.access.switchManual}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => update({ domainSource: 'manual' })}
+                      />
+                    </Row>
+                  </Stack>
                 ) : (
                   <Field
                     id="access-record"
@@ -478,7 +553,8 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                   <TextInput id="access-domain" value={draft.domain} readOnly onChange={() => {}} />
                 </Field>
               ) : null}
-            </>
+              </>
+            )
           ) : (
             <Stack gap={3}>
               <Field
@@ -529,6 +605,34 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
               {domainSource === 'record' ? zh.access.domainSelectHint : zh.access.domainInputHint}
             </span>
           )}
+
+          {mode === 'create' ? (
+            <Stack gap={3}>
+              <Checkbox
+                checked={draft.autoPublish}
+                onChange={(checked) => update({ autoPublish: checked })}
+                label={zh.access.autoPublishLabel}
+                description={zh.access.autoPublishHelp}
+              />
+              {draft.autoPublish ? (
+                <Field
+                  id="access-upstream-port"
+                  label={zh.access.upstreamPortLabel}
+                  help={zh.access.upstreamPortHelp}
+                  required
+                >
+                  <TextInput
+                    id="access-upstream-port"
+                    value={draft.upstreamPort}
+                    mono
+                    inputMode="numeric"
+                    placeholder="8080"
+                    onChange={(value) => update({ upstreamPort: value })}
+                  />
+                </Field>
+              ) : null}
+            </Stack>
+          ) : null}
         </Stack>
       ) : null}
 
@@ -688,6 +792,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
           ) : null}
         </Stack>
       ) : null}
+
+      {/* 入口 B 的就地「添加域名」：与设置页共用同一个弹窗组件，不复制管理 UI。 */}
+      <AddDomainDialog
+        open={addDomainOpen}
+        onClose={() => setAddDomainOpen(false)}
+        onAdded={handleDomainAdded}
+      />
     </Stack>
   );
 }

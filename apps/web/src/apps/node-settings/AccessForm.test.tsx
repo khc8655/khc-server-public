@@ -27,6 +27,8 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     insecureConfirmed: false,
     dnsZoneId: '',
     dnsSubdomain: '',
+    autoPublish: false,
+    upstreamPort: '8080',
     ...patch,
   };
 }
