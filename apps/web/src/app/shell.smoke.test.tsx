@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from './router';
@@ -69,6 +69,9 @@ beforeEach(() => {
         });
       }
       if (url === '/api/v1/certs') return json({ certificates: [] });
+      if (url === '/api/v1/tunnels') return json({ tunnels: [] });
+      if (url === '/api/v1/cf-dns/accounts') return json({ accounts: [] });
+      if (url === '/api/v1/cf-dns/zones') return json({ zones: [] });
       if (url === '/api/v1/nodes/probe') {
         return json({
           probedAt: Math.floor(Date.now() / 1000),
@@ -203,5 +206,15 @@ describe('AppShell 与页面渲染', () => {
   it('组件样例页不套外壳且无需登录', async () => {
     await renderRoute('/dev/gallery');
     expect(await screen.findByText('组件样例')).toBeTruthy();
+  });
+
+  it('侧边栏点击「添加节点」跳转 /hubs?create=1 时弹出添加节点抽屉', async () => {
+    const router = await renderRoute('/settings');
+    const createBtn = await screen.findByRole('button', { name: '添加节点' });
+    fireEvent.click(createBtn);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: '添加节点' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/hubs');
   });
 });

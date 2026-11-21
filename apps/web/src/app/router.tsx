@@ -70,7 +70,10 @@ const hubsRoute = createRoute({
   component: HubsPage,
   beforeLoad: requireSession,
   validateSearch: (search: Record<string, unknown>): { create?: boolean } => ({
-    create: search.create === true || search.create === '1' || search.create === 'true' ? true : undefined,
+    create:
+      search.create === true || search.create === 1 || search.create === '1' || search.create === 'true'
+        ? true
+        : undefined,
   }),
 });
 

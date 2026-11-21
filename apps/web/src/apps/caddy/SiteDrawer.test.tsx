@@ -175,4 +175,21 @@ describe('发布应用 → 上游来源 = 从应用目录安装', () => {
     });
     expect(screen.getByText(/安装只能落在本机/)).toBeTruthy();
   });
+
+  it('新建站点默认选中本机（127.0.0.1），直接展示应用目录入口；已有自定义上游保持 custom', () => {
+    renderDrawer({ domains: 'new.example.com', listenPort: 2083 });
+    expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
+    expect(screen.getByLabelText('上游来源')).toBeTruthy();
+
+    cleanup();
+
+    renderDrawer({
+      mode: 'edit',
+      domains: 'old.example.com',
+      listenPort: 2083,
+      upstreams: '192.168.1.10:8080',
+    });
+    expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('custom');
+    expect(screen.queryByLabelText('上游来源')).toBeNull();
+  });
 });
