@@ -114,11 +114,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function renderSettings() {
+async function renderSettings(path = '/settings?tab=accounts') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createAppRouter(
     queryClient,
-    createMemoryHistory({ initialEntries: ['/settings?tab=cloudflare'] }),
+    createMemoryHistory({ initialEntries: [path] }),
   );
   render(
     <QueryClientProvider client={queryClient}>
@@ -126,20 +126,28 @@ async function renderSettings() {
     </QueryClientProvider>,
   );
   await screen.findByRole('heading', { name: '设置' });
+  return router;
 }
 
-describe('设置页 Cloudflare DNS 凭据', () => {
-  it('空列表显示说明与空态，页头主操作是「添加凭据」', async () => {
-    await renderSettings();
+describe('设置页：账号与域名管理分离（S1）', () => {
+  it('账号分段（?tab=cloudflare 兼容映射）展示凭据空态与「添加凭据」，不渲染「应用目录」Tab', async () => {
+    await renderSettings('/settings?tab=cloudflare');
     expect(await screen.findByText('还没有 Cloudflare 凭据')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: '添加凭据' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: '应用目录' })).toBeNull();
   });
 
-  it('添加凭据：提交名称与 Token，成功后进入编辑态可取消勾选 Zone', async () => {
+  it('旧 ?tab=catalog 兼容落到「应用管理」', async () => {
+    await renderSettings('/settings?tab=catalog');
+    expect(await screen.findByText('应用定义存在控制面')).toBeTruthy();
+  });
+
+  it('添加凭据抽屉含服务商栏位，提交后进入编辑态可取消勾选 Zone', async () => {
     await renderSettings();
     const buttons = screen.getAllByRole('button', { name: '添加凭据' });
     await userEvent.click(buttons[0]!);
     const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Cloudflare')).toBeTruthy();
 
     await userEvent.type(within(dialog).getByLabelText('凭据名称（备注）'), '主账号');
     await userEvent.type(within(dialog).getByLabelText('API Token'), 'cf-api-token-0123456789abcdef');
@@ -180,7 +188,7 @@ describe('设置页 Cloudflare DNS 凭据', () => {
     });
   });
 
-  it('域名卡片「管理记录」才请求解析记录，显示只读记录与绑定信息', async () => {
+  it('账号与域名管理职责分离：账号卡仅展示服务商/状态/启用数，点「查看域名」进入域名管理', async () => {
     accounts = [
       {
         id: 'acc-1',
@@ -192,8 +200,38 @@ describe('设置页 Cloudflare DNS 凭据', () => {
         enabledZoneIds: ['z1'],
       },
     ];
-    await renderSettings();
-    // 首屏不请求解析记录：域名的记录数在卡片里按需加载，不进抽屉不点就不请求
+    await renderSettings('/settings?tab=accounts');
+    expect((await screen.findAllByText('主账号')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Cloudflare')).toBeTruthy();
+    expect(screen.getByText('已启用 1 个域名')).toBeTruthy();
+    expect(screen.queryByText('example.com')).toBeNull();
+    expect(document.body.textContent).not.toContain('cf-api-token');
+
+    await userEvent.click(screen.getByRole('button', { name: '查看域名' }));
+    expect(await screen.findByText('example.com')).toBeTruthy();
+    expect(screen.queryByText('second.example.com')).toBeNull();
+  });
+
+  it('域名管理无账号时提示前往配置账号，点击按钮跳到账号分段', async () => {
+    await renderSettings('/settings?tab=domain');
+    expect(await screen.findByText('还没有配置 DNS 账号')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '前往配置账号' }));
+    expect(await screen.findByText('还没有 Cloudflare 凭据')).toBeTruthy();
+  });
+
+  it('域名管理「管理记录」按需请求解析记录，显示只读记录与代理标记', async () => {
+    accounts = [
+      {
+        id: 'acc-1',
+        name: '主账号',
+        accountName: '示例账号',
+        hasToken: true,
+        enabled: true,
+        zones,
+        enabledZoneIds: ['z1'],
+      },
+    ];
+    await renderSettings('/settings?tab=domain');
     await screen.findByText('example.com');
     await userEvent.click(screen.getByRole('button', { name: '管理记录' }));
     const dialog = await screen.findByRole('dialog');
@@ -217,7 +255,7 @@ describe('设置页 Cloudflare DNS 凭据', () => {
         enabledZoneIds: ['z1'],
       },
     ];
-    await renderSettings();
+    await renderSettings('/settings?tab=domain');
     await userEvent.click(await screen.findByRole('button', { name: '管理记录' }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByText('manual.example.com');
@@ -242,27 +280,6 @@ describe('设置页 Cloudflare DNS 凭据', () => {
     expect(await within(dialog).findByText('api.example.com')).toBeTruthy();
   });
 
-  it('已有凭据按卡片展示：账户 / 域名 / Token 状态，不泄漏 Token 值', async () => {
-    accounts = [
-      {
-        id: 'acc-1',
-        name: '主账号',
-        accountName: '示例账号',
-        hasToken: true,
-        enabled: true,
-        zones,
-        enabledZoneIds: ['z1'],
-      },
-    ];
-    await renderSettings();
-    expect((await screen.findAllByText('主账号')).length).toBeGreaterThan(0);
-    // 只启用 z1：卡内只列出 example.com，second.example.com 不在启用范围
-    expect(await screen.findByText('example.com')).toBeTruthy();
-    expect(screen.queryByText('second.example.com')).toBeNull();
-    expect(screen.getAllByText('已配置').length).toBeGreaterThan(0);
-    expect(document.body.textContent).not.toContain('cf-api-token');
-  });
-
   it('解析检测：单条记录一键查出公网解析结果', async () => {
     accounts = [
       {
@@ -275,7 +292,7 @@ describe('设置页 Cloudflare DNS 凭据', () => {
         enabledZoneIds: ['z1'],
       },
     ];
-    await renderSettings();
+    await renderSettings('/settings?tab=domain');
     await userEvent.click(await screen.findByRole('button', { name: '管理记录' }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByText('manual.example.com');
@@ -301,7 +318,7 @@ describe('设置页 Cloudflare DNS 凭据', () => {
         enabledZoneIds: ['z1', 'z2'],
       },
     ];
-    await renderSettings();
+    await renderSettings('/settings?tab=domain');
     const removeButtons = await screen.findAllByRole('button', { name: '移除域名' });
     await userEvent.click(removeButtons[0]!);
 
@@ -327,13 +344,11 @@ describe('设置页 Cloudflare DNS 凭据', () => {
         enabledZoneIds: ['z1'],
       },
     ];
-    await renderSettings();
-    // 等账户加载完，「添加域名」才从禁用变为可点
-    await screen.findAllByText('主账号');
+    await renderSettings('/settings?tab=domain');
+    await screen.findByText('example.com');
     await userEvent.click(await screen.findByRole('button', { name: '添加域名' }));
 
     const dialog = await screen.findByRole('dialog', { name: '添加域名' });
-    // 单账户自动选中；已添加的 z1 标记为「已添加」且不可选
     const added = within(dialog).getByRole('option', { name: 'example.com' }) as HTMLOptionElement;
     expect(added.disabled).toBe(true);
     await userEvent.selectOptions(

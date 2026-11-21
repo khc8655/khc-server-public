@@ -455,12 +455,14 @@ function ZoneRecords({
  */
 function DomainRow({
   zone,
+  accountName,
   nodes,
   certs,
   onManage,
   onRemove,
 }: {
   zone: CfDnsZoneRef;
+  accountName?: string;
   nodes: Node[];
   certs: Certificate[];
   onManage: () => void;
@@ -487,6 +489,7 @@ function DomainRow({
           <span className="ui-record-name" title={zone.name}>
             {zone.name}
           </span>
+          {accountName ? <Tag label={accountName} /> : null}
           <Tag
             label={
               recordsQuery.data
@@ -522,84 +525,70 @@ function DomainRow({
   );
 }
 
-/** 账户卡片：一条凭据一张卡，卡内是它启用的域名。 */
+/** 账户卡片（账号 Tab）：只管 DNS API Token 凭据与服务商信息，不混放域名记录。 */
 function AccountCard({
   account,
-  nodes,
-  certs,
   onEdit,
   onDelete,
-  onManageDomain,
-  onRemoveDomain,
-  onAddDomain,
+  onOpenDomains,
 }: {
   account: CfDnsAccount;
-  nodes: Node[];
-  certs: Certificate[];
   onEdit: () => void;
   onDelete: () => void;
-  onManageDomain: (zone: CfDnsZoneRef) => void;
-  onRemoveDomain: (zone: CfDnsZoneRef) => void;
-  onAddDomain: () => void;
+  onOpenDomains?: () => void;
 }) {
-  const enabledZones = account.zones.filter((zone) => account.enabledZoneIds.includes(zone.id));
+  const enabledCount = account.zones.filter((zone) =>
+    account.enabledZoneIds.includes(zone.id),
+  ).length;
   return (
     <Card>
-      <Stack gap={3}>
-        <Row justify="between" gap={2}>
-          <div className="ui-record-head">
-            <span className="ui-record-name">{account.name}</span>
-            {account.accountName ? <Tag label={account.accountName} /> : null}
-            <Tag
-              label={account.hasToken ? zh.cfDns.tokenOk : zh.cfDns.tokenMissing}
-            />
-            {account.enabled ? null : <Tag label={zh.cfDns.statusDisabled} />}
-          </div>
-          <Row gap={1}>
-            <Button label={zh.cfDns.addDomainTitle} variant="ghost" size="sm" onClick={onAddDomain} />
-            <Button
-              label={actionLabel(action('cfDns.account.update'))}
-              variant="ghost"
-              size="sm"
-              onClick={onEdit}
-            />
-            <Button
-              label={actionLabel(action('cfDns.account.delete'))}
-              variant="ghost"
-              size="sm"
-              onClick={onDelete}
-            />
-          </Row>
+      <Row justify="between" gap={2} wrap>
+        <div className="ui-record-head">
+          <span className="ui-record-name">{account.name}</span>
+          <Tag label={zh.cfDns.providerCloudflare} />
+          {account.accountName ? <Tag label={account.accountName} /> : null}
+          <Tag label={account.hasToken ? zh.cfDns.tokenOk : zh.cfDns.tokenMissing} />
+          <Tag label={fmt(zh.cfDns.enabledZonesCount, { count: enabledCount })} />
+          {account.enabled ? null : <Tag label={zh.cfDns.statusDisabled} />}
+        </div>
+        <Row gap={1} wrap>
+          {onOpenDomains ? (
+            <Button label={zh.cfDns.goToDomains} variant="ghost" size="sm" onClick={onOpenDomains} />
+          ) : null}
+          <Button
+            label={actionLabel(action('cfDns.account.update'))}
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+          />
+          <Button
+            label={actionLabel(action('cfDns.account.delete'))}
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+          />
         </Row>
-
-        {enabledZones.length === 0 ? (
-          <span className="ui-muted">{zh.cfDns.accountNoDomain}</span>
-        ) : (
-          <div className="ui-record-list">
-            {enabledZones.map((zone) => (
-              <DomainRow
-                key={zone.id}
-                zone={zone}
-                nodes={nodes}
-                certs={certs}
-                onManage={() => onManageDomain(zone)}
-                onRemove={() => onRemoveDomain(zone)}
-              />
-            ))}
-          </div>
-        )}
-      </Stack>
+      </Row>
     </Card>
   );
 }
 
 /**
- * 域名管理（设置页「域名」分段，入口 A 的唯一管理面）：
- * 账户 → 域名 → 解析记录 三级：一条凭据一张卡，卡内是它启用的域名（记录数 / 证书 / 绑定节点），
- * 域名行的「管理记录」打开抽屉做单条记录的增改删与解析检测；凭据抽屉只管凭据本身。
- * Token 只写不读；域名与记录都不在这里静默重建。
+ * 账号与域名管理（设置页 S1 重组：拆为「账号」与「域名管理」两个独立分段，共用同一数据源与抽屉）：
+ * - view="accounts"：仅管理 DNS Token 凭据（当前支持 Cloudflare，预留腾讯云/阿里云 provider 栏位）；
+ * - view="domains"：管理已启用域名、记录 CRUD、DoH 解析检测与节点绑定。
  */
-export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
+export function CfDnsAccounts({
+  view = 'accounts',
+  createSignal = 0,
+  onOpenDomains,
+  onOpenAccounts,
+}: {
+  view?: 'accounts' | 'domains';
+  createSignal?: number;
+  onOpenDomains?: () => void;
+  onOpenAccounts?: () => void;
+}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const accountsQuery = useQuery({ queryKey: ['cfDns', 'accounts'], queryFn: fetchCfDnsAccounts });
@@ -784,9 +773,17 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
     }
   };
 
+  const enabledDomains = accounts.flatMap((account) =>
+    account.zones
+      .filter((zone) => account.enabledZoneIds.includes(zone.id))
+      .map((zone) => ({ account, zone })),
+  );
+
   return (
     <Stack gap={4}>
-      <Banner tone="info" title={zh.cfDns.noticeTitle} description={zh.cfDns.notice} />
+      {view === 'accounts' ? (
+        <Banner tone="info" title={zh.cfDns.noticeTitle} description={zh.cfDns.notice} />
+      ) : null}
 
       {accountsQuery.error ? (
         <Banner
@@ -801,34 +798,91 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
 
       {accountsQuery.isLoading ? (
         <span className="ui-muted">{zh.cfDns.loadingAccounts}</span>
+      ) : view === 'accounts' ? (
+        accounts.length === 0 ? (
+          <EmptyState
+            icon="globe"
+            title={zh.cfDns.emptyTitle}
+            description={zh.cfDns.emptyHint}
+            action={
+              <Button
+                label={actionLabel(action('cfDns.account.create'))}
+                variant="primary"
+                icon="plus"
+                onClick={openCreate}
+              />
+            }
+          />
+        ) : (
+          accounts.map((account) => (
+            <AccountCard
+              key={account.id}
+              account={account}
+              onEdit={() => openEdit(account)}
+              onDelete={() => setDeleteTarget(account)}
+              onOpenDomains={onOpenDomains}
+            />
+          ))
+        )
       ) : accounts.length === 0 ? (
         <EmptyState
           icon="globe"
-          title={zh.cfDns.emptyTitle}
-          description={zh.cfDns.emptyHint}
+          title={zh.cfDns.noAccountForDomainsTitle}
+          description={zh.cfDns.noAccountForDomainsDesc}
           action={
-            <Button
-              label={actionLabel(action('cfDns.account.create'))}
-              variant="primary"
-              icon="plus"
-              onClick={openCreate}
-            />
+            onOpenAccounts ? (
+              <Button
+                label={zh.cfDns.goToAccounts}
+                variant="primary"
+                onClick={onOpenAccounts}
+              />
+            ) : undefined
           }
         />
       ) : (
-        accounts.map((account) => (
-          <AccountCard
-            key={account.id}
-            account={account}
-            nodes={nodes}
-            certs={certs}
-            onEdit={() => openEdit(account)}
-            onDelete={() => setDeleteTarget(account)}
-            onManageDomain={(zone) => setDomainTarget({ account, zone })}
-            onRemoveDomain={(zone) => void removeDomain(account, zone)}
-            onAddDomain={() => setAddDomainFor(account.id)}
-          />
-        ))
+        <>
+          <Row justify="between" gap={2} wrap>
+            <span className="ui-muted">{zh.cfDns.domainTabSummary}</span>
+            <Button
+              label={zh.cfDns.addDomainTitle}
+              icon="plus"
+              variant="primary"
+              size="sm"
+              onClick={() => setAddDomainFor('')}
+            />
+          </Row>
+          {enabledDomains.length === 0 ? (
+            <EmptyState
+              icon="globe"
+              title={zh.cfDns.noDomainsEnabledTitle}
+              description={zh.cfDns.noDomainsEnabledDesc}
+              action={
+                <Button
+                  label={zh.cfDns.addDomainTitle}
+                  icon="plus"
+                  variant="primary"
+                  onClick={() => setAddDomainFor('')}
+                />
+              }
+            />
+          ) : (
+            <Card>
+              <div className="ui-record-list">
+                {enabledDomains.map(({ account, zone }) => (
+                  <DomainRow
+                    key={`${account.id}:${zone.id}`}
+                    zone={zone}
+                    accountName={account.name}
+                    nodes={nodes}
+                    certs={certs}
+                    onManage={() => setDomainTarget({ account, zone })}
+                    onRemove={() => void removeDomain(account, zone)}
+                  />
+                ))}
+              </div>
+            </Card>
+          )}
+        </>
       )}
 
 
@@ -836,7 +890,7 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
         <Drawer
           open
           title={drawer.mode === 'create' ? zh.cfDns.addTitle : zh.cfDns.editTitle}
-          context={zh.cfDns.context}
+          context={zh.cfDns.accountContext}
           dirty={drawer.mode === 'create' ? drawer.name.trim().length > 0 : false}
           onClose={() => setDrawer(null)}
           footer={
@@ -870,6 +924,10 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
           }
         >
           <Stack gap={4}>
+            <Field id="cf-account-provider" label={zh.cfDns.providerLabel} help={zh.cfDns.providerHint}>
+              <div className="ui-readonly-field">{zh.cfDns.providerCloudflare}</div>
+            </Field>
+
             <Field id="cf-account-name" label={zh.cfDns.nameLabel} help={zh.cfDns.nameHelp}>
               <TextInput
                 id="cf-account-name"
@@ -985,7 +1043,7 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
 
       <AddDomainDialog
         open={addDomainFor !== null}
-        initialAccountId={addDomainFor ?? undefined}
+        initialAccountId={addDomainFor || undefined}
         onClose={() => setAddDomainFor(null)}
         onAdded={(domain) => {
           toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: domain.zoneName }) });
@@ -993,4 +1051,24 @@ export function CfDnsAccounts({ createSignal }: { createSignal: number }) {
       />
     </Stack>
   );
+}
+
+/** 全局设置 → 账号分段：只管理 DNS API Token 凭据。 */
+export function DnsAccountsPanel({
+  createSignal = 0,
+  onOpenDomains,
+}: {
+  createSignal?: number;
+  onOpenDomains?: () => void;
+}) {
+  return <CfDnsAccounts view="accounts" createSignal={createSignal} onOpenDomains={onOpenDomains} />;
+}
+
+/** 全局设置 → 域名管理分段：管理已启用域名、解析记录 CRUD 与解析检测。 */
+export function DomainManagementPanel({
+  onOpenAccounts,
+}: {
+  onOpenAccounts?: () => void;
+}) {
+  return <CfDnsAccounts view="domains" onOpenAccounts={onOpenAccounts} />;
 }

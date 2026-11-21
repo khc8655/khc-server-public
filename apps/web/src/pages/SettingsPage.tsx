@@ -7,9 +7,8 @@ import { settingsQueryOptions, putSetting, deleteSetting } from '../data/setting
 import { action, actionLabel, type ActionRef } from '../registry/actions';
 import { ConfirmAction } from '../patterns';
 import CertificatesPage from '../apps/certificates/page';
-import { CfDnsAccounts } from '../apps/settings/CfDnsAccounts';
+import { DnsAccountsPanel, DomainManagementPanel } from '../apps/settings/CfDnsAccounts';
 import { Tunnels } from '../apps/settings/Tunnels';
-import { AppCatalog } from '../apps/settings/AppCatalog';
 import { AppManifests } from '../apps/settings/AppManifests';
 import { SshKeys } from '../apps/settings/SshKeys';
 import {
@@ -54,23 +53,24 @@ export default function SettingsPage() {
   const settingsQuery = useQuery(settingsQueryOptions());
 
   type SettingsTab =
-    | 'certs'
+    | 'accounts'
     | 'domain'
+    | 'certs'
     | 'tunnels'
     | 'manifests'
-    | 'catalog'
     | 'keys'
     | 'system';
   const tabFromSearch = (tab: string | undefined): SettingsTab | null => {
-    if (tab === 'cloudflare') return 'domain';
+    if (tab === 'cloudflare') return 'accounts';
+    if (tab === 'catalog') return 'manifests';
     if (
-      tab === 'system' ||
-      tab === 'certs' ||
+      tab === 'accounts' ||
       tab === 'domain' ||
+      tab === 'certs' ||
       tab === 'tunnels' ||
       tab === 'manifests' ||
-      tab === 'catalog' ||
-      tab === 'keys'
+      tab === 'keys' ||
+      tab === 'system'
     ) {
       return tab;
     }
@@ -84,7 +84,7 @@ export default function SettingsPage() {
     if (tab) setActiveTab(tab);
   }, [search.tab]);
 
-  // 分段控件与页内跳转（如应用目录空态「去应用管理添加」）共用一个入口，保证 URL 同步。
+  // 分段控件与页内跳转共用一个入口，保证 URL 同步。
   const selectTab = (tab: SettingsTab) => {
     setActiveTab(tab);
     void navigate({
@@ -207,9 +207,9 @@ export default function SettingsPage() {
     <Stack gap={4}>
       <PageHeader
         title={zh.nav.settings}
-        summary="管理全局证书库、域名、隧道、应用目录与 SSH 公钥"
+        summary="管理全局账号、域名、证书库、隧道、应用管理与 SSH 公钥"
         primaryAction={
-          activeTab === 'domain'
+          activeTab === 'accounts'
             ? action('cfDns.account.create')
             : activeTab === 'tunnels'
               ? action('tunnel.create')
@@ -226,27 +226,30 @@ export default function SettingsPage() {
         value={activeTab}
         ariaLabel="设置分类"
         options={[
-          { value: 'certs', label: '证书库' },
+          { value: 'accounts', label: zh.cfDns.tabAccounts },
           { value: 'domain', label: zh.cfDns.tab },
+          { value: 'certs', label: '证书库' },
           { value: 'tunnels', label: zh.tunnels.tab },
           { value: 'manifests', label: '应用管理' },
-          { value: 'catalog', label: zh.catalog.tab },
           { value: 'keys', label: zh.sshKeys.tab },
           { value: 'system', label: '系统变量' },
         ]}
         onChange={(val) => selectTab(val as SettingsTab)}
       />
 
-      {activeTab === 'certs' ? (
-        <CertificatesPage embedded />
+      {activeTab === 'accounts' ? (
+        <DnsAccountsPanel
+          createSignal={cfCreateSignal}
+          onOpenDomains={() => selectTab('domain')}
+        />
       ) : activeTab === 'domain' ? (
-        <CfDnsAccounts createSignal={cfCreateSignal} />
+        <DomainManagementPanel onOpenAccounts={() => selectTab('accounts')} />
+      ) : activeTab === 'certs' ? (
+        <CertificatesPage embedded />
       ) : activeTab === 'tunnels' ? (
         <Tunnels createSignal={tunnelCreateSignal} />
       ) : activeTab === 'manifests' ? (
         <AppManifests />
-      ) : activeTab === 'catalog' ? (
-        <AppCatalog onOpenManifests={() => selectTab('manifests')} />
       ) : activeTab === 'keys' ? (
         <SshKeys createSignal={sshCreateSignal} />
       ) : (

@@ -17,9 +17,10 @@
 | 2 | `/` | OverviewPage | 保留，精简 | A |
 | 3 | `/hubs` | HubsPage | 保留，恢复一级导航入口 | B |
 | 4 | `/settings?tab=certs` | SettingsPage + certificates | 保留 | B（表）+ D |
-| 4a | `/settings?tab=domain` | SettingsPage + CfDnsAccounts | 新增「域名」分段（Cloudflare 凭据/Zone + 解析记录 CRUD；`?tab=cloudflare` 兼容映射） | B（表）+ D（抽屉/行内表单） |
-| 4b | `/settings?tab=tunnels` | SettingsPage + Tunnels | 新增「隧道」分段（全局隧道配置；`?tab=tunnels` 直达） | B（表）+ D（抽屉） |
-| 5 | `/settings?tab=catalog` | SettingsPage + AppCatalog | 新增（P2，不新增导航层级） | B（表）+ D（抽屉） |
+| 4a | `/settings?tab=accounts` | SettingsPage + DnsAccountsPanel | 拆分「账号」分段（DNS API Token 凭据管理；`?tab=cloudflare` 兼容映射） | B + D（抽屉） |
+| 4b | `/settings?tab=domain` | SettingsPage + DomainManagementPanel | 拆分「域名管理」分段（已启用域名 + 解析记录 CRUD 与 DoH 检测） | B + D（抽屉/行内表单） |
+| 4c | `/settings?tab=tunnels` | SettingsPage + Tunnels | 新增「隧道」分段（全局隧道配置；`?tab=tunnels` 直达） | B（表）+ D（抽屉） |
+| 5 | `/settings?tab=manifests` | SettingsPage + AppManifests | 「应用管理」分段（控制面清单定义；移除冗余「应用目录」Tab，旧 `?tab=catalog` 映射到此） | B（表）+ D（抽屉） |
 | 6 | `/settings?tab=keys` | SettingsPage + SshKeys | 新增（P4，全局 SSH 公钥库） | B（表）+ D（抽屉） |
 | 7 | `/settings?tab=system` | SettingsPage | 保留 | B（表）|
 | 8 | `/certs` | CertificatesPage | **302** → `/settings?tab=certs`（暗路由过渡，确认无引用后删除） | — |
@@ -105,12 +106,12 @@
 
 - **应用管理分段（R1，类型 D 资源库）**：数据运行时读 `/api/v1/app-manifests`。表：应用 | ID | 版本 | 运行用户 | 状态。整行点击打开编辑抽屉：应用 ID（创建时）、应用定义 JSON（mono 文本域，失焦后由 Worker 的 `.strict()` 契约校验并回显错误）、启用开关。行内动作「编辑」「删除」（L2 确认）；空态主操作 [添加应用]。新增或修改定义不需要发版。
 
-- **目的**：全局证书库 + 系统变量凭据（如 DNS API key）。
-- **谁/场景**：签发/轮换证书、配置 ACME 凭据，中低频。
-- **首屏**：Segmented [证书库 | 域名 | 隧道 | 应用目录 | SSH 公钥 | 系统变量]，默认证书库。页头唯一主操作随分段切换（证书库 → 签发或导入；域名 → 添加凭据；隧道 → 添加隧道；应用目录 → 无页头主操作，安装入口在行内；SSH 公钥 → 添加公钥；系统变量 → 添加变量）。路由查询参数 `?tab=domain` / `?tab=tunnels` 可直达；旧 `?tab=cloudflare` 兼容映射到「域名」。
-- **应用目录分段（B + D，P2）**：recipe 表：应用 | 版本 | 说明（数据运行时读取 D1 应用清单，新增应用不发版）。行点击打开安装抽屉：目标节点选择 + 参数表单（secret 用 password 输入，不写入 D1/日志）+ 抽屉页脚 [安装]（抽屉本身即确认，不二次弹 Dialog）。提交后同一抽屉切换为任务视图：状态/进度 + 日志 + [刷新进度]（不轮询）+ 完成后 access 卡片（CopyButton）。无页头主操作。
+- **目的**：管理全局 DNS 账号、域名解析、证书库、隧道、应用清单与 SSH 公钥。
+- **谁/场景**：配置云厂商 DNS Token、拉取域名与管理解析记录、签发/轮换证书、维护受管应用清单，中低频。
+- **首屏**：Segmented [账号 | 域名管理 | 证书库 | 隧道 | 应用管理 | SSH 公钥 | 系统变量]，默认证书库。页头唯一主操作随分段切换（账号 → 添加凭据；域名管理/应用管理 → 卡内直接操作；证书库 → 签发证书；隧道 → 添加隧道；SSH 公钥 → 添加公钥；系统变量 → 添加变量）。路由查询参数 `?tab=accounts` / `?tab=domain` / `?tab=tunnels` 可直达；旧 `?tab=cloudflare` 兼容映射到「账号」，旧 `?tab=catalog` 兼容映射到「应用管理」（不再单独提供只读「应用目录」Tab）。
+- **账号分段（S1）**：仅管 DNS Token 凭据与服务商类型（一期支持 Cloudflare，界面与模型预留腾讯云 DNSPod / 阿里云 DNS 扩展），列出账户名、状态与已启用域名数，支持前往「域名管理」；不混放域名行。
+- **域名管理分段（S1 + P3）**：无账号时引导前往「账号」；已有账号时扁平列出各账号已启用的域名（记录数 / 证书有效期 / 绑定节点 / 来源账号）及「添加域名」入口，点「管理记录」打开唯一抽屉增改删 A/AAAA/CNAME 记录并执行 DoH「检测解析」。
 - **证书库分段（B）**：证书表：名称 | 域名 | 签发方 | 到期 | 来源 | 操作（导出 / 删除）。页头右侧 [＋ 签发或导入] → 抽屉表单（ACME 签发 / 导入 PEM 二选一）。到期 ≤30 天行内琥珀徽标，≤7 天红。**证书详情抽屉（2026-11-07）**：KeyValue 之后是「安装到节点」卡（节点下拉 + [安装并热重载]，调用 `POST /certs/:id/bind`；明文 http 节点返回 400 并展示原因）与 [续期]（仅 `renewable` 的 ACME 证书；任务进度在抽屉内用 TaskView 展示，完成后原位更新并自动重新安装到来源节点）。节点作用域顶部显示「节点入口（HTTPS）」卡：接入方式 / 入口地址 / Agent TLS 状态 / 证书到期（读 `/state` 的 `agent.tls`；域名接入但 TLS 未启用时给黄色提示）。ACME 签发成功后，若节点接入方式为「域名」则自动执行一次 bind。
-- **域名分段（B，2026-11-07）**：命名统一为「域名」，同一分段保留 Cloudflare 凭据/Zone 配置 + 解析记录增改删。凭据表：名称 | 账号 | 已启用 Zone（`n/total`）| Token 状态；一行一条凭据，行点开同一抽屉编辑。抽屉内 Token 只写不读（编辑态只读占位），Zone 用复选列表（不做 Zone→子域名级联）。**每个已勾选 Zone 右侧提供「查看解析记录」展开列表（名称/类型/内容/代理/DNS only/被哪个节点绑定/面板代建），展开时才请求 `/cf-dns/records`，按需加载、不预取**；列表顶部提供 [＋ 添加记录]，在列表上方展开行内新建表单（类型/记录名/内容/代理开关/可选 TTL；记录名可只填子域，自动补当前 Zone），调用 `POST /cf-dns/records/:zoneId` 成功后刷新记录列表；每条 A/AAAA/CNAME 记录行内仅有 [编辑] [删除] 两个按钮：编辑在该记录下方展开行内表单（类型/记录名/内容/代理开关/可选 TTL，不新开第二个抽屉、抽屉内不弹 Dialog），调用 `PATCH /cf-dns/records/:zoneId/:recordId` 成功后刷新记录列表；删除先关闭凭据抽屉，再用页面级 ConfirmAction（L2）确认，调用 `DELETE /cf-dns/records/:zoneId/:recordId`。新增后先拉取全部 Zone 默认全选，再让主人取消不需要的。不新开"域名管理"页面。
 - **隧道分段（B + D，2026-11-07）**：全局隧道配置表：名称 | 域名 | 源站端口 | Token 状态 | 更新时间；一行一条配置，行点开同一抽屉编辑。抽屉字段：名称、对外域名、源站端口（默认 8880）、Cloudflare Tunnel Token（编辑时留空 = 保留）；Token 只写不读、加密保存且不回显。删除 = 页面级 ConfirmAction（L2，说明不会删除 Cloudflare 上的 Tunnel/DNS，仍有节点引用时需先改接入方式）。空态提供 [添加隧道]；成功后刷新列表并可选通知节点 AccessForm。面板只保存配置，不调用 Cloudflare API 创建 Tunnel。
 - **系统变量分段（B）**：key | 值（密文掩码 + 复制）| 更新时间的表；[＋ 添加变量] → 抽屉（key + JSON value，SecretField）。
 - **SSH 公钥分段（B + D，P4）**：全局公钥表：名称 | 指纹 | 注释 | 更新时间；行点击打开重命名抽屉，行内 [删除] 走页面级 ConfirmAction（L2）。添加抽屉：名称 + OpenSSH 单行公钥（服务端校验并计算 fingerprint，重复指纹 409）。只存公钥，私钥永不进入面板；主机运维「添加公钥」对话框提供「从公钥库选择」下拉（按需读取 1 次公钥库，失败不阻塞手动粘贴）。
