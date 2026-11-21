@@ -35,6 +35,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
       '0012_app_configs_summary.sql',
       '0013_app_manifests.sql',
       '0014_node_expires_at.sql',
+      '0015_cert_auto_sync.sql',
     ]);
     const raw = openRawDatabase();
     const { applied, skipped } = applyMigrations(raw);
@@ -79,6 +80,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
         'acme_credential_key',
         'acme_ca',
         'acme_key_type',
+        'auto_sync',
       ]),
     );
     // 0012：应用配置明文摘要列（只存模式与计数，GET /nodes 零解密）

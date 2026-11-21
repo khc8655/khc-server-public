@@ -111,7 +111,7 @@ export function OverviewPage() {
           : cert.daysLeft === 0
             ? zh.overview.todoCertToday
             : fmt(zh.overview.todoCertExpiring, { days: cert.daysLeft }),
-      to: `${paths.settings}?tab=certs`,
+      to: `${paths.settings}?tab=certs&drawer=${encodeURIComponent(`cert:${cert.id}`)}`,
     });
   }
 

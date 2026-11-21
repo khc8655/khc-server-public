@@ -257,6 +257,7 @@ export class MemoryCertificateRepo implements CertificateRepo {
         acmeProvider: input.acme?.provider ?? null,
         acmeCredentialKey: input.acme?.credentialKey ?? null,
       }),
+      autoSync: Boolean(input.autoSync),
       createdAt: ts,
       updatedAt: ts,
     };
@@ -275,6 +276,14 @@ export class MemoryCertificateRepo implements CertificateRepo {
       updatedAt: now(),
     };
     this.rows.set(id, { cert, certPem: input.certPem, keyPem: input.keyPem });
+    return cert;
+  }
+
+  async setAutoSync(id: string, autoSync: boolean): Promise<Certificate | null> {
+    const row = this.rows.get(id);
+    if (!row) return null;
+    const cert: Certificate = { ...row.cert, autoSync, updatedAt: now() };
+    this.rows.set(id, { ...row, cert });
     return cert;
   }
 

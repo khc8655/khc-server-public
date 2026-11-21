@@ -6,12 +6,21 @@ import {
   certificateListResponseSchema,
   certificateMaterialResponseSchema,
   certificateResponseSchema,
+  certificateSyncResponseSchema,
+  certificateUsagesResponseSchema,
   createCertificateRequestSchema,
   issueCfDnsCertificateRequestSchema,
+  patchCertificateRequestSchema,
   updateCertificateRequestSchema,
+  type Certificate,
+  type CertificateBindResponse,
+  type CertificateSyncTargetResult,
+  type CertificateUsageItem,
 } from '@khc/contracts';
 import type { AppBindings, AppDeps, Env } from '../types';
+import type { CertificateMaterial, StoredNode } from '../domain/repos';
 import { issueAcmeDns01 } from '../lib/acme-dns01';
+import { resolveSecretRefs } from '../lib/secret-refs';
 import { loadCfAccounts, type CfAccountRuntime } from './cfDns';
 import { newIdempotencyKey } from '../lib/crypto';
 import { AppError, badRequest, notFound } from '../lib/errors';
@@ -46,6 +55,188 @@ async function resolveCfAccount(deps: AppDeps, env: Env, accountId: string): Pro
     ...found,
     zones: enabledZones.length > 0 ? enabledZones : found.zones,
   };
+}
+
+function configReferencesCert(config: Record<string, unknown>, certId: string): boolean {
+  const serialized = JSON.stringify(config);
+  return serialized.includes(`"$cert":"${certId}"`);
+}
+
+async function findCertUsages(deps: AppDeps, cert: Certificate): Promise<CertificateUsageItem[]> {
+  const [nodes, appRows] = await Promise.all([deps.nodes.list(), deps.apps.listForSummary()]);
+  const nodeMap = new Map<string, StoredNode>(nodes.map((node) => [node.id, node]));
+  const appsByNode = new Map<string, Set<string>>();
+
+  for (const row of appRows) {
+    if (!configReferencesCert(row.config, cert.id)) continue;
+    const set = appsByNode.get(row.nodeId) ?? new Set<string>();
+    set.add(row.app);
+    appsByNode.set(row.nodeId, set);
+  }
+
+  const targetNodeIds = new Set<string>(appsByNode.keys());
+  if (cert.sourceNodeId && nodeMap.has(cert.sourceNodeId)) {
+    targetNodeIds.add(cert.sourceNodeId);
+  }
+
+  const usages: CertificateUsageItem[] = [];
+  for (const nodeId of targetNodeIds) {
+    const node = nodeMap.get(nodeId);
+    if (!node) continue;
+    usages.push({
+      nodeId: node.id,
+      nodeName: node.name,
+      apps: [...(appsByNode.get(nodeId) ?? [])].sort(),
+      isSourceNode: cert.sourceNodeId === node.id,
+    });
+  }
+  return usages.sort((a, b) => a.nodeName.localeCompare(b.nodeName));
+}
+
+async function bindCertificateToNode(
+  deps: AppDeps,
+  env: Env,
+  node: StoredNode,
+  material: CertificateMaterial,
+): Promise<CertificateBindResponse> {
+  assertSecureChannelForRawSecrets(env, node);
+  const token = await nodeToken(env, node);
+  const idempotencyKey = newIdempotencyKey();
+
+  let response;
+  try {
+    response = await deps.agent.call(
+      node,
+      token,
+      'POST',
+      '/apps/certificates/install_tls',
+      {
+        config: {},
+        expectRev: 0,
+        ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
+        params: { certPem: material.certPem, keyPem: material.keyPem },
+        idempotencyKey,
+      },
+      { timeoutMs: BIND_TIMEOUT_MS, idempotencyKey },
+    );
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new HubUnreachableError('无法把证书安装到节点（控制通道不可达）', {});
+  }
+  if (response.status >= 400) throwAgentError(response.status, response.body);
+
+  const envelope = agentEnvelopeSchema.parse(response.body);
+  const result = (envelope.result ?? {}) as Record<string, unknown>;
+  return certificateBindResponseSchema.parse({
+    ok: envelope.ok,
+    nodeId: node.id,
+    certPath: typeof result.certPath === 'string' ? result.certPath : null,
+    keyPath: typeof result.keyPath === 'string' ? result.keyPath : null,
+    notAfter: typeof result.notAfter === 'number' ? result.notAfter : null,
+    reloaded: result.reloaded === true,
+    restartRequired: result.restartRequired === true,
+    message: typeof result.message === 'string' ? result.message : null,
+  });
+}
+
+async function syncCertificateToNodes(
+  deps: AppDeps,
+  env: Env,
+  cert: Certificate,
+): Promise<CertificateSyncTargetResult[]> {
+  const usages = await findCertUsages(deps, cert);
+  if (usages.length === 0) return [];
+  const material = await deps.certs.material(cert.id);
+  if (!material) return [];
+  const nodes = await deps.nodes.list();
+  const nodeMap = new Map<string, StoredNode>(nodes.map((node) => [node.id, node]));
+
+  const results: CertificateSyncTargetResult[] = [];
+  for (const usage of usages) {
+    const node = nodeMap.get(usage.nodeId);
+    if (!node) {
+      results.push({
+        nodeId: usage.nodeId,
+        nodeName: usage.nodeName,
+        status: 'error',
+        appliedApps: [],
+        tlsBound: false,
+        error: '节点不存在',
+      });
+      continue;
+    }
+
+    const appliedApps: string[] = [];
+    let tlsBound = false;
+    try {
+      assertSecureChannelForRawSecrets(env, node);
+      const token = await nodeToken(env, node);
+
+      for (const app of usage.apps) {
+        const record = await deps.apps.get(node.id, app);
+        if (!record) continue;
+        const resolvedConfig = (await resolveSecretRefs(deps, record.config)) as Record<
+          string,
+          unknown
+        >;
+        const idempotencyKey = newIdempotencyKey();
+        let response;
+        try {
+          response = await deps.agent.call(
+            node,
+            token,
+            'POST',
+            `/apps/${encodeURIComponent(app)}/apply`,
+            {
+              config: resolvedConfig,
+              expectRev: record.rev,
+              ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
+              params: {},
+              idempotencyKey,
+            },
+            { timeoutMs: BIND_TIMEOUT_MS, idempotencyKey },
+          );
+        } catch (error) {
+          if (error instanceof AppError) throw error;
+          throw new HubUnreachableError('节点控制通道不可达', {});
+        }
+        if (response.status >= 400) throwAgentError(response.status, response.body);
+        const envelope = agentEnvelopeSchema.parse(response.body);
+        if (!envelope.ok) {
+          throw new Error(envelope.error?.message ?? `应用 ${app} 生效失败`);
+        }
+        await deps.apps.setAppliedRev(node.id, app, envelope.appliedRev ?? record.rev);
+        appliedApps.push(app);
+      }
+
+      if (usage.isSourceNode) {
+        const bind = await bindCertificateToNode(deps, env, node, material);
+        if (!bind.ok) {
+          throw new Error(bind.message ?? '安装节点 TLS 证书失败');
+        }
+        tlsBound = true;
+      }
+
+      results.push({
+        nodeId: node.id,
+        nodeName: node.name,
+        status: 'synced',
+        appliedApps,
+        tlsBound,
+        error: null,
+      });
+    } catch (error) {
+      results.push({
+        nodeId: node.id,
+        nodeName: node.name,
+        status: error instanceof HubUnreachableError ? 'offline' : 'error',
+        appliedApps,
+        tlsBound,
+        error: error instanceof Error ? error.message : '同步失败',
+      });
+    }
+  }
+  return results;
 }
 
 export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
@@ -149,12 +340,63 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
       issuer: 'acme',
     });
     if (!certificate) throw notFound('证书不存在');
+    const syncResults = certificate.autoSync
+      ? await syncCertificateToNodes(deps, c.env, certificate)
+      : undefined;
     await deps.audit.log({
       actor: c.get('user').name,
       action: 'cert.renew',
-      detail: { id, domains: certificate.domains, notAfter: certificate.notAfter },
+      detail: {
+        id,
+        domains: certificate.domains,
+        notAfter: certificate.notAfter,
+        ...(syncResults ? { syncedCount: syncResults.filter((r) => r.status === 'synced').length } : {}),
+      },
+    });
+    return c.json(
+      certificateResponseSchema.parse({
+        certificate,
+        ...(syncResults ? { syncResults } : {}),
+      }),
+    );
+  });
+
+  router.get('/certs/:id/usages', async (c) => {
+    const id = c.req.param('id');
+    const existing = await deps.certs.get(id);
+    if (!existing) throw notFound('证书不存在');
+    const usages = await findCertUsages(deps, existing);
+    return c.json(certificateUsagesResponseSchema.parse({ usages }));
+  });
+
+  router.patch('/certs/:id', async (c) => {
+    const id = c.req.param('id');
+    const body = await parseJsonBody(c, patchCertificateRequestSchema);
+    const certificate = await deps.certs.setAutoSync(id, body.autoSync);
+    if (!certificate) throw notFound('证书不存在');
+    await deps.audit.log({
+      actor: c.get('user').name,
+      action: 'cert.update_auto_sync',
+      detail: { id, autoSync: certificate.autoSync },
     });
     return c.json(certificateResponseSchema.parse({ certificate }));
+  });
+
+  router.post('/certs/:id/sync', async (c) => {
+    const id = c.req.param('id');
+    const existing = await deps.certs.get(id);
+    if (!existing) throw notFound('证书不存在');
+    const results = await syncCertificateToNodes(deps, c.env, existing);
+    await deps.audit.log({
+      actor: c.get('user').name,
+      action: 'cert.sync',
+      detail: {
+        id,
+        total: results.length,
+        synced: results.filter((item) => item.status === 'synced').length,
+      },
+    });
+    return c.json(certificateSyncResponseSchema.parse({ results }));
   });
 
   // 续期成功后用新材料替换同一条记录（名称/来源节点/ACME 参数不变）
@@ -170,12 +412,20 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
       ...(body.issuer === undefined ? {} : { issuer: body.issuer }),
     });
     if (!certificate) throw notFound('证书不存在');
+    const syncResults = certificate.autoSync
+      ? await syncCertificateToNodes(deps, c.env, certificate)
+      : undefined;
     await deps.audit.log({
       actor: c.get('user').name,
       action: 'cert.update',
       detail: { id, notAfter: certificate.notAfter, domains: certificate.domains },
     });
-    return c.json(certificateResponseSchema.parse({ certificate }));
+    return c.json(
+      certificateResponseSchema.parse({
+        certificate,
+        ...(syncResults ? { syncResults } : {}),
+      }),
+    );
   });
 
   // 把证书安装到节点 Agent 的 TLS 目录并热重载（控制通道 HTTPS 直连）
@@ -186,45 +436,7 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
     if (!material) throw notFound('证书不存在');
 
     const node = await requireNode(deps, body.nodeId);
-    // 请求体就是明文私钥：明文通道一律拒绝，不调用 Agent。
-    assertSecureChannelForRawSecrets(c.env, node);
-    const token = await nodeToken(c.env, node);
-    const idempotencyKey = newIdempotencyKey();
-
-    let response;
-    try {
-      response = await deps.agent.call(
-        node,
-        token,
-        'POST',
-        '/apps/certificates/install_tls',
-        {
-          config: {},
-          expectRev: 0,
-          ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
-          params: { certPem: material.certPem, keyPem: material.keyPem },
-          idempotencyKey,
-        },
-        { timeoutMs: BIND_TIMEOUT_MS, idempotencyKey },
-      );
-    } catch (error) {
-      if (error instanceof AppError) throw error;
-      throw new HubUnreachableError('无法把证书安装到节点（控制通道不可达）', {});
-    }
-    if (response.status >= 400) throwAgentError(response.status, response.body);
-
-    const envelope = agentEnvelopeSchema.parse(response.body);
-    const result = (envelope.result ?? {}) as Record<string, unknown>;
-    const bind = certificateBindResponseSchema.parse({
-      ok: envelope.ok,
-      nodeId: node.id,
-      certPath: typeof result.certPath === 'string' ? result.certPath : null,
-      keyPath: typeof result.keyPath === 'string' ? result.keyPath : null,
-      notAfter: typeof result.notAfter === 'number' ? result.notAfter : null,
-      reloaded: result.reloaded === true,
-      restartRequired: result.restartRequired === true,
-      message: typeof result.message === 'string' ? result.message : null,
-    });
+    const bind = await bindCertificateToNode(deps, c.env, node, material);
     await deps.audit.log({
       actor: c.get('user').name,
       nodeId: node.id,

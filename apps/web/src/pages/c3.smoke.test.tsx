@@ -194,9 +194,71 @@ function mockApi() {
             acmeCa: 'letsencrypt',
             acmeKeyType: 'ec',
             renewable: true,
+            autoSync: true,
             notAfter: NOW + 90 * 86_400,
           },
+          syncResults: [
+            {
+              nodeId: 'tyo-1',
+              nodeName: 'tyo-1',
+              status: 'synced',
+              appliedApps: ['caddy-site'],
+              tlsBound: false,
+              error: null,
+            },
+          ],
         });
+      }
+      if (url === '/api/v1/certs/cert_cf1/usages') {
+        return json({
+          usages: [
+            { nodeId: 'tyo-1', nodeName: 'tyo-1', apps: ['caddy-site'], isSourceNode: false },
+          ],
+        });
+      }
+      if (url === '/api/v1/certs/cert_cf1' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { autoSync: boolean };
+        return json({
+          certificate: {
+            ...certificate,
+            id: 'cert_cf1',
+            name: 'wild-cf',
+            domains: ['*.example.com'],
+            issuer: 'acme',
+            sourceNodeId: null,
+            acmeProvider: 'cf-dns01',
+            acmeCredentialKey: 'acc_1',
+            acmeCa: 'letsencrypt',
+            acmeKeyType: 'ec',
+            renewable: true,
+            autoSync: body.autoSync,
+          },
+        });
+      }
+      if (url === '/api/v1/certs/cert_cf1/sync' && init?.method === 'POST') {
+        return json({
+          results: [
+            {
+              nodeId: 'tyo-1',
+              nodeName: 'tyo-1',
+              status: 'synced',
+              appliedApps: ['caddy-site'],
+              tlsBound: false,
+              error: null,
+            },
+            {
+              nodeId: 'nd_off',
+              nodeName: 'offline-vm',
+              status: 'offline',
+              appliedApps: [],
+              tlsBound: false,
+              error: '节点控制通道不可达',
+            },
+          ],
+        });
+      }
+      if (/^\/api\/v1\/certs\/[^/]+\/usages$/.test(url)) {
+        return json({ usages: [] });
       }
       if (url === '/api/v1/certs') return json({ certificates: extraCerts.length > 0 ? extraCerts : [certificate] });
       if (url === '/api/v1/settings') return json({ settings });
@@ -377,6 +439,45 @@ describe('C3 页面', () => {
         (item) => item.url === '/api/v1/certs/cert_cf1/renew' && item.init?.method === 'POST',
       ),
     ).toBe(true);
+  });
+
+  it('S4：开启自动同步、手动同步回执（含离线重试）及 ?drawer=cert:<id> 直达详情', async () => {
+    extraCerts = [
+      {
+        ...certificate,
+        id: 'cert_cf1',
+        name: 'wild-cf',
+        domains: ['*.example.com'],
+        issuer: 'acme',
+        sourceNodeId: null,
+        acmeProvider: 'cf-dns01',
+        acmeCredentialKey: 'acc_1',
+        acmeCa: 'letsencrypt',
+        acmeKeyType: 'ec',
+        renewable: true,
+        autoSync: false,
+      },
+    ];
+    await renderRoute('/settings?tab=certs&drawer=cert%3Acert_cf1');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('wild-cf')).toBeTruthy();
+    expect(await within(dialog).findByText('tyo-1')).toBeTruthy();
+    expect(within(dialog).getAllByText('caddy-site').length).toBeGreaterThan(0);
+
+    const autoSyncToggle = within(dialog).getByRole('switch', { name: '续期后自动同步到关联 Hub' });
+    await userEvent.click(autoSyncToggle);
+    expect(await screen.findByText('自动同步设置已更新')).toBeTruthy();
+    expect(
+      requests.some(
+        (item) => item.url === '/api/v1/certs/cert_cf1' && item.init?.method === 'PATCH',
+      ),
+    ).toBe(true);
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '同步到关联 Hub' }));
+    expect(await within(dialog).findByText('已同步')).toBeTruthy();
+    expect(await within(dialog).findByText('节点离线')).toBeTruthy();
+    expect(within(dialog).getByText('offline-vm')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: '重试同步' })).toBeTruthy();
   });
 
   it('Caddy 服务抽屉展示状态并导出配置', async () => {

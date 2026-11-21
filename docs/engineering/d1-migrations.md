@@ -9,7 +9,7 @@
 - 生产与"staging"是同一个 D1（`<d1-name>`，见 ADR-0008）——**对 remote 执行迁移就是直接改生产库**，由 CI `deploy` job 自动记录 Time Travel 书签后再执行迁移。
 - 全量迁移使用 `wrangler d1 migrations apply DB`（读取 `wrangler.toml` 的 `migrations_dir = "migrations"`）；存量环境先由 `scripts/d1-baseline.mjs` 校验 0001–0013 并登记 `d1_migrations`（已有则跳过）。
 
-## 迁移清单（0001–0014，0001–0013 为存量基线）
+## 迁移清单（0001–0015，0001–0013 为存量基线）
 
 | # | 文件 | 内容 | 备注 |
 |---|---|---|---|
@@ -27,6 +27,7 @@
 | 0012 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json` 列 | 明文摘要（只含模式与计数）供 `GET /nodes` 零解密派生 |
 | 0013 | `0013_app_manifests.sql` | 新增 `app_manifests` 表 | 全局应用清单（脚本正文 + 元数据，只存配置） |
 | 0014 | `0014_node_expires_at.sql` | `nodes` 加 `expires_at` 列（TEXT） | 节点固定到期公历日期（YYYY-MM-DD，手动维护、不自动顺延；由 CI 部署 job 自动应用） |
+| 0015 | `0015_cert_auto_sync.sql` | `certificates` 加 `auto_sync` 列（INTEGER DEFAULT 0） | 证书续期/更新后自动同步到关联 Hub 开关（默认关闭；由 CI 部署 job 自动应用） |
 
 ## 执行命令
 
