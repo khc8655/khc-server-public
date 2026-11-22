@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.36.2] - 2026-11-22
+### Fixed
+- 修复 Worker 签名 `GET /state?force=1` 等带查询串的 Agent 请求时未剥离 query 串，导致操作后强制刷新节点状态固定报 `401 invalid signature` 的问题。
+
 ## [0.36.1] - 2026-11-22
 ### Fixed
 - 修复「应用」页匹配站点健康状态时未优先按站点名命中，导致同域名不同端口站点互相遮蔽故障与排障提示的问题。
