@@ -40,6 +40,8 @@ import {
   certMatchesDomain,
   declaredPort,
   defaultValues,
+  hostedAppsInstalledQueryKey,
+  parseInstalledRecipes,
   taskAccess,
   toCatalogRecipe,
   validateValues,
@@ -104,14 +106,13 @@ export function InstallAndPublishDrawer({
   const queryClient = useQueryClient();
   const manifestsQuery = useQuery(appManifestsQueryOptions());
   const installedQuery = useQuery({
-    queryKey: ['hubs', hubId, 'app-catalog', 'installed'],
+    queryKey: hostedAppsInstalledQueryKey(hubId),
     enabled: !offlineReason,
     retry: false,
     queryFn: async (): Promise<Record<string, InstalledEntry>> => {
       const env = await runAppAction(hubId, 'app-catalog', 'recipe_installed');
       if (!env.ok) return {};
-      const nested = env.result as { installed?: Record<string, InstalledEntry> } | undefined;
-      return nested?.installed ?? {};
+      return parseInstalledRecipes(env);
     },
   });
 
@@ -283,7 +284,7 @@ export function InstallAndPublishDrawer({
             : { mode: 'auto', cert: null },
     });
     if (cancelledRef.current) return;
-    await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'app-catalog', 'installed'] });
+    await queryClient.invalidateQueries({ queryKey: hostedAppsInstalledQueryKey(hubId) });
     await onPublished();
     if (cancelledRef.current) return;
     setPublishedUrl(buildPublishUrl(targetDomain, targetListenPort, tlsMode));
@@ -327,6 +328,7 @@ export function InstallAndPublishDrawer({
           );
         }
         setInstallDone(true);
+        await queryClient.invalidateQueries({ queryKey: hostedAppsInstalledQueryKey(hubId) });
       }
       await publishOnly(recipe, localPort, normalizedDomain, listenPort);
     } catch (cause) {

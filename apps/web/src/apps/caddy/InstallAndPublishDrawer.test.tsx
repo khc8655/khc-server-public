@@ -128,7 +128,7 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, result: { installed: {} } });
+          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
         }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           installPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -249,7 +249,13 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, result: { installed: { magpie: { version: '0.1.4265' } } } });
+          return json({
+            ok: true,
+            installed: { magpie: { version: '0.1.4265', installedAt: '2026-11-22T00:53:28Z' } },
+            recipes: [],
+            cards: [],
+            result: { cards: [] },
+          });
         }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           return json({ ok: true, accepted: true, taskId: 'task-99', result: { taskId: 'task-99' } });
@@ -333,7 +339,7 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, result: { installed: {} } });
+          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
         }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           return json({ ok: true, accepted: true, taskId: 'task-off', result: { taskId: 'task-off' } });
