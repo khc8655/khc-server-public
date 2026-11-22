@@ -537,12 +537,15 @@ export function healthForSite(
   site: Pick<CaddySite, 'name' | 'domain'>,
 ): CaddySiteHealth | null {
   if (!status) return null;
-  return (
-    status.siteHealth.find(
-      (item) =>
-        (item.name && item.name === site.name) || (item.domain && item.domain === site.domain),
-    ) ?? null
-  );
+  if (site.name) {
+    const byName = status.siteHealth.find((item) => item.name && item.name === site.name);
+    if (byName) return byName;
+  }
+  if (site.domain) {
+    const byDomain = status.siteHealth.find((item) => item.domain && item.domain === site.domain);
+    if (byDomain) return byDomain;
+  }
+  return null;
 }
 
 export const caddyConfigQueryOptions = (hubId: string) =>

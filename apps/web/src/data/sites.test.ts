@@ -114,6 +114,32 @@ describe('parseCaddyStatus', () => {
     expect(healthForSite(status, { name: 'x', domain: 'x.example.dev' })).toBeNull();
   });
 
+  it('同域名多站点匹配站点健康时优先按 name 精确命中，避免遮蔽故障', () => {
+    const status = parseCaddyStatus([
+      {
+        name: 'caddy-site',
+        status: {
+          active: true,
+          sites: 2,
+          siteHealth: [
+            { name: 'khc9099', domain: 'khc9099.test', state: 'ok', status: 200 },
+            {
+              name: 'llproxy',
+              domain: 'khc9099.test',
+              state: 'down',
+              status: null,
+              error: 'Name or service not known',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(healthForSite(status, { name: 'khc9099', domain: 'khc9099.test' })?.state).toBe('ok');
+    const matched = healthForSite(status, { name: 'llproxy', domain: 'khc9099.test' });
+    expect(matched?.name).toBe('llproxy');
+    expect(matched?.state).toBe('down');
+  });
+
   it('兼容旧 sites 数组状态', () => {
     const status = parseCaddyStatus([
       {
