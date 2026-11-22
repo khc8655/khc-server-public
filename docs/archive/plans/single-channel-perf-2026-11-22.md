@@ -1,6 +1,6 @@
 # plan: 单控制面通道性能优化与体验根治
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：ADR-0021、docs/data-layering.md
+> 状态：已实施 ｜ 最后核验：2026-11-22 ｜ 关联：PR #136、PR #137
 
 ## 1. 背景与实测基线（2026-11-22）
 
@@ -29,3 +29,8 @@
 |---|---|---|---|
 | **批次 1：Worker 去重缓存、短超时冷却与前端切页复用** | ① `middleware/auth.ts` 跳过已鉴权二次校验；<br>② `lib/session.ts` 隔离内 15s 缓存 `session_epoch`（`bumpSessionEpoch` 立即刷新）；<br>③ `routes/snapshot.ts` 提升超时至 `8s` 并增加 15s 只读 `node` 内存缓存；<br>④ `routes/nodes.ts` 为 `/state` 与 `/nodes/probe` 增加 60s `lastSeenAt` 写节流；<br>⑤ `lib/node-client.ts` 超时失败改用 ≤`5s` 短冷却；<br>⑥ `apps/web` 将核心查询 `staleTime` 与 `PROBE_TTL_MS` 提至 `30s`。 | - `./scripts/verify.sh` 与 `docs-lint --strict` 全绿；<br>- 新增测试覆盖重复 `requireAuth` 跳过、15s `session_epoch` 缓存与实例隔离、超时短冷却、`lastSeenAt` 60s 写节流；<br>- 部署后实测 D1 `/nodes`、`POST /probe`、热 `/state`/`/snapshot` 延迟显著下降且切 Tab 零重复请求。 | 面板 `0.36.2 → 0.37.0` |
 | **批次 2：Agent 并发采集、SWR 非阻塞健康探测与冷快照提速** | ① `agent/khc/kernel.py` 并发采集各适配器 `status()`；<br>② `agent/adapters/caddy_site.py` 将 `siteHealth` 探测改为 SWR 后台异步更新，不阻塞 `/state` 返回；<br>③ `agent/khc/ops.py` 将冷 `/snapshot` `1s` 双采样降至 `150ms` 短采样；<br>④ 滚动升级全部 3 台测试机并实测验证。 | - `./scripts/verify.sh`（含 Agent 全部单测）全绿；<br>- 实测 `unicom-cn-1` 等有异常站点节点的 `/overview` 与冷 `/snapshot` 耗时明显压缩，无假报错。 | Agent `0.6.5 → 0.7.0` |
+
+## 4. 实施与真机复验记录
+
+- **批次 1**：面板 `v0.37.0`（PR #136，合入 `main` `7cd6ac1`）。
+- **批次 2**：Agent `0.7.0`（PR #137，合入 `main` `89af677`），并完成 `aws-hui-us`、`oracle-x86-2`、`unicom-cn-1` 3 台真机滚动升级与接口/切页实测验收。
