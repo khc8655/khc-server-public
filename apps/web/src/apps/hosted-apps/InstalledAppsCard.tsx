@@ -6,20 +6,34 @@
  * 不是简单停服务，所以失败信息原样给出，不做「已卸载」的乐观提示。
  */
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { friendlyAgentError, runAppAction } from '../../data/apps';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import { action } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
 import { Button, Card, InlineError, Row, Skeleton, Stack, useToast } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
-import { installedTime, toCatalogRecipe, type CatalogRecipe, type InstalledEntry } from './recipes';
+import {
+  hostedAppsInstalledQueryKey,
+  installedTime,
+  parseInstalledRecipes,
+  toCatalogRecipe,
+  type CatalogRecipe,
+} from './recipes';
 
-export function InstalledAppsCard({ hubId }: { hubId: string }) {
+export function InstalledAppsCard({
+  hubId,
+  pollIntervalMs = 800,
+}: {
+  hubId: string;
+  /** 测试可注入更短轮询间隔，生产默认 800ms */
+  pollIntervalMs?: number;
+}) {
   const toast = useToast();
+  const queryClient = useQueryClient();
   const manifestsQuery = useQuery(appManifestsQueryOptions());
   const installedQuery = useQuery({
-    queryKey: ['hostedAppsInstalled', hubId],
+    queryKey: hostedAppsInstalledQueryKey(hubId),
     retry: false,
     queryFn: async () => {
       const envelope = await runAppAction(hubId, 'app-catalog', 'recipe_installed');
@@ -28,11 +42,11 @@ export function InstalledAppsCard({ hubId }: { hubId: string }) {
           friendlyAgentError(envelope.error?.message) ?? zh.catalog.installedLoadFailed,
         );
       }
-      const payload = envelope.result as { installed?: Record<string, InstalledEntry> } | undefined;
-      return payload?.installed ?? {};
+      return parseInstalledRecipes(envelope);
     },
   });
   const [target, setTarget] = useState<CatalogRecipe | null>(null);
+  const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const recipes = (manifestsQuery.data ?? []).filter((item) => item.enabled).map(toCatalogRecipe);
@@ -40,22 +54,46 @@ export function InstalledAppsCard({ hubId }: { hubId: string }) {
 
   const uninstall = async () => {
     if (!target) return;
+    const recipeToRemove = target;
+    setTarget(null);
+    setUninstallingId(recipeToRemove.id);
     setError(null);
     try {
       const envelope = await runAppAction(hubId, 'app-catalog', 'recipe_uninstall', {
-        manifestId: target.id,
+        manifestId: recipeToRemove.id,
         values: {},
       });
       if (!envelope.ok) {
         throw new Error(friendlyAgentError(envelope.error?.message) ?? zh.catalog.uninstallFailed);
       }
-      setTarget(null);
+      if (envelope.taskId) {
+        let current = await fetchTask(hubId, envelope.taskId);
+        const maxPolls = Math.ceil(60_000 / Math.max(pollIntervalMs, 5));
+        for (
+          let i = 0;
+          i < maxPolls && (current.task.state === 'pending' || current.task.state === 'running');
+          i += 1
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+          current = await fetchTask(hubId, envelope.taskId);
+        }
+        if (current.task.state !== 'done') {
+          throw new Error(
+            friendlyAgentError(current.task.error?.message) ?? zh.catalog.uninstallFailed,
+          );
+        }
+      }
       toast.show({ message: zh.catalog.uninstallSubmitted });
-      await installedQuery.refetch();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: hostedAppsInstalledQueryKey(hubId) }),
+        queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+      ]);
     } catch (cause) {
       setError(
         friendlyAgentError(cause instanceof Error ? cause.message : null) ?? zh.catalog.uninstallFailed,
       );
+    } finally {
+      setUninstallingId(null);
     }
   };
 
@@ -98,7 +136,8 @@ export function InstalledAppsCard({ hubId }: { hubId: string }) {
                 <Button
                   label={zh.catalog.uninstall}
                   size="sm"
-                  disabled={!recipe}
+                  loading={uninstallingId === id}
+                  disabled={!recipe || uninstallingId !== null}
                   disabledReason={recipe ? undefined : zh.catalog.installedUnknown}
                   onClick={() => setTarget(recipe ?? null)}
                 />

@@ -5,9 +5,30 @@
  * （`agent/khc/recipes.py`：必填、整数、范围、长度、pattern），以及解析任务结果里的
  * access 卡片。安装/发布这些带副作用的动作不在这里。
  */
-import type { AppManifest, TaskResponse } from '@khc/contracts';
+import type { AgentEnvelope, AppManifest, TaskResponse } from '@khc/contracts';
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime } from '../../i18n/format';
+
+/** 节点已安装应用缓存键：向导与「已安装的托管应用」卡共用，确保安装/卸载后即时刷新。 */
+export function hostedAppsInstalledQueryKey(hubId: string) {
+  return ['hubs', hubId, 'app-catalog', 'installed'] as const;
+}
+
+/**
+ * 解析 `app-catalog/recipe_installed` 响应：
+ * 真实 Agent 将 `installed` 放在信封顶层（与 `recipes`/`cards` 同级），兼容旧 mock 放 `result.installed`。
+ */
+export function parseInstalledRecipes(envelope: AgentEnvelope): Record<string, InstalledEntry> {
+  const topLevel = (envelope as unknown as { installed?: unknown }).installed;
+  if (topLevel && typeof topLevel === 'object' && !Array.isArray(topLevel)) {
+    return topLevel as Record<string, InstalledEntry>;
+  }
+  const nested = (envelope.result as { installed?: unknown } | undefined)?.installed;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    return nested as Record<string, InstalledEntry>;
+  }
+  return {};
+}
 
 export interface RecipeParam {
   key: string;
