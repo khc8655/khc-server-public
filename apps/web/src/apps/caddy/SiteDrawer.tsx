@@ -35,10 +35,6 @@ import {
   type SiteFormState,
 } from './siteForm';
 
-function message(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 export function GroupCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card title={title}>
@@ -184,23 +180,9 @@ export function SiteDrawer({
   onChange: (patch: Partial<SiteFormState>) => void;
   onClose: () => void;
   onSave: (apply: boolean) => void;
-  onDelete: () => Promise<void>;
+  onDelete?: () => Promise<void>;
   onOpenInstallWizard?: () => void;
 }) {
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const handleDelete = async () => {
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await onDelete();
-    } catch (error) {
-      setDeleteError(message(error, zh.sites.deleteInlineFailed));
-    } finally {
-      setDeleting(false);
-    }
-  };
   const dirty = siteSignature(form) !== form.initial;
   const parsedUpstream = splitUpstream(form.upstreams);
   const upstreamHost = parsedUpstream.host;
@@ -310,13 +292,6 @@ export function SiteDrawer({
               }
             />
           </Field>
-          <Field id="site-name" label={zh.sites.name} help={zh.sites.nameHelp} error={errors.name} optional>
-            <TextInput
-              id="site-name"
-              value={form.name}
-              onChange={(value) => onChange({ name: value })}
-            />
-          </Field>
           {domainOptions.length > 0 ? (
             <Field id="site-domain-pick" label={zh.sites.domainPick} help={zh.sites.domainPickHelp} optional>
               <Select
@@ -366,7 +341,12 @@ export function SiteDrawer({
 
         {form.kind === 'proxy' ? (
           <GroupCard title={zh.sites.groupProxy}>
-            <Field id="site-target" label={zh.sites.target} help={zh.sites.targetHelp} required>
+            <Field
+              id="site-target"
+              label={zh.sites.target}
+              help={peers.length > 0 ? zh.sites.targetHelp : zh.sites.targetHelpNoPeers}
+              required
+            >
               <Select
                 id="site-target"
                 value={selectedTarget}
@@ -403,17 +383,24 @@ export function SiteDrawer({
                 }
               />
             ) : null}
-            <Field id="site-target-port" label={zh.sites.targetPort} help={zh.sites.targetPortHelp} required>
-              <NumberInput
+            {selectedTarget !== 'custom' ? (
+              <Field
                 id="site-target-port"
-                value={upstreamPort}
-                min={1}
-                max={65535}
-                onChange={(value) =>
-                  onChange({ upstreams: joinUpstream(upstreamHost || '127.0.0.1', value) })
-                }
-              />
-            </Field>
+                label={zh.sites.targetPort}
+                help={peers.length > 0 ? zh.sites.targetPortHelp : zh.sites.targetPortHelpNoPeers}
+                required
+              >
+                <NumberInput
+                  id="site-target-port"
+                  value={upstreamPort}
+                  min={1}
+                  max={65535}
+                  onChange={(value) =>
+                    onChange({ upstreams: joinUpstream(upstreamHost || '127.0.0.1', value) })
+                  }
+                />
+              </Field>
+            ) : null}
             <Field
               id="site-upstreams"
               label={zh.sites.upstreams}
@@ -431,34 +418,6 @@ export function SiteDrawer({
               ) : (
                 <div className="ui-readonly-field mono">{form.upstreams || '—'}</div>
               )}
-            </Field>
-            <Field id="site-lb" label={zh.sites.lbPolicy}>
-              <Select
-                id="site-lb"
-                value={form.lbPolicy}
-                options={[
-                  { value: 'round_robin', label: zh.sites.lbRoundRobin },
-                  { value: 'random', label: zh.sites.lbRandom },
-                  { value: 'least_conn', label: zh.sites.lbLeastConn },
-                  { value: 'ip_hash', label: zh.sites.lbIpHash },
-                ]}
-                onChange={(value) =>
-                  onChange({
-                    lbPolicy:
-                      value === 'random' || value === 'least_conn' || value === 'ip_hash'
-                        ? value
-                        : 'round_robin',
-                  })
-                }
-              />
-            </Field>
-            <Field id="site-health-uri" label={zh.sites.healthUri} help={zh.sites.healthUriHelp} optional>
-              <TextInput
-                id="site-health-uri"
-                value={form.healthUri}
-                mono
-                onChange={(value) => onChange({ healthUri: value })}
-              />
             </Field>
             <Field id="site-path-routes" label={zh.sites.pathRoutes} help={zh.sites.pathRoutesHelp} error={errors.pathRoutes} optional>
               <PathRouteRows
@@ -595,13 +554,6 @@ export function SiteDrawer({
               ) : null}
             </>
           ) : null}
-          <Field id="site-tls13" label={zh.sites.forceTls13} variant="row">
-            <Toggle
-              checked={form.forceTls13}
-              label={zh.sites.forceTls13}
-              onChange={(checked) => onChange({ forceTls13: checked })}
-            />
-          </Field>
         </GroupCard>
 
         <AdvancedSection title={zh.common.advancedSection}>
@@ -660,20 +612,6 @@ export function SiteDrawer({
             />
           </Field>
           <Field
-            id="site-max-body"
-            label={zh.sites.maxBodyBytes}
-            help={zh.sites.maxBodyBytesHelp}
-            error={errors.maxBodyBytes}
-            optional
-          >
-            <NumberInput
-              id="site-max-body"
-              value={form.maxBodyBytes}
-              min={0}
-              onChange={(value) => onChange({ maxBodyBytes: value })}
-            />
-          </Field>
-          <Field
             id="site-allowed-ips"
             label={zh.sites.allowedIps}
             help={zh.sites.ipListHelp}
@@ -702,70 +640,9 @@ export function SiteDrawer({
             />
           </Field>
         </GroupCard>
-
-        <GroupCard title={zh.sites.groupLog}>
-          <Field id="site-log-enabled" label={zh.sites.logEnabled} variant="row">
-            <Toggle
-              checked={form.logEnabled}
-              label={zh.sites.logEnabled}
-              onChange={(checked) => onChange({ logEnabled: checked })}
-            />
-          </Field>
-          <Field
-            id="site-log-path"
-            label={zh.sites.logPath}
-            help={zh.sites.logPathHelp}
-            optional
-          >
-            <TextInput
-              id="site-log-path"
-              value={form.logPath}
-              mono
-              onChange={(value) => onChange({ logPath: value })}
-            />
-          </Field>
-        </GroupCard>
         </AdvancedSection>
 
         {saveError ? <InlineError message={saveError} /> : null}
-
-        {form.mode === 'edit' ? (
-          <GroupCard title={zh.sites.dangerZone}>
-            {deleteConfirm ? (
-              <Stack gap={3}>
-                <Banner
-                  tone="danger"
-                  title={fmt(zh.sites.deleteTitle, {
-                    name: form.originalName ?? form.domains,
-                  })}
-                  description={zh.sites.deleteBody}
-                />
-                <Row gap={2}>
-                  <Button
-                    label={zh.sites.deleteConfirm}
-                    variant="danger"
-                    loading={deleting}
-                    onClick={() => void handleDelete()}
-                  />
-                  <Button
-                    label={zh.common.cancel}
-                    disabled={deleting}
-                    onClick={() => setDeleteConfirm(false)}
-                  />
-                </Row>
-                {deleteError ? <InlineError message={deleteError} /> : null}
-              </Stack>
-            ) : (
-              <Button
-                label={zh.sites.deleteInForm}
-                variant="danger-text"
-                disabled={Boolean(offlineReason)}
-                disabledReason={offlineReason}
-                onClick={() => setDeleteConfirm(true)}
-              />
-            )}
-          </GroupCard>
-        ) : null}
       </Stack>
     </Drawer>
   );

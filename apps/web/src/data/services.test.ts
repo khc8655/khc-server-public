@@ -228,16 +228,18 @@ describe('本机监听端口（T-C 批次 3）', () => {
     expect(rows.map((row) => row.port)).toEqual([9200]);
   });
 
-  it('保留 Agent 上报的进程名，旧 Agent 无该字段时照常显示', () => {
+  it('保留 Agent 上报的进程名并过滤 caddy 自身监听端口，旧 Agent 无该字段时照常显示', () => {
     const rows = unpublishedListeningPorts(
       ops([
         { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
+        { proto: 'tcp', address: '0.0.0.0', port: 2083, process: 'caddy' },
         { ...item(9100), process: 42 },
         { ...item(9200), process: '   ' },
         item(9300),
       ]),
       [],
     );
+    expect(rows.map((row) => row.port)).toEqual([9000, 9100, 9200, 9300]);
     expect(rows[0]?.process).toBe('python3');
     expect(rows[1]?.process).toBeUndefined();
     expect(rows[2]?.process).toBeUndefined();

@@ -1,6 +1,6 @@
 # 托管应用（应用清单 · 面板安装 · 一键发布）
 
-> 状态：现行 ｜ 最后核验：2026-11-21 ｜ 关联：`apps/manifests/`、`apps/api/src/lib/builtin-manifests.ts`、`apps/web/src/apps/settings/appPublish.ts`、`docs/cf-dns.md`
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`apps/manifests/`、`apps/api/src/lib/builtin-manifests.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`、`docs/cf-dns.md`
 > 范围：应用清单的数据来源与字段、从面板安装到节点上的流程、清单里的 `publish` 声明如何变成 Caddy 站点
 
 ## 1. 是什么
@@ -32,7 +32,7 @@
 
 设置 →「应用管理」（`?tab=manifests`，旧 `?tab=catalog` 兼容回落至此）维护控制面应用清单：可查看并编辑适配应用的安装/卸载脚本、参数默认值与 `publish` 声明，但**不在此直接安装**——全局设置没有「装到哪台机器」的上下文，安装必须落在一台具体的 VM 上。
 
-安装主入口在**节点 → 应用 → 安装并发布应用**三步向导（选应用 → 简配置 → 安装并发布）：列出「应用管理」已启用的适配应用并标注安装状态，填写应用参数、访问域名、发布端口与 TLS（全局证书或 Caddy 自动签发）后在当前 VM 安装；安装完成后读取清单声明或实测监听端口，自动写入 Caddy 站点配置并执行 `apply`。手工「添加站点」抽屉仅保留本机端口 / Peer / 自定义上游与前往向导的引导链接。
+安装主入口在**节点 → 应用 → 安装并发布应用**三步向导（选应用 → 配置与发布 → 安装并发布）：列出「应用管理」已启用的适配应用并标注安装状态（从 Agent `recipe_installed` 合并读取）；`mode="create"` 新建受限 `nologin` 应用账号不再要求填写密码；发布域名下拉排除已关闭 TLS 的站点，对外端口默认 `2083`（自动避开 `443` 与节点 Agent 监听端口），并强校验拦截 `publishPort` / 应用内部端口与 Agent 端口碰撞；TLS 支持「Caddy 自动签发」「全局证书库」「关闭 TLS」三选；填写 `public_url` 无需手填，由面板根据协议/域名/端口自动推导。安装结束后读取清单声明端口，自动写入 Caddy 站点配置并执行 `apply`，完成页直接渲染可点击的带密钥访问链接。手工「添加站点」抽屉仅保留本机端口 / Peer / 自定义上游与前往向导的引导链接。
 
 技术上是 `POST /nodes/:id/apps/app-catalog/recipe_install`（带 `manifestId`，Worker 从 D1 取出正文附在请求里），返回 `taskId`；向导轮询安装任务至 `done` 并展示实时日志，再写入 Caddy 站点——应用没起来之前建站点只会得到 502。安装结束的 `KHC_RESULT` 可以有 `access`（登录链接、Key、端口等），面板只展示、不落库。
 
@@ -72,7 +72,7 @@ curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
 
 **两条端口不能相同。** Agent 占着 `<域名>:<Agent 端口>`（默认 2053），Caddy 要监听发布端口（默认 2083）——一条端口只能一个进程，撞了表单会挡住提交并给换端口的出口，写入站点前还有一层拦截。443 刻意留空，理由与端口白名单见 `docs/cf-dns.md`。
 
-清单声明了 `public_url` 参数时，面板用当前站点的对外地址（域名 + 发布端口）预填它（字段可见、可改），这样 magpie 回传的登录链接本身就是 `https://<域名>:<发布端口>/?k=…`，装完点一下就能进。
+清单声明了 `public_url` 参数时，面板在提交安装时自动由发布协议、域名与对外端口推导 `public_url`（不再要求表单手工填写），使 magpie 回传的登录链接可直接作为完成页一键打开按钮使用（例如 `https://<域名>:<发布端口>/?k=…`）。
 
 ## 5. 卸载（必须清干净）
 

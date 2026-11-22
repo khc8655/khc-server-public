@@ -250,14 +250,14 @@ describe('应用清单下发：Worker 注入 manifest（R1）', () => {
     expect(params.runtimeMode).toBeUndefined();
   });
 
-  it('create 模式只给用户名不给密码被拒绝', async () => {
+  it('create 模式允许免密码仅传用户名；只给密码不给用户名时被拒绝', async () => {
     const { ctx, cookie, nodeId } = await setup();
     await ctx.appManifests.create({
       id: 'create-partial',
       manifest: { ...definition(), runtime: { mode: 'create', linger: true } },
       enabled: true,
     });
-    const res = await ctx.app.request(
+    const okRes = await ctx.app.request(
       `/api/v1/nodes/${nodeId}/apps/app-catalog/recipe_install`,
       {
         method: 'POST',
@@ -266,8 +266,20 @@ describe('应用清单下发：Worker 注入 manifest（R1）', () => {
       },
       ctx.env,
     );
-    expect(res.status).toBe(400);
-    expect(ctx.agent.requests).toHaveLength(0);
+    expect(okRes.status).toBe(200);
+    expect(ctx.agent.requests).toHaveLength(1);
+
+    const badRes = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/recipe_install`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: actionBody({ manifestId: 'create-partial', values: {}, runtimePassword: 'only-password' }),
+      },
+      ctx.env,
+    );
+    expect(badRes.status).toBe(400);
+    expect(ctx.agent.requests).toHaveLength(1);
   });
 
   it('不带 manifestId 的普通动作完全不受影响（通用透传）', async () => {

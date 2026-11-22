@@ -1,17 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../../app/router';
-
-const pickMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../data/backup', async () => {
-  const actual = await vi.importActual<typeof import('../../data/backup')>('../../data/backup');
-  return { ...actual, pickBackupFile: pickMock };
-});
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -47,7 +40,11 @@ const certificate = {
 };
 
 let caddySites: Record<string, unknown>[] = [];
+let caddyRev = 1;
+let caddyAppliedRev = 1;
 let listeningItems: { proto: string; address: string; port: number; process?: string }[] = [];
+let scanBlocks: Record<string, unknown>[] = [];
+let applyError: string | null = null;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function appConfig() {
@@ -55,8 +52,8 @@ function appConfig() {
     app: 'caddy-site',
     schemaVersion: 1,
     config: { sites: caddySites },
-    rev: 1,
-    appliedRev: 1,
+    rev: caddyRev,
+    appliedRev: caddyAppliedRev,
     updatedAt: NOW,
   };
 }
@@ -76,6 +73,10 @@ function mockApi(
   const taskId = options.taskId ?? 'task-install';
   const withCerts = options.withCerts ?? true;
   listeningItems = options.listening ?? [];
+  caddyRev = 1;
+  caddyAppliedRev = 1;
+  scanBlocks = [];
+  applyError = null;
   caddySites = options.sites ?? [
     {
       name: 'blog',
@@ -123,9 +124,29 @@ function mockApi(
         if (init?.method === 'PUT') {
           const body = JSON.parse(String(init.body)) as { config?: { sites?: Record<string, unknown>[] } };
           caddySites = body.config?.sites ?? caddySites;
+          caddyRev += 1;
           return json({ app: appConfig() });
         }
         return json({ app: appConfig() });
+      }
+      if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/apply') {
+        if (applyError) {
+          return json({ ok: false, error: { code: 'apply_failed', message: applyError } });
+        }
+        caddyAppliedRev = caddyRev;
+        return json({ ok: true, result: {} });
+      }
+      if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/caddy_import_scan') {
+        return json({
+          ok: true,
+          result: {
+            exists: true,
+            caddyfilePath: '/etc/caddy/Caddyfile',
+            blocks: scanBlocks,
+            imports: [],
+            backups: [],
+          },
+        });
       }
       if (url === '/api/v1/nodes/tyo-1/state') {
         return json({
@@ -160,19 +181,8 @@ function mockApi(
   );
 }
 
-function fileOf(text: string): File {
-  return {
-    name: 'sites.json',
-    size: text.length,
-    lastModified: 1,
-    text: async () => text,
-  } as File;
-}
-
 beforeEach(() => {
   window.scrollTo = vi.fn();
-  pickMock.mockReset();
-  pickMock.mockResolvedValue(null);
   URL.createObjectURL = vi.fn(() => 'blob:sites');
   URL.revokeObjectURL = vi.fn();
   HTMLAnchorElement.prototype.click = vi.fn();
@@ -195,85 +205,112 @@ async function renderRoute(path: string) {
   return router;
 }
 
-/** 展开表格下方的「高级」折叠区（ui-redesign ⑤ 后导入/导出/清空收进高级区） */
+/** 展开表格下方的「高级」折叠区 */
 async function expandAdvanced() {
   await userEvent.click(await screen.findByRole('button', { name: '高级' }));
 }
 
-describe('Caddy 站点导入导出', () => {
-  it('导出当前 sites JSON', async () => {
+describe('站点抽屉与列表交互规范（T3）', () => {
+  it('高级区仅保留清空站点（移除页底 JSON 导入导出），且过滤占位块与 caddy 自身端口', async () => {
+    scanBlocks = [
+      {
+        id: 'placeholder',
+        hash: 'h-empty',
+        address: '—',
+        startLine: 11,
+        endLine: 23,
+        text: ':80 {}',
+        supported: false,
+        reason: null,
+        domains: [],
+        listenPort: 80,
+        kind: 'proxy',
+        upstreams: [],
+      },
+    ];
+    mockApi({
+      withCerts: false,
+      listening: [
+        { proto: 'tcp', address: '0.0.0.0', port: 2083, process: 'caddy' },
+        { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
+      ],
+    });
+    // 保留上面设置的 scanBlocks（mockApi 清空了 scanBlocks，重新注入）
+    scanBlocks = [
+      {
+        id: 'placeholder',
+        hash: 'h-empty',
+        address: '—',
+        startLine: 11,
+        endLine: 23,
+        text: ':80 {}',
+        supported: false,
+        reason: null,
+        domains: [],
+        listenPort: 80,
+        kind: 'proxy',
+        upstreams: [],
+      },
+    ];
     await renderRoute('/hubs/tyo-1/sites');
     expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
     await expandAdvanced();
-    await userEvent.click(screen.getByRole('button', { name: '导出 JSON' }));
-    expect(await screen.findByText('站点 JSON 已导出')).toBeTruthy();
-    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '导出 JSON' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '导入 JSON' })).toBeNull();
+    expect(screen.getByRole('button', { name: '清空站点' })).toBeTruthy();
+
+    // 过滤 Caddyfill 默认空占位块与 caddy 进程端口
+    expect(await screen.findByText('没有发现未托管的外部站点块')).toBeTruthy();
+    expect(screen.queryByText('需手工处理')).toBeNull();
+    expect(screen.queryByText('2083 · caddy')).toBeNull();
+    expect((await screen.findAllByText('9000 · python3')).length).toBeGreaterThan(0);
   });
 
-  it('导入预览新增并只保存不 apply', async () => {
-    const payload = {
-      sites: [
-        {
-          name: 'api',
-          domains: ['api.example.dev'],
-          listenPort: 443,
-          kind: 'proxy',
-          upstreams: ['127.0.0.1:3000'],
-          enabled: true,
-        },
-      ],
-    };
-    pickMock.mockResolvedValue(fileOf(JSON.stringify(payload)));
+  it('抽屉内「保存并生效」不叠弹 Dialog；apply 失败时回滚 D1 并在抽屉内直接报错', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await expandAdvanced();
-    await userEvent.click(await screen.findByRole('button', { name: '导入 JSON' }));
+    await screen.findAllByText('blog.example.dev');
+    applyError = 'caddy validate failed: bad upstream';
 
-    expect(await screen.findByText('导入站点预览')).toBeTruthy();
-    expect((await screen.findAllByText('新增')).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByRole('button', { name: '确认导入' }));
+    await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
+    const drawer = await screen.findByRole('dialog');
+    await userEvent.type(within(drawer).getByLabelText(/^域名/), 'bad.example.com');
+    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    await userEvent.clear(targetPort);
+    await userEvent.type(targetPort, '9999');
 
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存并生效' }));
+
+    // 只有一个 drawer dialog，不叠第二个确认弹窗
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(await within(drawer).findByText('caddy validate failed: bad upstream')).toBeTruthy();
+    // 抽屉仍然打开，且 D1 已被回滚只剩最初 1 条站点
+    expect(drawer.isConnected).toBe(true);
+    expect(caddySites.map((item) => item.name)).toEqual(['blog']);
+  });
+
+  it('仅保存草稿时新增行标「待应用」、未改动运行行保持「已同步」，顶部横幅按钮为「应用到节点」', async () => {
+    await renderRoute('/hubs/tyo-1/sites');
+    await screen.findAllByText('blog.example.dev');
+
+    await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
+    const drawer = await screen.findByRole('dialog');
+    await userEvent.type(within(drawer).getByLabelText(/^域名/), 'draft.example.com');
+    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    await userEvent.clear(targetPort);
+    await userEvent.type(targetPort, '9100');
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByRole('button', { name: '应用到节点' })).toBeTruthy();
+    expect((await screen.findAllByText('已同步')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('待应用')).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole('button', { name: '应用到节点' }));
+    const confirm = await screen.findByRole('dialog');
+    expect(confirm).toBeTruthy();
+    await userEvent.click(confirm.querySelector('.ui-btn-primary') as HTMLButtonElement);
     await waitFor(() => {
-      expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/apps/caddy-site' && item.init?.method === 'PUT')).toBe(true);
+      expect(screen.queryByRole('dialog')).toBeNull();
     });
-    const put = requests.find(
-      (item) => item.url === '/api/v1/nodes/tyo-1/apps/caddy-site' && item.init?.method === 'PUT',
-    );
-    const body = JSON.parse(String(put?.init?.body)) as { config: { sites: { name: string }[] } };
-    expect(body.config.sites.map((item) => item.name)).toEqual(['blog', 'api']);
-    expect(requests.some((item) => item.url.endsWith('/plan'))).toBe(false);
-    expect(requests.some((item) => item.url.endsWith('/apply'))).toBe(false);
-    expect(await screen.findByText('站点已导入并保存，需手动应用')).toBeTruthy();
-  });
-
-  it('冲突项禁用确认', async () => {
-    pickMock.mockResolvedValue(
-      fileOf(
-        JSON.stringify({
-          sites: [
-            {
-              name: 'other',
-              domains: ['blog.example.dev'],
-              listenPort: 443,
-              kind: 'proxy',
-              upstreams: ['127.0.0.1:3000'],
-            },
-          ],
-        }),
-      ),
-    );
-    await renderRoute('/hubs/tyo-1/sites');
-    await expandAdvanced();
-    await userEvent.click(await screen.findByRole('button', { name: '导入 JSON' }));
-    expect((await screen.findAllByText('冲突')).length).toBeGreaterThan(0);
-    expect((screen.getByRole('button', { name: '确认导入' }) as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it('非法 JSON 显示错误', async () => {
-    pickMock.mockResolvedValue(fileOf('{bad'));
-    await renderRoute('/hubs/tyo-1/sites');
-    await expandAdvanced();
-    await userEvent.click(await screen.findByRole('button', { name: '导入 JSON' }));
-    expect(await screen.findByText('文件不是合法 JSON')).toBeTruthy();
   });
 });
 

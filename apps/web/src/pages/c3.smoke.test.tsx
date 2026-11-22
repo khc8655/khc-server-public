@@ -362,7 +362,7 @@ describe('C3 页面', () => {
     // 健康状态并入名称左侧圆点；表格保留同步状态列。
     expect((await screen.findAllByText('已同步')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('反代').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('手动证书').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('全局证书库').length).toBeGreaterThan(0);
     // 即使节点带 liveEndpoint，也统一经 Worker /snapshot，不再发 /live-ticket 或 /_live/。
     await waitFor(() => {
       expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/snapshot')).toBe(true);
@@ -565,12 +565,12 @@ describe('C3 页面', () => {
     await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
-    expect((await screen.findAllByText('站点名称')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('上游地址').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('上游地址')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('对外端口').length).toBeGreaterThan(0);
 
     const drawer = screen.getAllByRole('dialog').at(-1);
     if (!drawer) throw new Error('missing site drawer');
+    expect(within(drawer).queryByText('站点名称')).toBeNull();
     await userEvent.selectOptions(within(drawer).getByLabelText('TLS 模式'), 'manual');
     expect(within(drawer).getByLabelText('证书')).toBeTruthy();
     expect(within(drawer).getAllByText(/blog.example.dev · 5 天后/).length).toBeGreaterThan(0);
@@ -578,8 +578,8 @@ describe('C3 页面', () => {
     // 安全分组收进抽屉「高级」折叠区（ui-redesign ⑤）；已移除「启用观测入口」开关
     await userEvent.click(within(drawer).getByRole('button', { name: '高级' }));
     expect(within(drawer).queryByText('启用观测入口')).toBeNull();
-    await userEvent.click(within(drawer).getByRole('button', { name: '添加请求头' }));
-    expect(within(drawer).getByLabelText('请求头名称')).toBeTruthy();
+    await userEvent.click(within(drawer).getByRole('button', { name: '添加响应头' }));
+    expect(within(drawer).getByLabelText('响应头名称')).toBeTruthy();
     await userEvent.click(within(drawer).getByRole('button', { name: '添加路径' }));
     expect(within(drawer).getByLabelText('路径')).toBeTruthy();
   });

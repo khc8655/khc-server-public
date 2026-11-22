@@ -68,7 +68,7 @@ export async function resolveManifestParams(
     throw badRequest('以 root 运行时不接受用户名和密码');
   }
   if (runtimeMode === 'create') {
-    if (hasUser !== hasPassword) throw badRequest('新建用户时用户名和密码必须同时填写');
+    if (hasPassword && !hasUser) throw badRequest('填写密码时必须同时填写用户名');
     if (parsed.data.runtimeUser === 'root') {
       throw badRequest('不能把 root 当作新建的应用用户；需要 root 请选择「以 root 运行」');
     }
