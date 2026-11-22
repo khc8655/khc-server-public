@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.37.0] - 2026-11-22
+### Changed
+- 消除 Worker 全局与子路由重复鉴权导致的串行 D1 查询，并为 `session_epoch` 与快照节点查找引入 isolate 15s 短缓存，同时对 `/state` 与 `/probe` 的 `lastSeenAt` 落库增加 60 秒节流以大幅压降中转延迟。
+- 优化节点超时容错与切换体验：超时失败冷却从 30 秒收窄至 5 秒、`/snapshot` 预算放宽到 8 秒，并将面板状态与探活复用缓存提升到 30 秒。
+
 ## [0.36.2] - 2026-11-22
 ### Fixed
 - 修复 Worker 签名 `GET /state?force=1` 等带查询串的 Agent 请求时未剥离 query 串，导致操作后强制刷新节点状态固定报 `401 invalid signature` 的问题。

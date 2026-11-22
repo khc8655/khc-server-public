@@ -32,7 +32,7 @@ import { hubsQueryOptions } from './queries';
 export type HubProbePhase = 'probing' | 'done' | 'failed';
 
 /** 结果复用窗口：避免概览与列表来回切换时重复探测 */
-const PROBE_TTL_MS = 15_000;
+const PROBE_TTL_MS = 30_000;
 const PROBE_CACHE_KEY = ['hub-probe'] as const;
 
 /**

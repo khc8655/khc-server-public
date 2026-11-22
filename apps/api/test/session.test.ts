@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   SESSION_EPOCH_KEY,
   bumpSessionEpoch,
@@ -61,6 +61,29 @@ describe('会话版本（ver）与撤销', () => {
     expect(await bumpSessionEpoch(settings)).toBe(2);
     expect(await readSessionEpoch(settings)).toBe(2);
     await settings.put(SESSION_EPOCH_KEY, 'garbage');
-    expect(await readSessionEpoch(settings)).toBe(0);
+    expect(await readSessionEpoch(settings, { bypassCache: true })).toBe(0);
+    const badRepo = new MemorySettingsRepo();
+    await badRepo.put(SESSION_EPOCH_KEY, 'garbage');
+    expect(await readSessionEpoch(badRepo)).toBe(0);
+  });
+
+  it('readSessionEpoch 在 15 秒内按 SettingsRepo 隔离缓存，bumpSessionEpoch 立即更新缓存', async () => {
+    const repoA = new MemorySettingsRepo();
+    const repoB = new MemorySettingsRepo();
+    await repoB.put(SESSION_EPOCH_KEY, 9);
+    const spyA = vi.spyOn(repoA, 'getValue');
+
+    expect(await readSessionEpoch(repoA)).toBe(0);
+    expect(await readSessionEpoch(repoA)).toBe(0);
+    expect(spyA).toHaveBeenCalledTimes(1);
+
+    // 另一仓库实例不共享缓存
+    expect(await readSessionEpoch(repoB)).toBe(9);
+
+    // bumpSessionEpoch 绕过旧缓存并立即写入新版本
+    expect(await bumpSessionEpoch(repoA)).toBe(1);
+    expect(spyA).toHaveBeenCalledTimes(2);
+    expect(await readSessionEpoch(repoA)).toBe(1);
+    expect(spyA).toHaveBeenCalledTimes(2);
   });
 });

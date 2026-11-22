@@ -193,8 +193,10 @@ interface FetchedNodeState {
   error: string | null;
   epochStale: boolean;
   tls: TlsProbe;
-  lastSeenAt?: number;
+  lastSeenAt?: number | null;
 }
+
+const LAST_SEEN_THROTTLE_SEC = 60;
 
 /**
  * 调用节点 `/state` 并统一处理超时、鉴权失败、格式错误、epoch 对比与 TLS 实测。
@@ -252,9 +254,14 @@ async function fetchNodeState(
         tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
       };
     }
-    // 只更新轻量可达租约；运行快照不写入 D1（观测数据不进面板数据库）。
+    // 只更新轻量可达租约（60 秒节流，避免高频切页放大 D1 写）；运行快照不写入 D1。
     const seenAt = nowSec();
-    await deps.nodes.update(node.id, { lastSeenAt: seenAt });
+    const shouldUpdateSeen =
+      node.lastSeenAt === null || seenAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
+    if (shouldUpdateSeen) {
+      await deps.nodes.update(node.id, { lastSeenAt: seenAt });
+    }
+    const effectiveLastSeenAt = shouldUpdateSeen ? seenAt : node.lastSeenAt;
     // D-2/T2.2：Agent 回传的 epoch 与节点当前 rev_epoch 不一致 = "旧纪元"
     // （Agent 记着节点重建/恢复前的 rev 基线）。下一次 apply 会自动重置 Agent
     // 基线并重新下发；旧 Agent（<0.1.13）不回传 epoch，不判定（待升级）。
@@ -275,7 +282,7 @@ async function fetchNodeState(
       error: null,
       epochStale,
       tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
-      lastSeenAt: seenAt,
+      lastSeenAt: effectiveLastSeenAt,
     };
   } catch (error) {
     if (error instanceof HubUnreachableError) {
@@ -581,7 +588,12 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
                 }),
               };
             }
-            await deps.nodes.update(node.id, { lastSeenAt: probedAt });
+            const shouldUpdateSeen =
+              node.lastSeenAt === null || probedAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
+            if (shouldUpdateSeen) {
+              await deps.nodes.update(node.id, { lastSeenAt: probedAt });
+            }
+            const effectiveLastSeenAt = shouldUpdateSeen ? probedAt : node.lastSeenAt;
             const parsed = agentStateSchema.safeParse(response.body);
             const parsedState = parsed.success ? parsed.data : null;
             const tls = classifyTlsProbe({
@@ -595,7 +607,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
               route: response.route,
               via: response.via,
               error: null,
-              lastSeenAt: probedAt,
+              lastSeenAt: effectiveLastSeenAt,
               apps: probeApps(response.body),
               projection: projectNodeProbe({
                 node,

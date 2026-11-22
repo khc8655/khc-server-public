@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   HubUnreachableError,
   HttpAgentClient,
@@ -448,6 +448,73 @@ describe('node-client: 回退的重签与预算（批次 E/N，F-M1）', () => {
     expect(probe.status).toBe(200);
     const recovered = await client.call(node, 'tok', 'GET', '/state');
     expect(recovered.status).toBe(200);
+  });
+
+  it('超时失败仅触发 ≤5s 短冷却，硬连接错误保持完整 30s 冷却', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-22T12:00:00Z'));
+      let mode: 'timeout' | 'refused' | 'ok' = 'timeout';
+      let attempts = 0;
+      const client = new HttpAgentClient(
+        async () => {
+          attempts += 1;
+          if (mode === 'timeout') {
+            const err = new Error('TimeoutError: aborted');
+            err.name = 'TimeoutError';
+            throw err;
+          }
+          if (mode === 'refused') {
+            throw new Error('connect ECONNREFUSED');
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        },
+        async () => {
+          attempts += 1;
+          if (mode === 'timeout') {
+            throw new TcpTimeoutError('tcp timeout');
+          }
+          if (mode === 'refused') {
+            throw new Error('tcp ECONNREFUSED');
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        },
+        30_000,
+      );
+
+      await expect(client.call(node, 'tok', 'GET', '/state')).rejects.toBeInstanceOf(
+        HubUnreachableError,
+      );
+      const afterTimeout = attempts;
+
+      // 1s 后仍处于 5s 短冷却，不发真实请求
+      vi.advanceTimersByTime(1_000);
+      await expect(client.call(node, 'tok', 'GET', '/state')).rejects.toMatchObject({
+        code: 'hub_unreachable',
+      });
+      expect(attempts).toBe(afterTimeout);
+
+      // 超过 5s 后短冷却失效，恢复正常请求
+      mode = 'ok';
+      vi.advanceTimersByTime(4_100);
+      const recovered = await client.call(node, 'tok', 'GET', '/state');
+      expect(recovered.status).toBe(200);
+      expect(attempts).toBeGreaterThan(afterTimeout);
+
+      // 硬连接失败仍受完整 30s 冷却限制
+      mode = 'refused';
+      await expect(client.call(node, 'tok', 'GET', '/state')).rejects.toBeInstanceOf(
+        HubUnreachableError,
+      );
+      const afterRefused = attempts;
+      vi.advanceTimersByTime(10_000);
+      await expect(client.call(node, 'tok', 'GET', '/state')).rejects.toMatchObject({
+        code: 'hub_unreachable',
+      });
+      expect(attempts).toBe(afterRefused);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('自签证书错误给出可理解提示（区别于网络不可达）', async () => {
