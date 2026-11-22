@@ -11,7 +11,7 @@ import { friendlyAgentError, runAppAction } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import { action } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
-import { Button, Card, InlineError, Row, Stack, useToast } from '../../ui';
+import { Button, Card, InlineError, Row, Skeleton, Stack, useToast } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { installedTime, toCatalogRecipe, type CatalogRecipe, type InstalledEntry } from './recipes';
 
@@ -75,7 +75,10 @@ export function InstalledAppsCard({ hubId }: { hubId: string }) {
             <Button label={zh.common.retry} size="sm" onClick={() => void installedQuery.refetch()} />
           </Stack>
         ) : installedQuery.isLoading ? (
-          <p className="ui-text-caption">{zh.common.loading}</p>
+          <Stack gap={2}>
+            <Skeleton height={20} />
+            <Skeleton height={20} />
+          </Stack>
         ) : installed.length === 0 ? (
           <p className="ui-text-caption">{zh.hosted.installedEmpty}</p>
         ) : (

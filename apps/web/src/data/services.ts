@@ -278,6 +278,7 @@ export function unpublishedListeningPorts(
   for (const item of parseListeningItems(ops)) {
     if (item.proto !== 'tcp' && item.proto !== 'tcp6') continue;
     if (item.port < MIN_PUBLISH_PORT || RESERVED_PUBLISH_PORTS.has(item.port)) continue;
+    if (item.process && item.process.toLowerCase().includes('caddy')) continue;
     if (!isLocalListenAddress(item.address)) continue;
     if (occupied.has(item.port) || seen.has(item.port)) continue;
     seen.add(item.port);

@@ -54,14 +54,12 @@ import { paths } from '../../registry/routes';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
-import { pickBackupFile } from '../../data/backup';
 import {
   Banner,
   Badge,
   Button,
   Card,
   CodeBlock,
-  Dialog,
   Drawer,
   EmptyState,
   InlineError,
@@ -81,13 +79,6 @@ import {
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { daysUntil, formatAbsoluteTime, formatExpiry } from '../../i18n/format';
-import {
-  MAX_SITE_IMPORT_BYTES,
-  parseSitesImport,
-  serializeSites,
-  siteExportFilename,
-  type SiteImportResult,
-} from './siteTransfer';
 import { SiteDrawer } from './SiteDrawer';
 import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
 import { InstalledAppsCard } from '../hosted-apps/InstalledAppsCard';
@@ -106,9 +97,7 @@ import {
   type SiteRow,
 } from './siteForm';
 
-type ApplyConfirm =
-  | { kind: 'site'; config: CaddyConfig; siteName: string; form: SiteFormState }
-  | { kind: 'page' };
+type ApplyConfirm = { kind: 'page' };
 
 interface ServiceError {
   message: string;
@@ -406,13 +395,20 @@ export default function SitesPage() {
     reason: string;
   } | null>(null);
   const [importRestoreConfirm, setImportRestoreConfirm] = useState(false);
+  const externalBlocks = useMemo(
+    () =>
+      (importScanQuery.data?.blocks ?? []).filter(
+        (block) => block.domains.length > 0 || block.supported,
+      ),
+    [importScanQuery.data?.blocks],
+  );
   const importRows: ImportRow[] = useMemo(
     () =>
-      (importScanQuery.data?.blocks ?? []).map((block) => ({
+      externalBlocks.map((block) => ({
         block,
         conflict: importConflict(config, block),
       })),
-    [importScanQuery.data?.blocks, config],
+    [externalBlocks, config],
   );
 
   const importRowActions = (row: ImportRow): ActionRef[] =>
@@ -486,67 +482,12 @@ export default function SitesPage() {
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [startConfirm, setStartConfirm] = useState(false);
   const [exportConfirm, setExportConfirm] = useState(false);
-  const [sitesExportError, setSitesExportError] = useState<string | null>(null);
-  const [sitesFileLoading, setSitesFileLoading] = useState(false);
-  const [sitesImportError, setSitesImportError] = useState<string | null>(null);
-  const [sitesPreview, setSitesPreview] = useState<SiteImportResult | null>(null);
-  const [sitesSaving, setSitesSaving] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [pendingSiteNames, setPendingSiteNames] = useState<string[]>([]);
 
-  const exportSites = () => {
-    setSitesExportError(null);
-    try {
-      downloadTextFile(
-        serializeSites(config.sites),
-        siteExportFilename(hubName, hubId),
-      );
-      toast.show({ message: zh.sites.exportSuccess });
-    } catch (error) {
-      setSitesExportError(message(error, zh.sites.exportFailed));
-    }
-  };
-
-  const importSites = async () => {
-    setSitesImportError(null);
-    let file: File | null;
-    try {
-      file = await pickBackupFile();
-    } catch (error) {
-      setSitesImportError(message(error, zh.sites.importFailed));
-      return;
-    }
-    if (!file) return;
-    if (file.size > MAX_SITE_IMPORT_BYTES) {
-      setSitesImportError(zh.sites.importFileTooLarge);
-      return;
-    }
-    setSitesFileLoading(true);
-    try {
-      const text = await file.text();
-      setSitesPreview(parseSitesImport(text, config.sites));
-    } catch (error) {
-      setSitesPreview(null);
-      setSitesImportError(message(error, zh.sites.importFailed));
-    } finally {
-      setSitesFileLoading(false);
-    }
-  };
-
-  const confirmImportSites = async () => {
-    if (!sitesPreview) return;
-    setSitesSaving(true);
-    setSitesImportError(null);
-    try {
-      await saveCaddyConfig(hubId, sitesPreview.nextConfig);
-      await invalidateConfig();
-      setSitesPreview(null);
-      toast.show({ message: zh.sites.importSuccess });
-    } catch (error) {
-      setSitesImportError(message(error, zh.sites.importFailed));
-    } finally {
-      setSitesSaving(false);
-    }
-  };
+  useEffect(() => {
+    if (!unapplied) setPendingSiteNames([]);
+  }, [unapplied]);
 
   const setDrawerSearch = (drawer?: string, replace = true, upstream?: string) => {
     void navigate({
@@ -634,12 +575,12 @@ export default function SitesPage() {
     await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] });
   };
 
-  const applyNow = async () => {
+  const applyActionOnly = async (showPageError = true) => {
     let envelope;
     try {
       envelope = await runCaddyAction(hubId, 'apply');
     } catch (error) {
-      if (error instanceof ApiError) {
+      if (showPageError && error instanceof ApiError) {
         setApplyError({
           message: error.message,
           details: error.fields ? JSON.stringify(error.fields, null, 2) : null,
@@ -648,19 +589,34 @@ export default function SitesPage() {
       throw error;
     }
     if (!envelope.ok) {
-      setApplyError({
-        message: envelope.error?.message ?? zh.sites.applyFailed,
-        details: envelope.error?.details ? JSON.stringify(envelope.error.details, null, 2) : null,
-      });
+      if (showPageError) {
+        setApplyError({
+          message: envelope.error?.message ?? zh.sites.applyFailed,
+          details: envelope.error?.details ? JSON.stringify(envelope.error.details, null, 2) : null,
+        });
+      }
       throw new Error(envelopeErrorText(envelope) ?? zh.sites.applyFailed);
     }
     setApplyError(null);
-    await Promise.all([invalidateConfig(), invalidateState()]);
-    // apply 结果写回 D1 可能短暂滞后；再补两次拉取，避免列表停在「待应用」。
+    setPendingSiteNames([]);
+  };
+
+  const refreshAfterApply = async (backgroundProbe = false) => {
+    await invalidateConfig();
+    if (backgroundProbe) {
+      void Promise.all([invalidateConfig(), invalidateState()]);
+      return;
+    }
+    await invalidateState();
     for (let i = 0; i < 2; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 700));
       await Promise.all([invalidateConfig(), invalidateState()]);
     }
+  };
+
+  const applyNow = async () => {
+    await applyActionOnly();
+    await refreshAfterApply(false);
   };
 
   const takeoverExternal = async (block: ExternalSiteBlock) => {
@@ -801,13 +757,15 @@ export default function SitesPage() {
     return hash;
   };
 
-  const persist = async (nextConfig: CaddyConfig, apply: boolean) => {
+  const persist = async (nextConfig: CaddyConfig, apply: boolean, onBeforeRefresh?: () => void) => {
     await saveCaddyConfig(hubId, nextConfig);
-    await invalidateConfig();
     if (apply) {
-      await applyNow();
+      await applyActionOnly();
+      onBeforeRefresh?.();
       toast.show({ message: zh.sites.appliedToast });
+      void refreshAfterApply(true);
     } else {
+      await invalidateConfig();
       toast.show({ message: zh.sites.savedToast });
     }
   };
@@ -830,19 +788,33 @@ export default function SitesPage() {
       });
       const nextConfig = upsertSite(config, site, form.originalName);
       if (apply) {
-        // ui-guidelines §8.3：保存变更 → 关闭抽屉 → 页面级 ConfirmAction。
-        // 暂存表单快照，取消确认时恢复抽屉与未保存内容。
-        setApplyConfirm({
-          kind: 'site',
-          config: nextConfig,
-          siteName: site.name,
-          form,
-        });
+        // §8.3：不在抽屉上再叠 Dialog；抽屉内直接保存并 apply，失败自动回滚 D1 并原地报错。
+        await saveCaddyConfig(hubId, nextConfig);
+        try {
+          await applyActionOnly(false);
+        } catch (err) {
+          try {
+            await saveCaddyConfig(hubId, config);
+            await invalidateConfig();
+          } catch {
+            /* 保留原始 apply 错误供用户排查 */
+          }
+          throw err;
+        }
+        setPendingSiteNames([]);
+        setApplyError(null);
         closeDrawer();
-        setSaving(false);
+        toast.show({ message: zh.sites.appliedToast });
+        void refreshAfterApply(true);
         return;
       }
       await saveCaddyConfig(hubId, nextConfig);
+      setPendingSiteNames((prev) => [
+        ...new Set([
+          ...prev.filter((item) => item !== form.originalName),
+          site.name,
+        ]),
+      ]);
       await invalidateConfig();
       setApplyError(null);
       toast.show({ message: zh.sites.savedToast });
@@ -873,27 +845,33 @@ export default function SitesPage() {
   const remove = async (site: CaddySite) => {
     try {
       const nextConfig = removeSite(config, site.name);
-      await persist(nextConfig, true);
+      await saveCaddyConfig(hubId, nextConfig);
+      try {
+        await applyActionOnly();
+      } catch (err) {
+        try {
+          await saveCaddyConfig(hubId, config);
+          await invalidateConfig();
+        } catch {
+          /* 回滚失败不掩盖原始错误 */
+        }
+        throw err;
+      }
       setConfirmDelete(null);
       toast.show({ message: fmt(zh.sites.deletedToast, { name: site.name }) });
+      void refreshAfterApply(true);
     } catch (error) {
       throw new Error(message(error, zh.sites.createFailed));
     }
   };
 
-  const deleteFromDrawer = async () => {
-    if (!form?.originalName) throw new Error(zh.sites.deleteInlineFailed);
-    const site = config.sites.find((item) => item.name === form.originalName);
-    if (!site) throw new Error(zh.sites.deleteInlineFailed);
-    await remove(site);
-    closeDrawer();
-  };
-
   const clearSites = async () => {
     try {
-      await persist(emptyCaddyConfig(), true);
+      await saveCaddyConfig(hubId, emptyCaddyConfig());
+      await applyActionOnly();
       setClearConfirm(false);
       toast.show({ message: zh.sites.clearedToast });
+      void refreshAfterApply(true);
     } catch (error) {
       throw new Error(message(error, zh.sites.clearFailed));
     }
@@ -1113,10 +1091,15 @@ export default function SitesPage() {
       key: 'sync',
       type: 'sync',
       header: zh.sites.colSync,
-      sync: (): SyncStatusProps =>
-        unapplied
+      sync: (row): SyncStatusProps => {
+        if (!unapplied) return { state: 'synced' };
+        const rowChanged =
+          pendingSiteNames.includes(row.site.name) ||
+          (status !== null && !row.health);
+        return rowChanged
           ? { state: 'pending', rev: configState?.rev ?? undefined, label: zh.sites.syncPending }
-          : { state: 'synced' },
+          : { state: 'synced' };
+      },
     },
     { key: 'actions', type: 'actions', header: '' },
   ];
@@ -1247,7 +1230,7 @@ export default function SitesPage() {
       description: zh.sites.unappliedDesc,
       action: (
         <Button
-          label={actionLabel(action('app.apply'))}
+          label="应用到节点"
           size="sm"
           disabled={unreachable}
           disabledReason={writeDisabledReason}
@@ -1261,7 +1244,7 @@ export default function SitesPage() {
     });
   }
   const caddyMissing = Boolean(status && status.installed === false);
-  if (!configState?.exists || caddyMissing) {
+  if (!caddyQuery.isLoading && !appsQuery.isLoading && (!configState?.exists || caddyMissing)) {
     banners.push({
       key: caddyMissing ? 'not-installed' : 'not-configured',
       tone: caddyMissing ? 'warn' : 'info',
@@ -1373,9 +1356,6 @@ export default function SitesPage() {
 
       {segment === 'apps' ? (
         <>
-          {sitesExportError ? <InlineError message={sitesExportError} /> : null}
-          {sitesImportError ? <InlineError message={sitesImportError} /> : null}
-
           <Table
             rows={caddyQuery.isLoading ? undefined : proxyRows}
             columns={columns}
@@ -1430,7 +1410,7 @@ export default function SitesPage() {
             action={
               <Row gap={2}>
                 {/* 只有扫描确实发现外部站点块时才这样标注；0 站点不等于未纳管。 */}
-                {hasExternalBlocks(importScanQuery.data?.blocks) ? (
+                {hasExternalBlocks(externalBlocks) ? (
                   <Badge tone="warn" label={zh.hub.appExternal} />
                 ) : null}
                 <Button
@@ -1528,25 +1508,6 @@ export default function SitesPage() {
           <AdvancedSection title={zh.common.advancedSection}>
             <Row gap={2} wrap>
               <Button
-                label={zh.sites.exportJson}
-                icon="download"
-                size="sm"
-                variant="ghost"
-                disabled={config.sites.length === 0}
-                disabledReason={zh.sites.exportEmpty}
-                onClick={exportSites}
-              />
-              <Button
-                label={zh.sites.importJson}
-                icon="download"
-                size="sm"
-                variant="ghost"
-                loading={sitesFileLoading}
-                disabled={unreachable}
-                disabledReason={writeDisabledReason}
-                onClick={() => void importSites()}
-              />
-              <Button
                 label={actionLabel(action('site.clear'))}
                 size="sm"
                 variant="danger-text"
@@ -1615,11 +1576,12 @@ export default function SitesPage() {
           offlineReason={writeDisabledReason}
           certificates={certs}
           peers={peerTargets}
-          existingDomains={config.sites.flatMap((site) => site.domains)}
+          existingDomains={config.sites
+            .filter((site) => site.tls.mode !== 'off')
+            .flatMap((site) => site.domains)}
           onChange={(patch) => setForm((prev) => (prev ? { ...prev, ...patch } : prev))}
           onClose={closeDrawer}
           onSave={(apply) => void save(apply)}
-          onDelete={deleteFromDrawer}
           onOpenInstallWizard={() => {
             closeDrawer();
             setWizardOpen(true);
@@ -1692,31 +1654,13 @@ export default function SitesPage() {
           action={action('app.apply')}
           title={zh.sites.applyConfirmTitle}
           body={zh.sites.applyConfirmBody}
-          confirmLabel={actionLabel(action('app.apply'))}
-          onCancel={() => {
-            const state = applyConfirm;
-            setApplyConfirm(null);
-            if (state.kind !== 'site') return;
-            // 恢复抽屉与未保存内容：用户只是取消了「应用」，不应丢编辑。
-            setForm(state.form);
-            setDrawerSearch(
-              state.form.mode === 'edit' && state.form.originalName
-                ? `site:${encodeURIComponent(state.form.originalName)}`
-                : 'site:new',
-            );
-          }}
+          confirmLabel="应用到节点"
+          onCancel={() => setApplyConfirm(null)}
           onConfirm={async () => {
-            if (applyConfirm.kind === 'site') {
-              await saveCaddyConfig(hubId, applyConfirm.config);
-              await invalidateConfig();
-              await applyNow();
-              setApplyConfirm(null);
-              toast.show({ message: zh.sites.appliedToast });
-              return;
-            }
-            await applyNow();
+            await applyActionOnly();
             setApplyConfirm(null);
             toast.show({ message: zh.sites.appliedToast });
+            void refreshAfterApply(true);
           }}
         />
       ) : null}
@@ -1911,110 +1855,6 @@ export default function SitesPage() {
           onCancel={() => setExportConfirm(false)}
           onConfirm={loadConfig}
         />
-      ) : null}
-
-      {sitesPreview ? (
-        <Dialog
-          open
-          title={zh.sites.importPreviewTitle}
-          onClose={() => setSitesPreview(null)}
-          footer={
-            <>
-              <Button label={zh.common.cancel} onClick={() => setSitesPreview(null)} />
-              <Button
-                label={sitesSaving ? zh.sites.importSaving : zh.sites.importConfirm}
-                variant="primary"
-                loading={sitesSaving}
-                disabled={
-                  sitesPreview.errors.length > 0 ||
-                  sitesPreview.rows.some((row) => row.status === 'conflict') ||
-                  unreachable
-                }
-                disabledReason={
-                  unreachable
-                    ? writeDisabledReason
-                    : sitesPreview.rows.some((row) => row.status === 'conflict')
-                      ? zh.sites.importConflictHint
-                      : zh.sites.importErrorsTitle
-                }
-                onClick={() => void confirmImportSites()}
-              />
-            </>
-          }
-        >
-          <Stack gap={3}>
-            <Banner tone="info" title={zh.sites.importPreviewDesc} />
-            <Banner
-              tone="neutral"
-              title={fmt(zh.sites.importCounts, {
-                total: String(sitesPreview.rows.length + sitesPreview.errors.length),
-                created: String(sitesPreview.rows.filter((row) => row.status === 'new').length),
-                updated: String(
-                  sitesPreview.rows.filter((row) => row.status === 'overwrite').length,
-                ),
-                conflicts: String(
-                  sitesPreview.rows.filter((row) => row.status === 'conflict').length,
-                ),
-              })}
-            />
-            {sitesPreview.errors.length > 0 ? (
-              <Stack gap={2}>
-                <Banner tone="danger" title={zh.sites.importErrorsTitle} />
-                {sitesPreview.errors.map((error, index) => (
-                  <InlineError key={`${error}-${index}`} message={error} />
-                ))}
-              </Stack>
-            ) : null}
-            {sitesPreview.rows.some((row) => row.status === 'conflict') ? (
-              <Banner tone="warn" title={zh.sites.importConflictHint} />
-            ) : null}
-            <Table
-              rows={sitesPreview.rows}
-              columns={[
-                {
-                  key: 'name',
-                  type: 'name',
-                  header: zh.sites.name,
-                  value: (row) => row.site.name,
-                },
-                {
-                  key: 'domains',
-                  type: 'text',
-                  header: zh.sites.colDomain,
-                  value: (row) => row.site.domains.join(', '),
-                },
-                {
-                  key: 'reason',
-                  type: 'text',
-                  header: zh.sites.importReason,
-                  value: (row) => row.reason ?? '—',
-                },
-                {
-                  key: 'status',
-                  type: 'status',
-                  header: zh.sites.importStatus,
-                  status: (row) => ({
-                    tone:
-                      row.status === 'conflict'
-                        ? 'danger'
-                        : row.status === 'overwrite'
-                          ? 'warn'
-                          : 'info',
-                    label:
-                      row.status === 'conflict'
-                        ? zh.sites.importStatusConflict
-                        : row.status === 'overwrite'
-                          ? zh.sites.importStatusOverwrite
-                          : zh.sites.importStatusNew,
-                  }),
-                },
-              ]}
-              rowKey={(row) => `${row.status}-${row.site.name}`}
-              objectLabel={zh.sites.importPreviewTitle}
-              empty={{ icon: 'globe', title: zh.sites.importNoRows }}
-            />
-          </Stack>
-        </Dialog>
       ) : null}
     </Stack>
   );

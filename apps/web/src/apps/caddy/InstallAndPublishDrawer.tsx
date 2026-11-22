@@ -10,7 +10,7 @@ import type { AppRuntimeMode, Certificate, Node, TaskResponse } from '@khc/contr
 import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import { buildDomainEndpoint, normalizeDomain } from '../../data/endpoint';
-import { DEFAULT_TLS_PORT, publishProxySite, type CaddySite } from '../../data/sites';
+import { publishProxySite, type CaddySite } from '../../data/sites';
 import { paths } from '../../registry/routes';
 import { formatExpiry } from '../../i18n/format';
 import { fmt, zh } from '../../i18n/zh';
@@ -62,7 +62,33 @@ export interface InstallAndPublishDrawerProps {
 }
 
 type WizardStep = 1 | 2 | 3;
-type WizardTlsMode = 'auto' | 'manual';
+type WizardTlsMode = 'auto' | 'manual' | 'off';
+
+function parseEndpointPort(endpoint: string | undefined): number | null {
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    if (url.port) {
+      const port = Number(url.port);
+      return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+    }
+    return url.protocol === 'https:' ? 443 : url.protocol === 'http:' ? 80 : null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultWizardListenPort(agentPort: number | null): number {
+  if (agentPort === 2083) return 8443;
+  return 2083;
+}
+
+function buildPublishUrl(domain: string, port: number, tlsMode: WizardTlsMode): string {
+  if (tlsMode === 'off') {
+    return port === 80 ? `http://${domain}` : `http://${domain}:${port}`;
+  }
+  return buildDomainEndpoint(domain, String(port));
+}
 
 export function InstallAndPublishDrawer({
   hubId,
@@ -99,6 +125,7 @@ export function InstallAndPublishDrawer({
     const set = new Set<string>();
     if (node?.domain) set.add(node.domain);
     for (const site of existingSites) {
+      if (site.tls.mode === 'off') continue;
       for (const item of site.domains) {
         if (item && !item.startsWith('*.')) set.add(item);
       }
@@ -111,6 +138,8 @@ export function InstallAndPublishDrawer({
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [node?.domain, existingSites, certificates]);
 
+  const nodeAgentPort = useMemo(() => parseEndpointPort(node?.endpoint), [node?.endpoint]);
+
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedId, setSelectedId] = useState('');
   const recipe = recipes.find((item) => item.id === selectedId) ?? null;
@@ -118,19 +147,18 @@ export function InstallAndPublishDrawer({
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [runtimeMode, setRuntimeMode] = useState<AppRuntimeMode>('create');
   const [runtimeUser, setRuntimeUser] = useState('');
-  const [runtimePassword, setRuntimePassword] = useState('');
   const [domain, setDomain] = useState('');
-  const [listenPort, setListenPort] = useState<number | null>(DEFAULT_TLS_PORT);
+  const [listenPort, setListenPort] = useState<number | null>(() =>
+    defaultWizardListenPort(parseEndpointPort(node?.endpoint)),
+  );
   const [tlsMode, setTlsMode] = useState<WizardTlsMode>('auto');
   const [certId, setCertId] = useState('');
-  const autoPublicUrl = useRef<string | null>(null);
 
   const [phase, setPhase] = useState<'idle' | 'installing' | 'publishing' | 'done' | 'failed'>('idle');
   const [installDone, setInstallDone] = useState(false);
   const [task, setTask] = useState<TaskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
-  const [publishedUpstream, setPublishedUpstream] = useState<string | null>(null);
   const cancelledRef = useRef(false);
   useEffect(() => {
     cancelledRef.current = false;
@@ -140,8 +168,9 @@ export function InstallAndPublishDrawer({
   }, []);
 
   const normalizedDomain = normalizeDomain(domain);
+  const fallbackPort = defaultWizardListenPort(nodeAgentPort);
   const publicUrlPreview = normalizedDomain
-    ? buildDomainEndpoint(normalizedDomain, String(listenPort ?? DEFAULT_TLS_PORT))
+    ? buildPublishUrl(normalizedDomain, listenPort ?? fallbackPort, tlsMode)
     : '';
 
   const pickRecipe = (picked: CatalogRecipe) => {
@@ -149,9 +178,8 @@ export function InstallAndPublishDrawer({
     setValues(defaultValues(picked));
     setRuntimeMode(picked.runtimeMode);
     setRuntimeUser(picked.runtimeUser ?? '');
-    setRuntimePassword('');
-    setDomain((prev) => prev || node?.domain || '');
-    setListenPort(DEFAULT_TLS_PORT);
+    setDomain('');
+    setListenPort(defaultWizardListenPort(nodeAgentPort));
     setTlsMode('auto');
     setCertId('');
     setTask(null);
@@ -159,20 +187,15 @@ export function InstallAndPublishDrawer({
     setPhase('idle');
     setInstallDone(false);
     setPublishedUrl(null);
-    setPublishedUpstream(null);
-    autoPublicUrl.current = null;
     setStep(2);
   };
 
-  // 发布域名或端口变化时自动更新 public_url，用户手改后不再覆盖。
+  // 发布域名 / 端口 / TLS 模式变化时自动推导并同步 public_url。
   useEffect(() => {
-    if (!recipe || !publicUrlPreview) return;
+    if (!recipe) return;
     if (!recipe.params.some((param) => param.key === 'public_url')) return;
     setValues((prev) => {
-      const current = String(prev.public_url ?? '');
-      if (current && current !== autoPublicUrl.current) return prev;
-      if (current === publicUrlPreview) return prev;
-      autoPublicUrl.current = publicUrlPreview;
+      if (String(prev.public_url ?? '') === publicUrlPreview) return prev;
       return { ...prev, public_url: publicUrlPreview };
     });
   }, [publicUrlPreview, recipe?.id]);
@@ -193,8 +216,7 @@ export function InstallAndPublishDrawer({
 
   const paramErrors = recipe ? validateValues(recipe, values) : {};
   const hasParamErrors = Object.keys(paramErrors).length > 0;
-  const credentialsMissing =
-    runtimeMode === 'create' && (!runtimeUser.trim() || !runtimePassword);
+  const credentialsMissing = runtimeMode === 'create' && !runtimeUser.trim();
   const domainError = !normalizedDomain
     ? zh.hosted.wizardDomainRequired
     : !DOMAIN_RE.test(normalizedDomain)
@@ -211,12 +233,26 @@ export function InstallAndPublishDrawer({
             site.domains.includes(normalizedDomain),
         )
       : false;
+  const portAgentConflict =
+    !portInvalid && nodeAgentPort !== null && listenPort === nodeAgentPort;
   const existingSameSite = normalizedDomain
     ? existingSites.some((site) => site.name === normalizedDomain)
     : false;
   const certError =
     tlsMode === 'manual' && !certId ? zh.hosted.wizardTlsCertRequired : undefined;
   const localPort = recipe ? declaredPort(recipe, values) : null;
+  const localPortConflictTarget =
+    localPort === null
+      ? null
+      : !portInvalid && localPort === listenPort
+        ? listenPort
+        : nodeAgentPort !== null && localPort === nodeAgentPort
+          ? nodeAgentPort
+          : null;
+  const localPortConflict = localPortConflictTarget !== null;
+  const localPortError = localPortConflict
+    ? fmt(zh.hosted.wizardLocalPortConflict, { port: String(localPortConflictTarget) })
+    : undefined;
 
   const canStartInstall =
     Boolean(recipe) &&
@@ -226,6 +262,8 @@ export function InstallAndPublishDrawer({
     !domainError &&
     !portInvalid &&
     !portConflict &&
+    !portAgentConflict &&
+    !localPortConflict &&
     !certError &&
     localPort !== null;
 
@@ -237,14 +275,18 @@ export function InstallAndPublishDrawer({
       domain: targetDomain,
       listenPort: targetListenPort,
       upstream,
-      tls: tlsMode === 'manual' ? { mode: 'manual', cert: { $cert: certId } } : { mode: 'auto', cert: null },
+      tls:
+        tlsMode === 'off'
+          ? { mode: 'off', cert: null }
+          : tlsMode === 'manual'
+            ? { mode: 'manual', cert: { $cert: certId } }
+            : { mode: 'auto', cert: null },
     });
     if (cancelledRef.current) return;
     await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'app-catalog', 'installed'] });
     await onPublished();
     if (cancelledRef.current) return;
-    setPublishedUrl(buildDomainEndpoint(targetDomain, String(targetListenPort)));
-    setPublishedUpstream(upstream);
+    setPublishedUrl(buildPublishUrl(targetDomain, targetListenPort, tlsMode));
     setPhase('done');
   };
 
@@ -262,7 +304,7 @@ export function InstallAndPublishDrawer({
           values,
           runtimeMode,
           ...(runtimeMode === 'create'
-            ? { runtimeUser: runtimeUser.trim(), runtimePassword }
+            ? { runtimeUser: runtimeUser.trim() }
             : {}),
         });
         if (cancelledRef.current) return;
@@ -493,32 +535,21 @@ export function InstallAndPublishDrawer({
                   />
                 </Field>
                 {runtimeMode === 'create' ? (
-                  <>
-                    <Field id="wizard-app-user" label={zh.catalog.runtimeUserLabel} required>
-                      <TextInput
-                        id="wizard-app-user"
-                        value={runtimeUser}
-                        mono
-                        autoComplete="off"
-                        placeholder="khc-app-demo"
-                        onChange={setRuntimeUser}
-                      />
-                    </Field>
-                    <Field
-                      id="wizard-app-password"
-                      label={zh.catalog.runtimePasswordLabel}
-                      help={zh.catalog.secretHelp}
-                      required
-                    >
-                      <TextInput
-                        id="wizard-app-password"
-                        type="password"
-                        value={runtimePassword}
-                        autoComplete="new-password"
-                        onChange={setRuntimePassword}
-                      />
-                    </Field>
-                  </>
+                  <Field
+                    id="wizard-app-user"
+                    label={zh.catalog.runtimeUserLabel}
+                    error={!runtimeUser.trim() ? '请填写运行用户名' : undefined}
+                    required
+                  >
+                    <TextInput
+                      id="wizard-app-user"
+                      value={runtimeUser}
+                      mono
+                      autoComplete="off"
+                      placeholder="khc-app-demo"
+                      onChange={setRuntimeUser}
+                    />
+                  </Field>
                 ) : (
                   <Banner
                     tone="warn"
@@ -527,9 +558,15 @@ export function InstallAndPublishDrawer({
                   />
                 )}
 
-                {recipe.params.map((param) => {
+                {recipe.params
+                  .filter((param) => param.key !== 'public_url')
+                  .map((param) => {
                   const id = `wizard-param-${recipe.id}-${param.key}`;
                   const label = param.label ?? param.key;
+                  const isPublishedPort = recipe.manifest.publish?.portParam === param.key;
+                  const fieldError =
+                    paramErrors[param.key] ??
+                    (isPublishedPort ? localPortError : undefined);
                   if (param.type === 'boolean') {
                     return (
                       <Field key={param.key} id={id} label={label}>
@@ -545,7 +582,7 @@ export function InstallAndPublishDrawer({
                   }
                   if (param.type === 'integer') {
                     return (
-                      <Field key={param.key} id={id} label={label} error={paramErrors[param.key]}>
+                      <Field key={param.key} id={id} label={label} error={fieldError}>
                         <NumberInput
                           id={id}
                           value={
@@ -555,7 +592,7 @@ export function InstallAndPublishDrawer({
                           }
                           min={param.min}
                           max={param.max}
-                          invalid={Boolean(paramErrors[param.key])}
+                          invalid={Boolean(fieldError)}
                           onChange={(value) =>
                             setValues((prev) => ({ ...prev, [param.key]: value }))
                           }
@@ -569,7 +606,7 @@ export function InstallAndPublishDrawer({
                       id={id}
                       label={label}
                       help={param.secret ? zh.catalog.secretHelp : undefined}
-                      error={paramErrors[param.key]}
+                      error={fieldError}
                     >
                       <TextInput
                         id={id}
@@ -577,7 +614,7 @@ export function InstallAndPublishDrawer({
                         mono
                         autoComplete="off"
                         value={String(values[param.key] ?? '')}
-                        invalid={Boolean(paramErrors[param.key])}
+                        invalid={Boolean(fieldError)}
                         onChange={(value) =>
                           setValues((prev) => ({ ...prev, [param.key]: value }))
                         }
@@ -585,6 +622,9 @@ export function InstallAndPublishDrawer({
                     </Field>
                   );
                 })}
+                {!recipe.manifest.publish?.portParam && localPortError ? (
+                  <InlineError message={localPortError} />
+                ) : null}
               </Stack>
             </Card>
 
@@ -634,12 +674,14 @@ export function InstallAndPublishDrawer({
                   error={
                     portInvalid
                       ? zh.hosted.wizardPortInvalid
-                      : portConflict && normalizedDomain && listenPort !== null
-                        ? fmt(zh.hosted.wizardPortConflict, {
-                            domain: normalizedDomain,
-                            port: String(listenPort),
-                          })
-                        : undefined
+                      : portAgentConflict && nodeAgentPort !== null
+                        ? fmt(zh.hosted.wizardPortAgentConflict, { port: String(nodeAgentPort) })
+                        : portConflict && normalizedDomain && listenPort !== null
+                          ? fmt(zh.hosted.wizardPortConflict, {
+                              domain: normalizedDomain,
+                              port: String(listenPort),
+                            })
+                          : undefined
                   }
                   required
                 >
@@ -648,6 +690,7 @@ export function InstallAndPublishDrawer({
                     value={listenPort}
                     min={1}
                     max={65535}
+                    invalid={portInvalid || portAgentConflict || portConflict}
                     onChange={setListenPort}
                   />
                 </Field>
@@ -670,8 +713,11 @@ export function InstallAndPublishDrawer({
                     options={[
                       { value: 'auto', label: zh.hosted.wizardTlsAuto },
                       { value: 'manual', label: zh.hosted.wizardTlsManual },
+                      { value: 'off', label: zh.sites.tlsOff },
                     ]}
-                    onChange={(value) => setTlsMode(value === 'manual' ? 'manual' : 'auto')}
+                    onChange={(value) =>
+                      setTlsMode(value === 'manual' ? 'manual' : value === 'off' ? 'off' : 'auto')
+                    }
                   />
                 </Field>
 
@@ -733,19 +779,27 @@ export function InstallAndPublishDrawer({
               <Banner tone="info" title={zh.hosted.wizardPublishingHint} />
             ) : null}
 
-            {phase === 'done' && publishedUrl ? (
-              <Banner
-                tone="ok"
-                title={fmt(zh.hosted.wizardDoneTitle, { name: recipe.name })}
-                description={fmt(zh.hosted.wizardDoneDesc, {
-                  url: publishedUrl,
-                  port: String(localPort ?? '—'),
-                })}
-                action={
-                  <Link to={publishedUrl} label={publishedUrl} external />
-                }
-              />
-            ) : null}
+            {phase === 'done' && publishedUrl ? (() => {
+              const accessLink = access.find((item) => /^https?:\/\//i.test(item.value))?.value ?? null;
+              const openUrl = accessLink ?? publishedUrl;
+              return (
+                <Banner
+                  tone="ok"
+                  title={fmt(zh.hosted.wizardDoneTitle, { name: recipe.name })}
+                  description={fmt(zh.hosted.wizardDoneDesc, {
+                    url: publishedUrl,
+                    port: String(localPort ?? '—'),
+                  })}
+                  action={
+                    <Link
+                      to={openUrl}
+                      label={accessLink ? '打开应用（含登录密钥）' : openUrl}
+                      external
+                    />
+                  }
+                />
+              );
+            })() : null}
 
             {error ? <InlineError message={error} /> : null}
 
@@ -783,7 +837,11 @@ export function InstallAndPublishDrawer({
                       {access.map((item) => (
                         <div key={item.label} className="ui-row-between">
                           <span>{item.label}</span>
-                          <span className="ui-text-mono">{item.value}</span>
+                          {/^https?:\/\//i.test(item.value) ? (
+                            <Link to={item.value} label={item.value} external />
+                          ) : (
+                            <span className="ui-text-mono">{item.value}</span>
+                          )}
                         </div>
                       ))}
                     </Stack>

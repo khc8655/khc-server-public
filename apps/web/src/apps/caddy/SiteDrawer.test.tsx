@@ -166,7 +166,7 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     expect(screen.getByText(/10\.20\.30\.40:/)).toBeTruthy();
   });
 
-  it('新建站点默认选中本机（127.0.0.1）；已有自定义上游保持 custom', () => {
+  it('新建站点默认选中本机（127.0.0.1）；已有自定义上游保持 custom', async () => {
     renderDrawer({ domains: 'new.example.com', listenPort: 2083 });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
 
@@ -179,6 +179,17 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
       upstreams: '192.168.1.10:8080',
     });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('custom');
+    expect(screen.queryByLabelText('目标端口')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
+    // 瘦身：精简掉低频企业反代细项与抽屉内重复删除
+    expect(screen.queryByLabelText('站点名称')).toBeNull();
+    expect(screen.queryByLabelText('负载均衡')).toBeNull();
+    expect(screen.queryByLabelText('健康检查路径')).toBeNull();
+    expect(screen.queryByLabelText('仅允许 TLS 1.3')).toBeNull();
+    expect(screen.queryByLabelText('最大请求体')).toBeNull();
+    expect(screen.queryByLabelText('日志路径')).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除此站点' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: '高级' }));
+    expect(screen.getByText('响应头')).toBeTruthy();
   });
 });
