@@ -160,6 +160,40 @@ class StateTests(unittest.TestCase):
         self.kernel.store.clear_app("wireguard")
         self.assertNotIn("mode", build_state(self.kernel)["agent"])
 
+    def test_adapter_state_entries_runs_concurrently_and_preserves_order(self) -> None:
+        class SlowAdapter(Adapter):
+            api = 1
+            version = "1.0.0"
+            schema = {}
+
+            def __init__(self, app_name: str, *, fail: bool = False) -> None:
+                self.name = app_name
+                self._fail = fail
+
+            def render(self, ctx, config):
+                return []
+
+            def status(self, ctx):
+                time.sleep(0.09)
+                if self._fail:
+                    raise RuntimeError("boom")
+                return {"app": self.name}
+
+        kernel = make_kernel(
+            self.paths,
+            [SlowAdapter("a1"), SlowAdapter("a2", fail=True), SlowAdapter("a3")],
+            runner=self.runner,
+        )
+        started = time.monotonic()
+        state = build_state(kernel)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.22)
+        self.assertEqual([item["name"] for item in state["adapters"]], ["a1", "a2", "a3"])
+        self.assertEqual(state["adapters"][0]["status"], {"app": "a1"})
+        self.assertIn("boom", state["adapters"][1]["status"]["error"])
+        self.assertEqual(state["adapters"][2]["status"], {"app": "a3"})
+
 
 if __name__ == "__main__":
     unittest.main()

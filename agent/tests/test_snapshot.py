@@ -32,10 +32,13 @@ class SnapshotCollectTests(unittest.TestCase):
         ops.reset_snapshot_sampler()
 
     def test_first_call_double_samples_instead_of_zero(self) -> None:
-        """首次调用历史为空 → 内部双采样 1 秒，usagePercent 不能是 0/None。"""
+        """首次调用历史为空 → 内部短双采样，usagePercent 不能是 0/None。"""
 
-        def fake_sleep(_seconds: float) -> None:
-            # 模拟 1 秒后计数器变化：user +100、idle +100 → 50%
+        sleep_calls: list[float] = []
+
+        def fake_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+            # 模拟短采样后计数器变化：user +100、idle +100 → 50%
             _write(os.path.join(self.proc, "stat"), _cpu_stat(200, 1000))
 
         original = ops._sleeper
@@ -44,6 +47,9 @@ class SnapshotCollectTests(unittest.TestCase):
             data = ops.collect_snapshot(object(), proc_root=self.proc, now=1000.0)
         finally:
             ops._sleeper = original
+        self.assertEqual(sleep_calls, [ops.SNAPSHOT_COLD_SAMPLE_SECONDS])
+        self.assertEqual(ops.SNAPSHOT_COLD_SAMPLE_SECONDS, 0.15)
+        self.assertLessEqual(ops.SNAPSHOT_COLD_SAMPLE_SECONDS, 0.2)
         self.assertEqual(data["cpu"]["usagePercent"], 50.0)
         self.assertEqual(data["cpu"]["cores"], os.cpu_count())
 

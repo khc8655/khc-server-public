@@ -40,7 +40,7 @@
 ``unit`` / ``active`` / ``installed`` / ``version`` / ``sites``（启用站点数）/
 ``snippets``（托管片段文件名）/ ``validate{ok,rc,message}`` / ``lastReloadAt`` /
 ``lastReloadOk`` / ``lastReloadSource`` / ``lastError`` / ``siteHealth[]``。
-``siteHealth`` 对已生效配置里的 enabled 站点用 HEAD/GET 探测（3s 超时，总预算 8s）：
+``siteHealth`` 对已生效配置里的 enabled 站点并发执行 HEAD/GET 探测（1.5s 超时，总预算 8s，SWR 异步刷新）：
 ``ok`` / ``warn``（4xx、TLS 证书校验失败=自签/internal）/ ``down`` / ``unknown``。
 
 ## 动作
@@ -74,6 +74,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -83,6 +84,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Mapping, Optional
 
 from khc import Adapter, CaddySnippet, Ctx, File, action_params
@@ -124,9 +126,12 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
 }
-HEALTH_TIMEOUT = 3.0
+HEALTH_TIMEOUT = 1.5
 HEALTH_BUDGET = 8.0
 HEALTH_CACHE_TTL = 15.0
+HEALTH_STALE_TTL = 300.0
+HEALTH_COLD_WAIT = 0.4
+HEALTH_MAX_WORKERS = 4
 
 # 模式影响（docs/dual-mode.md §6）：应用自己的判断，核心只汇总。
 MODE_CADDY_NOT_RUNNING = "MODE_BLOCKED_CADDY_NOT_RUNNING"
@@ -1454,9 +1459,12 @@ class CaddySite(Adapter):
         # render 与 validate 在 apply 的同一线程里先后调用；用 thread-local 传递
         # “本次待校验片段/日志目录”，避免并发 plan（只 render 不 validate）互相覆盖。
         self._pending = threading.local()
-        # siteHealth 短 TTL 缓存：面板 /state 每 5s 轮询，避免高频探测把站点压垮。
+        # siteHealth SWR 缓存：/state 优先立即返回缓存并后台并发探测，避免慢站点阻塞整页加载。
+        self._health_lock = threading.Lock()
         self._health_cache: Optional[list[dict[str, Any]]] = None
         self._health_cache_at = 0.0
+        self._health_cache_key: Optional[str] = None
+        self._health_inflight: Optional[tuple[str, threading.Event, list[dict[str, Any]]]] = None
 
     # ------------------------------------------------------------------
     # 路径
@@ -2294,7 +2302,7 @@ class CaddySite(Adapter):
         previous: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._ensure_log_dirs(ctx, config)
-        self._health_cache = None  # 配置变更后下一次 /state 重新探测
+        self._invalidate_health_cache()  # 配置变更后下一次 /state 重新探测
         changed_paths = {
             str(item.get("path"))
             for item in (changes or [])
@@ -2622,41 +2630,15 @@ class CaddySite(Adapter):
             except Exception as exc2:  # noqa: BLE001
                 return result("down", None, self._probe_error(exc2))
 
-    def _site_health(self, config: Optional[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
-        if not isinstance(config, Mapping):
-            return entries
-        raw_sites = config.get("sites")
-        if not isinstance(raw_sites, list):
-            return entries
-        now = time.monotonic()
-        if self._health_cache is not None and (now - self._health_cache_at) < HEALTH_CACHE_TTL:
-            return copy.deepcopy(self._health_cache)
-        deadline = now + HEALTH_BUDGET
-        for raw in raw_sites:
-            if not isinstance(raw, Mapping):
-                continue
-            if not bool(raw.get("enabled", True)):
-                continue
-            try:
-                entries.append(self._site_health_entry(raw, deadline))
-            except Exception as exc:  # noqa: BLE001 - 健康探测绝不影响 /state
-                entries.append(
-                    {
-                        "name": _text(raw.get("name")),
-                        "domain": _text(raw.get("domain")),
-                        "state": "unknown",
-                        "status": None,
-                        "latencyMs": None,
-                        "error": self._probe_error(exc),
-                        "upstreams": [],
-                    }
-                )
-        self._health_cache = copy.deepcopy(entries)
-        self._health_cache_at = time.monotonic()
-        return entries
+    def _invalidate_health_cache(self) -> None:
+        with self._health_lock:
+            self._health_cache = None
+            self._health_cache_at = 0.0
+            self._health_cache_key = None
+            self._health_inflight = None
 
-    def _site_health_entry(self, raw: Mapping[str, Any], deadline: float) -> dict[str, Any]:
+    @staticmethod
+    def _extract_site_meta(raw: Mapping[str, Any]) -> tuple[str, str, list[str]]:
         domains: list[str] = []
         raw_domains = raw.get("domains")
         if isinstance(raw_domains, list):
@@ -2677,16 +2659,139 @@ class CaddySite(Adapter):
                 legacy_upstream = _text(raw.get("upstream"))
                 if legacy_upstream:
                     upstreams = [legacy_upstream]
+        return name, domain, upstreams
 
-        entry: dict[str, Any] = {
+    @staticmethod
+    def _site_health_key(enabled_sites: list[Mapping[str, Any]]) -> str:
+        items = []
+        for raw in enabled_sites:
+            name, domain, upstreams = CaddySite._extract_site_meta(raw)
+            tls = raw.get("tls") if isinstance(raw.get("tls"), Mapping) else {}
+            port = raw.get("listenPort", DEFAULT_LISTEN_PORT)
+            items.append(
+                {
+                    "name": name,
+                    "domain": domain,
+                    "upstreams": upstreams,
+                    "tlsMode": _text(tls.get("mode")) or "auto",
+                    "port": port if isinstance(port, int) and not isinstance(port, bool) else DEFAULT_LISTEN_PORT,
+                    "healthUri": _text(raw.get("healthUri")),
+                }
+            )
+        return json.dumps(items, sort_keys=True, ensure_ascii=False)
+
+    @classmethod
+    def _site_health_placeholder(cls, raw: Mapping[str, Any], *, error: Optional[str] = None) -> dict[str, Any]:
+        name, domain, upstreams = cls._extract_site_meta(raw)
+        return {
             "name": name,
             "domain": domain,
             "state": "unknown",
             "status": None,
             "latencyMs": None,
-            "error": None,
+            "error": error,
             "upstreams": upstreams,
         }
+
+    def _start_health_refresh_locked(
+        self,
+        cache_key: str,
+        enabled_sites: list[Mapping[str, Any]],
+    ) -> tuple[threading.Event, list[dict[str, Any]]]:
+        if self._health_inflight is not None and self._health_inflight[0] == cache_key:
+            _, done_event, partial_results = self._health_inflight
+            return done_event, partial_results
+
+        partial_results = [self._site_health_placeholder(raw) for raw in enabled_sites]
+        done_event = threading.Event()
+        sites_snapshot = copy.deepcopy(enabled_sites)
+        inflight = (cache_key, done_event, partial_results)
+        self._health_inflight = inflight
+        thread = threading.Thread(
+            target=self._run_health_refresh,
+            args=(inflight, sites_snapshot),
+            name="khc-caddy-health",
+            daemon=True,
+        )
+        thread.start()
+        return done_event, partial_results
+
+    def _run_health_refresh(
+        self,
+        inflight: tuple[str, threading.Event, list[dict[str, Any]]],
+        sites: list[Mapping[str, Any]],
+    ) -> None:
+        cache_key, done_event, partial_results = inflight
+        deadline = time.monotonic() + HEALTH_BUDGET
+
+        def _probe_one(idx: int, raw: Mapping[str, Any]) -> None:
+            try:
+                entry = self._site_health_entry(raw, deadline)
+            except Exception as exc:  # noqa: BLE001 - 健康探测绝不影响 /state
+                entry = self._site_health_placeholder(raw, error=self._probe_error(exc))
+            with self._health_lock:
+                partial_results[idx] = entry
+
+        try:
+            if len(sites) == 1:
+                _probe_one(0, sites[0])
+            else:
+                with ThreadPoolExecutor(max_workers=min(HEALTH_MAX_WORKERS, len(sites))) as pool:
+                    futures = [pool.submit(_probe_one, idx, raw) for idx, raw in enumerate(sites)]
+                    for future in futures:
+                        future.result()
+        finally:
+            with self._health_lock:
+                if self._health_inflight is inflight:
+                    self._health_cache = copy.deepcopy(partial_results)
+                    self._health_cache_at = time.monotonic()
+                    self._health_cache_key = cache_key
+                    self._health_inflight = None
+            done_event.set()
+
+    def _site_health(self, config: Optional[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(config, Mapping):
+            return []
+        raw_sites = config.get("sites")
+        if not isinstance(raw_sites, list):
+            return []
+        enabled_sites = [
+            raw for raw in raw_sites if isinstance(raw, Mapping) and bool(raw.get("enabled", True))
+        ]
+        if not enabled_sites:
+            return []
+
+        cache_key = self._site_health_key(enabled_sites)
+        now = time.monotonic()
+        with self._health_lock:
+            cache_valid = (
+                self._health_cache is not None
+                and self._health_cache_key == cache_key
+                and self._health_cache_at > 0.0
+            )
+            age = now - self._health_cache_at
+            if cache_valid and age < HEALTH_CACHE_TTL:
+                return copy.deepcopy(self._health_cache)  # type: ignore[arg-type]
+            if cache_valid and age < HEALTH_STALE_TTL:
+                stale = copy.deepcopy(self._health_cache)  # type: ignore[arg-type]
+                self._start_health_refresh_locked(cache_key, enabled_sites)
+                return stale
+            done_event, partial_results = self._start_health_refresh_locked(cache_key, enabled_sites)
+
+        # 冷启动或超陈旧：最多等 HEALTH_COLD_WAIT，慢站点留给后台刷新，避免拖慢 /state。
+        done_event.wait(HEALTH_COLD_WAIT)
+        with self._health_lock:
+            if (
+                done_event.is_set()
+                and self._health_cache is not None
+                and self._health_cache_key == cache_key
+            ):
+                return copy.deepcopy(self._health_cache)
+            return copy.deepcopy(partial_results)
+
+    def _site_health_entry(self, raw: Mapping[str, Any], deadline: float) -> dict[str, Any]:
+        entry = self._site_health_placeholder(raw)
+        domain = str(entry["domain"])
         if not domain:
             entry["error"] = "缺少域名"
             return entry
@@ -3254,7 +3359,7 @@ class CaddySite(Adapter):
         self._validate_tree(ctx, new_text, {})
         backup = self._write_backup(ctx, text)
         atomic_write(caddyfile, new_text, mode=0o644)
-        self._health_cache = None
+        self._invalidate_health_cache()
         return {
             "ok": True,
             "hash": digest,
@@ -3282,7 +3387,7 @@ class CaddySite(Adapter):
             raise BadRequest("备份文件不可读", details={"field": "backupPath"})
         self._validate_tree(ctx, content, {})
         atomic_write(ctx.paths.caddyfile, content, mode=0o644)
-        self._health_cache = None
+        self._invalidate_health_cache()
         self._reload_caddy(ctx)
         return {
             "ok": True,

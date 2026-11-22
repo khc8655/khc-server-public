@@ -25,6 +25,7 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
@@ -574,8 +575,11 @@ class Kernel:
         return result
 
     def adapter_state_entries(self) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
-        for adapter in self.adapters():
+        adapters = self.adapters()
+        if not adapters:
+            return []
+
+        def _collect_one(adapter: Adapter) -> dict[str, Any]:
             status: dict[str, Any] = {}
             try:
                 status = adapter.status(self._ctx())
@@ -584,15 +588,19 @@ class Kernel:
             except Exception as exc:  # noqa: BLE001 - 单个应用状态失败不能影响 /state
                 LOG.warning("adapter %s status() failed: %s", adapter.name, exc)
                 status = {"error": str(exc)}
-            entries.append(
-                {
-                    "name": adapter.name,
-                    "version": str(adapter.version),
-                    "appliedRev": self.store.applied_rev(adapter.name),
-                    "status": status,
-                }
-            )
-        return entries
+            return {
+                "name": adapter.name,
+                "version": str(adapter.version),
+                "appliedRev": self.store.applied_rev(adapter.name),
+                "status": status,
+            }
+
+        if len(adapters) == 1:
+            return [_collect_one(adapters[0])]
+        # 并发采集各适配器状态并按注册顺序返回，避免单个慢适配器串行拖慢 /state。
+        with ThreadPoolExecutor(max_workers=min(8, len(adapters))) as pool:
+            futures = [pool.submit(_collect_one, adapter) for adapter in adapters]
+            return [future.result() for future in futures]
 
     def task_status(self, task_id: str) -> dict[str, Any]:
         status = self.tasks.status(str(task_id))
