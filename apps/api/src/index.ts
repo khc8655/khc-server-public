@@ -9,6 +9,7 @@ import { D1AppManifestRepo } from './db/d1/appManifests';
 import { D1TunnelRepo } from './db/d1/tunnels';
 import { HttpAgentClient } from './lib/node-client';
 import type { FetchLike, TcpFetchLike } from './lib/node-client';
+import { instrumentD1 } from './lib/timing';
 import type { Env } from './types';
 
 export interface WorkerRuntime {
@@ -31,7 +32,8 @@ export interface WorkerRuntimeOptions {
 const runtimeByBinding = new WeakMap<object, WorkerRuntime>();
 
 function buildRuntime(env: Env, options: WorkerRuntimeOptions): WorkerRuntime {
-  const nodes = new D1NodeRepo(env.DB);
+  const db = instrumentD1(env.DB);
+  const nodes = new D1NodeRepo(db);
   // §3.8：preferred_route 是节点创建/配置时选定的接入方案，运行时只走该方案，
   // 不再回写 D1；故不再构造 onRouteSuccess 回调。
   const agent = new HttpAgentClient(options.fetchImpl, options.tcpFetchImpl);
@@ -42,13 +44,13 @@ function buildRuntime(env: Env, options: WorkerRuntimeOptions): WorkerRuntime {
   };
   const app = createApp({
     nodes,
-    apps: new D1AppConfigRepo(env.DB, env.MASTER_ENC_KEY, encOptions),
-    audit: new D1AuditRepo(env.DB),
-    certs: new D1CertificateRepo(env.DB, env.MASTER_ENC_KEY, encOptions),
-    settings: new D1SettingsRepo(env.DB, env.MASTER_ENC_KEY, encOptions),
-    sshKeys: new D1SshKeyRepo(env.DB),
-    appManifests: new D1AppManifestRepo(env.DB),
-    tunnels: new D1TunnelRepo(env.DB),
+    apps: new D1AppConfigRepo(db, env.MASTER_ENC_KEY, encOptions),
+    audit: new D1AuditRepo(db),
+    certs: new D1CertificateRepo(db, env.MASTER_ENC_KEY, encOptions),
+    settings: new D1SettingsRepo(db, env.MASTER_ENC_KEY, encOptions),
+    sshKeys: new D1SshKeyRepo(db),
+    appManifests: new D1AppManifestRepo(db),
+    tunnels: new D1TunnelRepo(db),
     agent,
   });
   return { agent, app };

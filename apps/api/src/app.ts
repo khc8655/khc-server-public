@@ -8,7 +8,9 @@ import {
 } from '@khc/contracts';
 import type { AppBindings, AppDeps } from './types';
 import { AppError } from './lib/errors';
+import { instrumentAgent } from './lib/timing';
 import { requireAuth } from './middleware/auth';
+import { serverTiming } from './middleware/timing';
 import { authRoutes } from './routes/auth';
 import { nodeRoutes } from './routes/nodes';
 import { appRoutes } from './routes/apps';
@@ -80,8 +82,12 @@ function allowedOriginSet(raw: string | undefined): Set<string> {
   return set;
 }
 
-export function createApp(deps: AppDeps): Hono<AppBindings> {
+export function createApp(rawDeps: AppDeps): Hono<AppBindings> {
+  const deps: AppDeps = { ...rawDeps, agent: instrumentAgent(rawDeps.agent) };
   const app = new Hono<AppBindings>();
+
+  // ---- 外层分段计时（覆盖健康检查、鉴权失败与 404/5xx 错误响应）----
+  app.use('/api/*', serverTiming);
 
   // ---- 无鉴权探活 ----
   app.get('/api/v1/health', (c) =>

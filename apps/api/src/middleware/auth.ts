@@ -8,6 +8,7 @@ import {
   readSessionEpoch,
   verifySession,
 } from '../lib/session';
+import { timed } from '../lib/timing';
 
 /** 校验管理员口令：生产用 pbkdf2 哈希；仅 development 允许明文 ADMIN_PASSWORD */
 export async function verifyAdminPassword(env: Env, password: string): Promise<boolean> {
@@ -25,16 +26,18 @@ export const requireAuth = createMiddleware<AppBindings>(async (c, next) => {
     await next();
     return;
   }
-  const secret = c.env.SESSION_SECRET;
-  if (!secret || secret.length < 32) {
-    throw misconfigured('SESSION_SECRET 未配置（需 ≥32 字节）');
-  }
-  const token = parseCookie(c.req.header('cookie'), SESSION_COOKIE);
-  if (!token) throw unauthorized();
-  const settings = c.get('settings');
-  const epoch = settings ? await readSessionEpoch(settings) : 0;
-  const session = await verifySession(secret, token, epoch);
-  if (!session) throw unauthorized('会话已过期，请重新登录');
-  c.set('user', { name: session.sub });
+  await timed('auth', async () => {
+    const secret = c.env.SESSION_SECRET;
+    if (!secret || secret.length < 32) {
+      throw misconfigured('SESSION_SECRET 未配置（需 ≥32 字节）');
+    }
+    const token = parseCookie(c.req.header('cookie'), SESSION_COOKIE);
+    if (!token) throw unauthorized();
+    const settings = c.get('settings');
+    const epoch = settings ? await readSessionEpoch(settings) : 0;
+    const session = await verifySession(secret, token, epoch);
+    if (!session) throw unauthorized('会话已过期，请重新登录');
+    c.set('user', { name: session.sub });
+  });
   await next();
 });
