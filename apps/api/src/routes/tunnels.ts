@@ -13,6 +13,7 @@ import { conflict, misconfigured, notFound } from '../lib/errors';
 import { encryptSecret } from '../lib/crypto';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
+import { forgetNode } from './helpers';
 
 /**
  * PR1：全局隧道配置（面板只存「域名 / 源站端口 / Token」）。
@@ -97,9 +98,10 @@ export function tunnelRoutes(deps: AppDeps): Hono<AppBindings> {
       await Promise.all(
         nodes
           .filter((node) => node.tunnelId === id)
-          .map((node) =>
-            deps.nodes.update(node.id, { endpoint: derived, tunnelEndpoint: derived }),
-          ),
+          .map(async (node) => {
+            await deps.nodes.update(node.id, { endpoint: derived, tunnelEndpoint: derived });
+            forgetNode(deps, node.id);
+          }),
       );
     }
     await deps.audit.log({

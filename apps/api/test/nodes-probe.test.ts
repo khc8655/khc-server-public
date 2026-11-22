@@ -291,4 +291,86 @@ describe('POST /nodes/probe（一次请求批量探测）', () => {
     expect(body.expiringCerts?.[0]).toMatchObject({ name: 'unattached-expired', nodeId: null });
     expect(body.expiringCerts?.[0]?.daysLeft).toBeLessThan(0);
   });
+
+  it('B3-① 滑动并发池（上限 6）：不触发固定分批队头阻塞且保持输入顺序', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const created = [];
+    for (let i = 0; i < 8; i += 1) {
+      created.push(await createNode(ctx, cookie));
+    }
+    const listOrder = (await ctx.nodes.list()).map((n) => n.id);
+    const slowIds = new Set([listOrder[0], listOrder[4]]);
+
+    let inflight = 0;
+    let maxInflight = 0;
+    ctx.agent.handler = async (_method, _path, _body, node) => {
+      inflight += 1;
+      if (inflight > maxInflight) maxInflight = inflight;
+      try {
+        const delayMs = node && slowIds.has(node.id) ? 240 : 25;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return { status: 200, body: stateBody };
+      } finally {
+        inflight -= 1;
+      }
+    };
+
+    const t0 = Date.now();
+    const res = await ctx.app.request(
+      '/api/v1/nodes/probe',
+      { method: 'POST', headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    const elapsedMs = Date.now() - t0;
+    expect(res.status).toBe(200);
+    // 并行池同时跑 index 0 和 index 4，耗时约 240ms；固定 4 并发两批需要 ~480ms。
+    expect(elapsedMs).toBeLessThan(410);
+    expect(maxInflight).toBe(6);
+
+    const body = (await res.json()) as { nodes: Array<{ id: string; reachable: boolean }> };
+    expect(body.nodes.map((n) => n.id)).toEqual(listOrder);
+    expect(body.nodes.every((n) => n.reachable)).toBe(true);
+  });
+
+  it('B3-① 并发池中单节点抛错/非 2xx 只影响该节点，其余照常成功', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    for (let i = 0; i < 8; i += 1) {
+      await createNode(ctx, cookie);
+    }
+    const listOrder = (await ctx.nodes.list()).map((n) => n.id);
+    const throwId = listOrder[1];
+    const httpErrId = listOrder[6];
+
+    ctx.agent.handler = async (_method, _path, _body, node) => {
+      if (node?.id === throwId) {
+        throw new HubUnreachableError('Hub 不可达', { direct: 'ETIMEDOUT' });
+      }
+      if (node?.id === httpErrId) {
+        return { status: 502, body: { error: 'bad gateway' } };
+      }
+      return { status: 200, body: stateBody };
+    };
+
+    const res = await ctx.app.request(
+      '/api/v1/nodes/probe',
+      { method: 'POST', headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      nodes: Array<{ id: string; reachable: boolean; error: string | null }>;
+    };
+    expect(body.nodes.map((n) => n.id)).toEqual(listOrder);
+    for (const item of body.nodes) {
+      if (item.id === throwId || item.id === httpErrId) {
+        expect(item.reachable).toBe(false);
+        expect(item.error).toBeTruthy();
+      } else {
+        expect(item.reachable).toBe(true);
+        expect(item.error).toBeNull();
+      }
+    }
+  });
 });
