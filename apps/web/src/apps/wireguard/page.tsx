@@ -48,6 +48,7 @@ import {
   resolvePeerPolicy,
 } from '../../data/peerNetwork';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
+import { paths } from '../../registry/routes';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
 import {
   Banner,
@@ -58,6 +59,7 @@ import {
   Drawer,
   Field,
   KeyValue,
+  Link,
   NumberInput,
   PageHeader,
   Row,
@@ -1363,13 +1365,25 @@ export default function WireGuardPage() {
         priority: 6,
       });
     }
-    if (!config.interface.publicEndpoint.trim()) {
+    if (config.peers.length > 0 && !config.interface.publicEndpoint.trim()) {
       banners.push({
         key: 'endpoint',
         tone: 'warn',
         title: zh.wireguard.publicEndpointMissing,
         description: zh.wireguard.publicEndpointMissingDesc,
         priority: 7,
+      });
+    }
+    if (!caddyMode && !configQuery.isLoading && config.peers.length === 0) {
+      banners.push({
+        key: 'unused-wg',
+        tone: 'info',
+        title: zh.wireguard.unusedWgTitle,
+        description: zh.wireguard.unusedWgDesc,
+        action: (
+          <Link to={paths.hubSection(hubId, 'settings')} label={zh.wireguard.goSwitchCaddyMode} />
+        ),
+        priority: 8,
       });
     }
   }
@@ -1460,6 +1474,7 @@ export default function WireGuardPage() {
         hubId={hubId}
         hubName={hubName}
         peers={peerTargets}
+        wgSubnet={config.interface.address}
         peerDrawerActive={peerDrawerActive}
         onOpen={() => {
           setPeerForm(null);

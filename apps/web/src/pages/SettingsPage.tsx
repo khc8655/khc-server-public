@@ -42,7 +42,7 @@ export default function SettingsPage() {
     return null;
   };
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>(tabFromSearch(search.tab) ?? 'certs');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(tabFromSearch(search.tab) ?? 'domain');
 
   useEffect(() => {
     const tab = tabFromSearch(search.tab);
@@ -87,7 +87,7 @@ export default function SettingsPage() {
     <Stack gap={4}>
       <PageHeader
         title={zh.nav.settings}
-        summary="管理全局账号、域名管理、证书库、隧道、应用管理与 SSH 公钥"
+        summary="管理全局域名管理、账号、证书库、应用管理、隧道与 SSH 公钥"
         primaryAction={
           activeTab === 'accounts'
             ? action('cfDns.account.create')
@@ -106,11 +106,11 @@ export default function SettingsPage() {
         value={activeTab}
         ariaLabel="设置分类"
         options={[
-          { value: 'accounts', label: zh.cfDns.tabAccounts },
           { value: 'domain', label: zh.cfDns.tab },
+          { value: 'accounts', label: zh.cfDns.tabAccounts },
           { value: 'certs', label: '证书库' },
-          { value: 'tunnels', label: zh.tunnels.tab },
           { value: 'manifests', label: '应用管理' },
+          { value: 'tunnels', label: zh.tunnels.tab },
           { value: 'keys', label: zh.sshKeys.tab },
         ]}
         onChange={(val) => selectTab(val as SettingsTab)}

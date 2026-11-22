@@ -606,4 +606,15 @@ describe('WireGuard 页', () => {
     expect(await screen.findByText('面板尚未纳管节点上的 WireGuard')).toBeTruthy();
     expect(screen.getByText(/节点上已有运行中的 WireGuard 接口/)).toBeTruthy();
   });
+
+  it('0-Peer 且公网地址为空时不再误报「公网地址未配置」，改为引导切换 Caddy 网关（P3）', async () => {
+    mockApi({ peers: [], rev: 1, appliedRev: 1, publicEndpoint: '', mode: 'wg' });
+    await renderWireGuard();
+
+    expect(await screen.findByText('当前尚未接入任何 Peer')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '切换为 Caddy 网关' }).getAttribute('href')).toBe(
+      '/hubs/tyo-1/settings',
+    );
+    expect(screen.queryByText('公网地址未配置')).toBeNull();
+  });
 });

@@ -1814,6 +1814,17 @@ export const zh = {
     fwGoToOps: '前往主机运维',
     fwAllowFailed: '放行端口失败，请到主机运维页检查防火墙规则',
     fwRuleNote: 'Caddy 应用 {port}',
+    diagTitle: '异常应用排查',
+    diagCountBadge: '{count} 项异常',
+    diagLocalNotListening: '本机目标 {upstream} 未监听，对应进程可能未启动或监听端口已变化。',
+    diagPeerOffline: '上游指向的 Peer「{peer}」（{host}）当前离线，恢复隧道连接后即可恢复访问。',
+    diagPeerMissing: '上游内网地址 {host} 未匹配到已接入的 Peer（可能已删除或未配置）。',
+    diagHttpError: '上游 {upstream} 返回 HTTP {status}，请检查后端服务状态与错误日志。',
+    diagUnreachable: '上游 {upstream} 不可达，请检查后端服务是否运行或主机防火墙放行。',
+    diagEditAction: '编辑',
+    diagDisableAction: '停用',
+    diagGoOps: '主机运维',
+    diagGoNetwork: '查看网络',
     kind: '类型',
     kindHelp: '反代转发到上游；静态直接提供文件；跳转重定向到目标',
     domainsHelp: '多个域名用逗号分隔',
@@ -2146,6 +2157,10 @@ export const zh = {
     statusError: '转发服务状态失败',
     detailsTitle: '应用错误详情',
     toggle: '启用/停用',
+    orphanPeerTitle: '有 {count} 条启用中的转发指向已删除或未接入的 Peer',
+    orphanPeerDesc:
+      '以下规则的目标位于 WireGuard 网段但无对应 Peer：{list}；建议停用、删除或改指有效目标。',
+    orphanDisableAction: '停用失效转发',
   },
 
   nodeSettings: {
@@ -2691,6 +2706,10 @@ export const zh = {
     publicEndpointMissingDesc: 'Peer 需要可连的公网地址，请在接口设置中填写。',
     invalidExtIface: '出口网卡名称格式不正确',
     forwardsCard: '端口转发',
+    unusedWgTitle: '当前尚未接入任何 Peer',
+    unusedWgDesc:
+      '若这台节点只做 Caddy 反代、不需要内网穿透，可前往设置切换为「Caddy 网关」模式以简化导航。',
+    goSwitchCaddyMode: '切换为 Caddy 网关',
   },
 
   apps: {

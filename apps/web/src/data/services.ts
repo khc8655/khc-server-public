@@ -189,7 +189,7 @@ export function isLocalListenAddress(address: string): boolean {
   return value === '0.0.0.0' || value === '::' || value === '[::]' || isLoopback(value);
 }
 
-function parseListeningItems(ops: unknown): ListeningPort[] {
+export function parseListeningItems(ops: unknown): ListeningPort[] {
   if (!ops || typeof ops !== 'object') return [];
   const network = (ops as { network?: unknown }).network;
   if (!network || typeof network !== 'object') return [];

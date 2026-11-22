@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { createAppRouter } from '../../app/router';
+import { isOrphanPeerTarget } from './ForwardsCard';
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -163,6 +164,7 @@ let applyFails = false;
 let pfInstalled = true;
 /** socat 是否在节点上；false 时给出「安装 socat」入口。 */
 let socatOk = true;
+let wgPeersOverride: typeof wireguardApp.config.peers | null = null;
 let currentApp = app();
 let requests: { url: string; init?: RequestInit }[] = [];
 
@@ -172,6 +174,7 @@ function mockApi() {
   applyFails = false;
   pfInstalled = true;
   socatOk = true;
+  wgPeersOverride = null;
   currentApp = app();
   requests = [];
   vi.stubGlobal(
@@ -195,8 +198,11 @@ function mockApi() {
       }
       if (url === '/api/v1/nodes/tyo-1/state') return json(state(emptyMode));
       if (url === '/api/v1/nodes/tyo-1/apps') {
+        const wg = wgPeersOverride
+          ? { ...wireguardApp, config: { ...wireguardApp.config, peers: wgPeersOverride } }
+          : wireguardApp;
         return json({
-          apps: [wireguardApp, currentApp],
+          apps: [wg, currentApp],
           adapters: [
             { name: 'wireguard', version: '1.0.0', api: 1 },
             { name: 'port-forward', version: '1.0.0', api: 1 },
@@ -204,7 +210,12 @@ function mockApi() {
           adaptersError: null,
         });
       }
-      if (url === '/api/v1/nodes/tyo-1/apps/wireguard') return json({ app: wireguardApp });
+      if (url === '/api/v1/nodes/tyo-1/apps/wireguard') {
+        const wg = wgPeersOverride
+          ? { ...wireguardApp, config: { ...wireguardApp.config, peers: wgPeersOverride } }
+          : wireguardApp;
+        return json({ app: wg });
+      }
       if (url === '/api/v1/nodes/tyo-1/apps/port-forward') {
         if (init?.method === 'PUT') {
           const body = JSON.parse(String(init.body)) as { config?: Record<string, unknown> };
@@ -397,5 +408,47 @@ describe('网络页 · 端口转发卡', () => {
     expect(screen.queryByText('端口转发依赖 WireGuard，当前不可用')).toBeNull();
     const addBtn = (await screen.findAllByRole('button', { name: '添加转发' }))[0] as HTMLButtonElement;
     expect(addBtn.disabled).toBe(false);
+  });
+
+  it('isOrphanPeerTarget 精准识别 WG 网段内无对应 Peer 的孤儿转发目标（P3）', () => {
+    const peers = [{ host: '10.99.0.2' }];
+    expect(isOrphanPeerTarget('10.99.0.4', peers, '10.99.0.1/24')).toBe(true);
+    expect(isOrphanPeerTarget('10.99.0.2', peers, '10.99.0.1/24')).toBe(false);
+    expect(isOrphanPeerTarget('10.99.0.1', peers, '10.99.0.1/24')).toBe(false);
+    expect(isOrphanPeerTarget('127.0.0.1', peers, '10.99.0.1/24')).toBe(false);
+    expect(isOrphanPeerTarget('192.168.1.50', peers, '10.99.0.1/24')).toBe(false);
+  });
+
+  it('存在唯一孤儿转发规则时显示警告横幅并支持「停用失效转发」（P3）', async () => {
+    wgPeersOverride = [];
+    currentApp = {
+      app: 'port-forward',
+      schemaVersion: 1,
+      config: {
+        forwards: [
+          {
+            name: 'peer-app-2083',
+            protocol: 'tcp',
+            listenPort: 2083,
+            targetHost: '10.99.0.4',
+            targetPort: 8080,
+            enabled: true,
+            note: 'orphan',
+          },
+        ],
+      },
+      rev: 1,
+      appliedRev: 1,
+      updatedAt: NOW,
+    };
+    await renderWireGuard();
+    expect(await screen.findByText('有 1 条启用中的转发指向已删除或未接入的 Peer')).toBeTruthy();
+    const disableBtn = screen.getByRole('button', { name: '停用失效转发' });
+    await userEvent.click(disableBtn);
+
+    await waitFor(() => {
+      expect(requests.some((item) => item.url.endsWith('/apps/port-forward/apply'))).toBe(true);
+    });
+    expect(currentApp.config.forwards[0]?.enabled).toBe(false);
   });
 });
