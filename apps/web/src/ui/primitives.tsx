@@ -452,6 +452,10 @@ export function useToast(): ToastApi {
   return api;
 }
 
+export function useOptionalToast(): ToastApi | null {
+  return useContext(ToastContext);
+}
+
 export function ToastContextProvider({
   value,
   children,

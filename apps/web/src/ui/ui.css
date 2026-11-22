@@ -4306,8 +4306,8 @@
   align-items: center;
   gap: var(--s-3);
   padding: var(--s25) var(--s3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--line);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-sm);
 }
@@ -4332,17 +4332,17 @@
   max-width: 100%;
   min-width: 0;
   padding: var(--s15) var(--s25);
-  color: var(--fg);
-  background: var(--bg-muted);
-  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   cursor: pointer;
   transition: background 140ms var(--ease), border-color 140ms var(--ease);
 }
 
 .ui-triage-chip:hover {
-  background: var(--bg-hover);
-  border-color: var(--line-strong);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
 }
 
 /* ============================== Hub 工作区单行清爽栏 ============================== */

@@ -49,11 +49,13 @@ import {
   type InstalledEntry,
 } from '../hosted-apps/recipes';
 import { DOMAIN_RE, parseEndpointPort, pickRecommendedListenPort } from './siteForm';
+import { HostFirewallPortAlert } from './HostFirewallPortAlert';
 
 export interface InstallAndPublishDrawerProps {
   hubId: string;
   hubName: string;
   node: Node | undefined;
+  hasHostOps?: boolean;
   certificates: Certificate[];
   existingSites: CaddySite[];
   offlineReason?: string;
@@ -77,6 +79,7 @@ export function InstallAndPublishDrawer({
   hubId,
   hubName,
   node,
+  hasHostOps = false,
   certificates,
   existingSites,
   offlineReason,
@@ -268,6 +271,15 @@ export function InstallAndPublishDrawer({
     !localPortConflict &&
     !certError &&
     localPort !== null;
+  const fwAlertEnabled = Boolean(
+    hasHostOps &&
+      !offlineReason &&
+      node?.accessMode !== 'tunnel' &&
+      !portInvalid &&
+      !portAgentConflict &&
+      !portConflict &&
+      listenPort !== null,
+  );
 
   const publishOnly = async (targetRecipe: CatalogRecipe, port: number, targetDomain: string, targetListenPort: number) => {
     setPhase('publishing');
@@ -699,6 +711,13 @@ export function InstallAndPublishDrawer({
                   />
                 </Field>
 
+                <HostFirewallPortAlert
+                  hubId={hubId}
+                  port={listenPort}
+                  enabled={fwAlertEnabled}
+                  appLabel={recipe?.name}
+                />
+
                 {existingSameSite && normalizedDomain ? (
                   <Banner
                     tone="info"
@@ -804,6 +823,15 @@ export function InstallAndPublishDrawer({
                 />
               );
             })() : null}
+
+            {phase === 'done' ? (
+              <HostFirewallPortAlert
+                hubId={hubId}
+                port={listenPort}
+                enabled={fwAlertEnabled}
+                appLabel={recipe?.name}
+              />
+            ) : null}
 
             {error ? <InlineError message={error} /> : null}
 

@@ -174,6 +174,7 @@ export interface SiteUpstreamView {
 /** 端口转发自身占用的监听端口，同样不能作为站点上游。 */
 export interface ForwardListenView {
   listenPort?: number | null;
+  port?: number | null;
 }
 
 /** 系统端口（<1024）一律不提供「发布为站点」。 */
@@ -272,13 +273,15 @@ export function unpublishedListeningPorts(
   }
   for (const forward of forwards) {
     if (isPortNumber(forward.listenPort)) occupied.add(forward.listenPort);
+    if (isPortNumber(forward.port)) occupied.add(forward.port);
   }
   const seen = new Set<number>();
   const result: ListeningPort[] = [];
   for (const item of parseListeningItems(ops)) {
     if (item.proto !== 'tcp' && item.proto !== 'tcp6') continue;
     if (item.port < MIN_PUBLISH_PORT || RESERVED_PUBLISH_PORTS.has(item.port)) continue;
-    if (item.process && item.process.toLowerCase().includes('caddy')) continue;
+    const proc = item.process?.toLowerCase();
+    if (proc && (proc.includes('caddy') || proc === 'socat')) continue;
     if (!isLocalListenAddress(item.address)) continue;
     if (occupied.has(item.port) || seen.has(item.port)) continue;
     seen.add(item.port);
