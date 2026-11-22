@@ -1191,7 +1191,7 @@ export default function SitesPage() {
     ...listeningColumnsBase,
     {
       key: 'publish',
-      type: 'text',
+      type: 'status',
       header: '',
       width: '18%',
       render: (row) => (
