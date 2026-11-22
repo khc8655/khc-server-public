@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { refreshHubRuntime } from '../../data/queries';
 import {
   applyWireGuardMode,
   nextModeTarget,
@@ -99,7 +100,7 @@ export function ModeSwitchDrawer({
       await waitForWireGuardMode(hubId, target);
       await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'mode'] });
       await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] });
-      await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] });
+      await refreshHubRuntime(queryClient, hubId);
       await onRefreshMode().catch(() => undefined);
       setSuccess(target);
     } catch (error) {

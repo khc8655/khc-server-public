@@ -1,14 +1,27 @@
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from 'react';
 import {
   useQuery,
   useQueryClient,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { NodeOverviewResponse, NodeStateResponse } from '@khc/contracts';
-import type { SnapshotObservation } from '../data/snapshot';
-import { deriveHubChannels, useHubChannels, type HubChannels } from '../data/channels';
+import type { Node, NodeOverviewResponse, NodeStateResponse } from '@khc/contracts';
+import { useHubSnapshot, type SnapshotObservation } from '../data/snapshot';
+import { deriveHubChannels, shouldRetryControlProbe, type HubChannels } from '../data/channels';
 import { fetchHubOverview } from '../data/hubs';
-import { hubOverviewQueryOptions, hubQueryOptions } from '../data/queries';
+import {
+  fillHubOverviewCaches,
+  hubOverviewQueryOptions,
+  hubStateQueryOptions,
+  refreshHubRuntime,
+  useMarkHubReachable,
+} from '../data/queries';
 import { setHubWriteGuard } from '../data/writeGuard';
 import { Banner, Button, Row } from '../ui';
 import { zh, fmt } from '../i18n/zh';
@@ -17,9 +30,11 @@ import { channelRows, connectionState } from '../apps/host-ops/connectionState';
 
 interface HubChannelsContextValue {
   hubId: string;
-  useOverview: boolean;
   stateQuery: UseQueryResult<NodeStateResponse, Error>;
   overviewQuery: UseQueryResult<NodeOverviewResponse, Error>;
+  runtimePending: boolean;
+  runtimeError: Error | null;
+  refreshRuntime: (opts?: { force?: boolean }) => Promise<void>;
   live: SnapshotObservation;
   channels: HubChannels;
 }
@@ -28,71 +43,99 @@ const HubChannelsContext = createContext<HubChannelsContextValue | null>(null);
 
 export function HubChannelsProvider({
   hubId,
-  useOverview = false,
   children,
 }: {
   hubId: string;
-  /** 概况页（/hubs/:id）走单请求聚合 /overview，并把 node 与 /state 回填进共享缓存 */
-  useOverview?: boolean;
   children: ReactNode;
 }) {
   const queryClient = useQueryClient();
-  // 节点列表状态只作为「探测未出结果时的参考」：控制面探测失败但列表仍在线时
-  // 保持 unknown，不能把未确认直接当成离线（否则与概况页状态互相矛盾）。
-  const hubQuery = useQuery({
-    ...hubQueryOptions(hubId),
-    enabled: Boolean(hubId) && !useOverview,
-  });
 
+  // 工作区单一取数入口：始终通过 /overview 获取节点详情、控制面状态与 D1 摘要，并回填共享缓存。
   const baseOverviewOptions = hubOverviewQueryOptions(hubId);
   const overviewQuery = useQuery({
     ...baseOverviewOptions,
     queryFn: async () => {
       const data = await fetchHubOverview(hubId);
-      queryClient.setQueryData(['hubs', hubId], data.node);
-      queryClient.setQueryData<NodeStateResponse>(['hubs', hubId, 'state'], {
-        reachable: data.reachable,
-        route: data.route,
-        via: data.via,
-        error: data.error,
-        ...(data.epochStale ? { epochStale: data.epochStale } : {}),
-        tls: data.tls,
-        state: data.state,
-      });
+      fillHubOverviewCaches(queryClient, hubId, data);
       return data;
     },
-    enabled: Boolean(hubId) && useOverview,
+    enabled: Boolean(hubId),
   });
 
   useEffect(() => {
     const data = overviewQuery.data;
-    if (!useOverview || !data) return;
-    queryClient.setQueryData(['hubs', hubId], data.node);
-    queryClient.setQueryData<NodeStateResponse>(['hubs', hubId, 'state'], {
-      reachable: data.reachable,
-      route: data.route,
-      via: data.via,
-      error: data.error,
-      ...(data.epochStale ? { epochStale: data.epochStale } : {}),
-      tls: data.tls,
-      state: data.state,
-    });
-  }, [hubId, overviewQuery.data, queryClient, useOverview]);
+    if (!data) return;
+    fillHubOverviewCaches(queryClient, hubId, data);
+  }, [hubId, overviewQuery.data, queryClient]);
 
-  const knownStatus = (overviewQuery.data?.node ?? hubQuery.data)?.status ?? null;
-  const baseChannels = useHubChannels(hubId, {
-    enabled: !useOverview,
+  // stateQuery 只作禁用状态缓存订阅（由 overview 回填），页面不得调用 stateQuery.refetch()。
+  const stateQuery = useQuery({
+    ...hubStateQueryOptions(hubId),
+    enabled: false,
+  });
+
+  const live = useHubSnapshot(hubId);
+  useMarkHubReachable(hubId, overviewQuery.data?.reachable);
+
+  const listHubStatus =
+    queryClient.getQueryData<Node[]>(['hubs'])?.find((node) => node.id === hubId)?.status ?? null;
+  const knownStatus = overviewQuery.data?.node?.status ?? listHubStatus;
+
+  const channels = deriveHubChannels({
+    controlReachable: overviewQuery.data?.reachable ?? stateQuery.data?.reachable ?? null,
+    controlError: overviewQuery.data?.error ?? stateQuery.data?.error ?? null,
+    live,
     knownStatus,
   });
 
-  const channels = useOverview
-    ? deriveHubChannels({
-        controlReachable: overviewQuery.data?.reachable ?? baseChannels.stateQuery.data?.reachable ?? null,
-        controlError: overviewQuery.data?.error ?? baseChannels.stateQuery.data?.error ?? null,
-        live: baseChannels.live,
-        knownStatus,
+  // D-03：控制面探测失败后，如果快照出现了新帧或请求异常恢复，有限自动补探 /overview（最多 3 次）。
+  const attempts = useRef(0);
+  useEffect(() => {
+    attempts.current = 0;
+  }, [hubId]);
+
+  const controlReachable = overviewQuery.data?.reachable;
+  const failed = overviewQuery.isError;
+  const hasLiveFrame =
+    (live.status === 'live' || live.status === 'stopped' || live.status === 'fallback') &&
+    live.snapshot !== null;
+  const lastFrameTs = live.snapshot?.ts ?? null;
+
+  useEffect(() => {
+    if (!hubId) return;
+    if (controlReachable === true || (!failed && controlReachable == null)) {
+      attempts.current = 0;
+      return;
+    }
+    if (
+      !shouldRetryControlProbe({
+        attempts: attempts.current,
+        controlReachable,
+        hasLiveFrame,
+        fetching: overviewQuery.isFetching,
+        failed,
       })
-    : baseChannels.channels;
+    ) {
+      return;
+    }
+    const retry = () => {
+      attempts.current += 1;
+      void overviewQuery.refetch();
+    };
+    if (failed && controlReachable !== false) {
+      const timer = setTimeout(retry, 1_500);
+      return () => clearTimeout(timer);
+    }
+    retry();
+  }, [
+    controlReachable,
+    failed,
+    hasLiveFrame,
+    hubId,
+    lastFrameTs,
+    overviewQuery.isFetching,
+    overviewQuery.refetch,
+  ]);
 
   const { canApply, control } = channels;
 
@@ -109,14 +152,24 @@ export function HubChannelsProvider({
     return () => setHubWriteGuard(null);
   }, [canApply, control.reachable, hubId]);
 
+  const refreshRuntime = useCallback(
+    async (opts?: { force?: boolean }) => {
+      if (!hubId) return;
+      await refreshHubRuntime(queryClient, hubId, opts);
+    },
+    [hubId, queryClient],
+  );
+
   return (
     <HubChannelsContext.Provider
       value={{
         hubId,
-        useOverview,
-        stateQuery: baseChannels.stateQuery,
+        stateQuery,
         overviewQuery,
-        live: baseChannels.live,
+        runtimePending: overviewQuery.isPending,
+        runtimeError: overviewQuery.error,
+        refreshRuntime,
+        live,
         channels,
       }}
     >
@@ -174,9 +227,8 @@ export function HubSnapshotNotice() {
 
 /** Hub 工作区顶部的只读提示；只在明确离线时出现，避免把「探测中」误报成离线。 */
 export function HubReadOnlyNotice() {
-  const { useOverview, channels, stateQuery, overviewQuery } = useHubChannelsContext();
+  const { channels, overviewQuery, refreshRuntime } = useHubChannelsContext();
   if (channels.presence !== 'offline') return null;
-  const activeQuery = useOverview ? overviewQuery : stateQuery;
   return (
     <Banner
       tone="danger"
@@ -186,8 +238,8 @@ export function HubReadOnlyNotice() {
         <Button
           label={zh.channels.retryControl}
           size="sm"
-          loading={activeQuery.isFetching}
-          onClick={() => void activeQuery.refetch()}
+          loading={overviewQuery.isFetching}
+          onClick={() => void refreshRuntime()}
         />
       }
     />

@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import type { AgentOps, SshKey } from '@khc/contracts';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { SshKey } from '@khc/contracts';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
+import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { fetchSshKeys } from '../../data/sshKeys';
 import { action, type ActionRef } from '../../registry/actions';
 import {
+  HOST_OPS_TARGET_SELF,
+  HostOpsQueryError,
   callHostOps,
+  hostOpsQueryKey,
+  hostOpsQueryOptions,
   normalizeCronList,
   normalizeKeys,
   normalizeLogErrors,
@@ -17,14 +22,11 @@ import {
   validateCronName,
   validateServiceUnit,
   type HostOpsCronEntry,
-  type HostOpsCronList,
   type HostOpsError,
   type HostOpsKey,
   type HostOpsLogEntry,
-  type HostOpsLogErrors,
   type HostOpsProcess,
   type HostOpsService,
-  type HostOpsVersion,
 } from '../../data/hostOps';
 import {
   Banner,
@@ -46,9 +48,19 @@ import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatBytes, formatPercent } from '../../i18n/format';
 import { businessProcesses, countSystemProcesses } from './processFilter';
 import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
-import { refreshAfterWrite } from './refreshAfterWrite';
+import { refreshAfterServiceWrite } from './refreshAfterWrite';
 import { isManagedUnit } from '../../data/managedUnits';
 import { serviceRowTone } from './serviceStatus';
+
+function queryHostOpsError(err: unknown): HostOpsError | null {
+  if (!err) return null;
+  if (err instanceof HostOpsQueryError) return err.hostOpsError;
+  return {
+    code: 'request_failed',
+    message: err instanceof Error ? err.message : String(err),
+    details: null,
+  };
+}
 
 /** 一次抓取的进程条数上限（够覆盖业务视图，又不至于让快照过重）。 */
 const PROCESS_FETCH_LIMIT = 200;
@@ -58,7 +70,7 @@ const PROCESS_DISPLAY_LIMIT = 20;
 /* ------------------------------------------------------------------ 服务段 */
 
 /**
- * 服务段（#E1）：进入分段时经 svc.list 实时读取 running/failed 单元；
+ * 服务段（#E1）：进入分段时经 svc.list（30s React Query 缓存）读取 running/failed 单元；
  * 行内「重启」L2 确认（危险操作级别不降低）、「日志」进页面级抽屉（svc.logs 尾读）。
  */
 export function ServicesSegment({
@@ -70,52 +82,53 @@ export function ServicesSegment({
   disabled: boolean;
   onOpenLogs: (unit: string) => void;
 }) {
-  const [services, setServices] = useState<HostOpsService[] | undefined>(undefined);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [actionError, setActionError] = useState<HostOpsError | null>(null);
   const [restartTarget, setRestartTarget] = useState<HostOpsService | null>(null);
   // 清除失败状态的目标（U2）。与重启分开：两个确认框文案和后果完全不同。
   const [resetTarget, setResetTarget] = useState<HostOpsService | null>(null);
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { live } = useHubChannelsContext();
 
-  const load = async () => {
+  const svcQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.list', {}),
+    enabled: !disabled,
+  });
+
+  const services = useMemo(
+    () => (svcQuery.data ? normalizeServices(svcQuery.data.data) : undefined),
+    [svcQuery.data],
+  );
+  const error = actionError ?? queryHostOpsError(svcQuery.error);
+  const loading = svcQuery.isFetching;
+  const showSkeleton = svcQuery.isPending && svcQuery.isFetching && services === undefined;
+
+  const reload = async () => {
     if (disabled) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await callHostOps(hubId, 'self', 'svc.list');
-      if (!result.ok) setError(result.error);
-      else setServices(normalizeServices(result.data));
-    } finally {
-      setLoading(false);
-    }
+    setActionError(null);
+    await svcQuery.refetch();
   };
-
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disabled]);
 
   const restart = async (service: HostOpsService) => {
     const result = await callHostOps(hubId, 'self', 'svc.restart', { unit: service.unit });
     if (!result.ok) {
-      if (result.error) setError(result.error);
+      if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
     }
+    setActionError(null);
     setRestartTarget(null);
     toast.show({ message: fmt(zh.hostOps.svc.restarted, { unit: service.unit }) });
-    // 写成功后两处一起刷新：服务清单 + /state（状态带与概况页的失败计数来源）。
-    await refreshAfterWrite(queryClient, hubId);
-    await load();
+    // 写成功后只刷新服务清单与轻量快照失败计数（避开 Worker 2s 去重），不重拉整份 /state。
+    await refreshAfterServiceWrite(queryClient, hubId, live);
   };
 
   const resetFailed = async (service: HostOpsService) => {
     const result = await callHostOps(hubId, 'self', 'svc.reset-failed', { unit: service.unit });
     if (!result.ok) {
-      if (result.error) setError(result.error);
+      if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
     }
+    setActionError(null);
     setResetTarget(null);
     const stillFailed = (result.data as { stillFailed?: boolean } | undefined)?.stillFailed === true;
     // 单元仍在失败循环时要说清楚：清了标记不等于修好了，别让用户以为万事大吉。
@@ -124,8 +137,7 @@ export function ServicesSegment({
         ? fmt(zh.hostOps.svc.resetFailedStill, { unit: service.unit })
         : fmt(zh.hostOps.svc.resetFailedDone, { unit: service.unit }),
     });
-    await refreshAfterWrite(queryClient, hubId);
-    await load();
+    await refreshAfterServiceWrite(queryClient, hubId, live);
   };
 
   // 失败单元里有多少是发行版自带的（面板不管启动逻辑，只提示不改色）。
@@ -161,8 +173,8 @@ export function ServicesSegment({
 
   return (
     <Stack gap={3}>
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
-      {loading && services === undefined ? (
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void reload()} /> : null}
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -210,7 +222,7 @@ export function ServicesSegment({
           loading={loading}
           disabled={disabled}
           disabledReason={disabled ? zh.channels.controlFailed : undefined}
-          onClick={() => void load()}
+          onClick={() => void reload()}
         />
       </Row>
 
@@ -258,36 +270,38 @@ export function CronSegment({
   hubId,
   disabled,
   onEdit,
-  reloadToken,
 }: {
   hubId: string;
   disabled: boolean;
   onEdit: (entry: HostOpsCronEntry | null) => void;
-  reloadToken: number;
 }) {
-  const [list, setList] = useState<HostOpsCronList | undefined>(undefined);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [actionError, setActionError] = useState<HostOpsError | null>(null);
   const [removeTarget, setRemoveTarget] = useState<HostOpsCronEntry | null>(null);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
-  const load = async () => {
+  const cronQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'cron.list', {}),
+    enabled: !disabled,
+  });
+  const list = useMemo(
+    () => (cronQuery.data ? normalizeCronList(cronQuery.data.data) : undefined),
+    [cronQuery.data],
+  );
+  const error = actionError ?? queryHostOpsError(cronQuery.error);
+  const loading = cronQuery.isFetching;
+  const showSkeleton = cronQuery.isPending && cronQuery.isFetching && list === undefined;
+
+  const reload = async () => {
     if (disabled) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await callHostOps(hubId, 'self', 'cron.list');
-      if (!result.ok) setError(result.error);
-      else setList(normalizeCronList(result.data));
-    } finally {
-      setLoading(false);
-    }
+    setActionError(null);
+    await cronQuery.refetch();
   };
 
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadToken, disabled]);
+  const invalidateCronList = () =>
+    queryClient.invalidateQueries({
+      queryKey: hostOpsQueryKey(hubId, HOST_OPS_TARGET_SELF, 'cron.list', {}),
+    });
 
   const remove = async (entry: HostOpsCronEntry) => {
     const result = await callHostOps(hubId, 'self', 'cron.set', {
@@ -295,12 +309,13 @@ export function CronSegment({
       remove: true,
     });
     if (!result.ok) {
-      if (result.error) setError(result.error);
+      if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
     }
+    setActionError(null);
     setRemoveTarget(null);
     toast.show({ message: fmt(zh.hostOps.cron.removed, { name: entry.name }) });
-    await load();
+    await invalidateCronList();
   };
 
   const toggle = async (entry: HostOpsCronEntry) => {
@@ -309,16 +324,17 @@ export function CronSegment({
       enabled: !entry.enabled,
     });
     if (!result.ok) {
-      if (result.error) setError(result.error);
+      if (result.error) setActionError(result.error);
       return;
     }
+    setActionError(null);
     toast.show({
       message: fmt(
         !entry.enabled ? zh.hostOps.cron.enabled : zh.hostOps.cron.disabled,
         { name: entry.name },
       ),
     });
-    await load();
+    await invalidateCronList();
   };
 
   const columns: ColumnDef<HostOpsCronEntry>[] = [
@@ -360,8 +376,8 @@ export function CronSegment({
           title={fmt(zh.hostOps.cron.foreignFiles, { count: String(list.unmanaged.length) })}
         />
       ) : null}
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
-      {loading && list === undefined ? (
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void reload()} /> : null}
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -397,7 +413,7 @@ export function CronSegment({
           loading={loading}
           disabled={disabled}
           disabledReason={disabled ? zh.channels.controlFailed : undefined}
-          onClick={() => void load()}
+          onClick={() => void reload()}
         />
         <Button
           label={zh.actions['hostOps.cronAdd']}
@@ -535,33 +551,23 @@ export function CronEntryForm({
 
 /* ------------------------------------------------------------ svc 日志抽屉 */
 
-/** 服务日志面板（#E1）：挂载即经 svc.logs 尾读 200 行（journalctl short-iso）。 */
+/** 服务日志面板（#E1）：挂载即经 svc.logs（30s React Query 缓存）尾读 200 行（journalctl short-iso）。 */
 export function SvcLogsPanel({ hubId, unit }: { hubId: string; unit: string }) {
-  const [logs, setLogs] = useState<{ unit: string; lines: string[] } | undefined>(undefined);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await callHostOps(hubId, 'self', 'svc.logs', { unit, lines: 200 });
-      if (!result.ok) setError(result.error);
-      else setLogs(normalizeSvcLogs(result.data));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unit]);
+  const logsQuery = useQuery(
+    hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.logs', { unit, lines: 200 }),
+  );
+  const logs = useMemo(
+    () => (logsQuery.data ? normalizeSvcLogs(logsQuery.data.data) : undefined),
+    [logsQuery.data],
+  );
+  const error = queryHostOpsError(logsQuery.error);
+  const loading = logsQuery.isFetching;
+  const showSkeleton = logsQuery.isPending && logsQuery.isFetching && logs === undefined;
 
   return (
     <Stack gap={3}>
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
-      {loading && logs === undefined ? (
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void logsQuery.refetch()} /> : null}
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -575,7 +581,13 @@ export function SvcLogsPanel({ hubId, unit }: { hubId: string; unit: string }) {
         />
       ) : null}
       <Row gap={2}>
-        <Button label={zh.common.refresh} icon="refresh" size="sm" loading={loading} onClick={() => void load()} />
+        <Button
+          label={zh.common.refresh}
+          icon="refresh"
+          size="sm"
+          loading={loading}
+          onClick={() => void logsQuery.refetch()}
+        />
       </Row>
     </Stack>
   );
@@ -609,43 +621,36 @@ export function ProcessesSegment({
   onSortChange: (sort: 'cpu' | 'mem') => void;
   onOpenProcess: (process: HostOpsProcess, hostUptime: number | null) => void;
 }) {
-  const [processes, setProcesses] = useState<HostOpsProcess[] | undefined>(undefined);
   const [scope, setScope] = useState<'business' | 'all'>('business');
-  const [hostUptime, setHostUptime] = useState<number | null>(null);
-  const [readOnly, setReadOnly] = useState(false);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  const load = async (nextSort: 'cpu' | 'mem') => {
-    if (disabled) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const snapshot = await callHostOps(hubId, 'self', 'snapshot', {
-        processes: true,
-        sort: nextSort,
-        // 取比展示上限更多的进程：先按 CPU/内存排序再去掉系统进程，
-        // 若只取 20 条，满载机器上业务进程（如 caddy，CPU≈0）会被内核线程挤掉，
-        // 「只看业务进程」于是显示「当前没有业务进程」——2026-11-20 走查在 aws-hui-us 复现。
-        limit: PROCESS_FETCH_LIMIT,
-      });
-      if (snapshot.ok) {
-        const status = normalizeStatus(snapshot.data);
-        setReadOnly(normalizeVersion(snapshot.data).root === false);
-        setHostUptime(status.uptime);
-        setProcesses(normalizeProcesses(snapshot.data));
-      } else {
-        setError(snapshot.error);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const snapQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'snapshot', {
+      processes: true,
+      sort,
+      // 取比展示上限更多的进程：先按 CPU/内存排序再去掉系统进程，
+      // 若只取 20 条，满载机器上业务进程（如 caddy，CPU≈0）会被内核线程挤掉，
+      // 「只看业务进程」于是显示「当前没有业务进程」——2026-11-20 走查在 aws-hui-us 复现。
+      limit: PROCESS_FETCH_LIMIT,
+    }),
+    enabled: !disabled,
+  });
 
-  useEffect(() => {
-    void load(sort);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort, disabled]);
+  const snapshotData = snapQuery.data?.data;
+  const processes = useMemo(
+    () => (snapshotData !== undefined ? normalizeProcesses(snapshotData) : undefined),
+    [snapshotData],
+  );
+  const hostUptime = useMemo(
+    () => (snapshotData !== undefined ? normalizeStatus(snapshotData).uptime : null),
+    [snapshotData],
+  );
+  const readOnly = useMemo(
+    () => (snapshotData !== undefined ? normalizeVersion(snapshotData).root === false : false),
+    [snapshotData],
+  );
+  const error = queryHostOpsError(snapQuery.error);
+  const loading = snapQuery.isFetching;
+  const showSkeleton = snapQuery.isPending && snapQuery.isFetching && processes === undefined;
 
   // 系统进程数是真实计数：业务视图下即真实隐藏数；「显示全部」时隐藏数为 0。
   const systemCount = processes ? countSystemProcesses(processes) : 0;
@@ -706,7 +711,7 @@ export function ProcessesSegment({
   return (
     <Stack gap={3}>
       {readOnly ? <Banner tone="neutral" title={zh.hostOps.process.readOnly} /> : null}
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load(sort)} /> : null}
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void snapQuery.refetch()} /> : null}
       <Row gap={3} wrap>
         <Segmented
           value={sort}
@@ -733,7 +738,7 @@ export function ProcessesSegment({
           loading={loading}
           disabled={disabled}
           disabledReason={disabled ? zh.channels.controlFailed : undefined}
-          onClick={() => void load(sort)}
+          onClick={() => void snapQuery.refetch()}
         />
       </Row>
       {processes ? (
@@ -743,7 +748,7 @@ export function ProcessesSegment({
             : fmt(zh.hostOps.process.filterAllHint, { count: String(systemCount) })}
         </p>
       ) : null}
-      {loading && processes === undefined ? (
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -761,7 +766,7 @@ export function ProcessesSegment({
           title:
             scope === 'business' && processes ? zh.hostOps.process.emptyBusiness : zh.hostOps.process.empty,
           action: disabled ? undefined : (
-            <Button label={zh.common.retry} size="sm" onClick={() => void load(sort)} />
+            <Button label={zh.common.retry} size="sm" onClick={() => void snapQuery.refetch()} />
           ),
         }}
       />
@@ -773,62 +778,64 @@ export function ProcessesSegment({
 
 /**
  * SSH 公钥段（ui-redesign §4）：列表 + 行内移除（页面级确认）；
- * 添加表单进入页面级唯一抽屉（key-add），添加成功后通过 reloadToken 刷新。
+ * 添加表单进入页面级唯一抽屉（key-add），添加成功后失效 keys.list 缓存刷新。
  */
 export function KeysSegment({
   hubId,
   disabled,
   onAdd,
-  reloadToken,
 }: {
   hubId: string;
   disabled: boolean;
   onAdd: () => void;
-  reloadToken: number;
 }) {
-  const [keys, setKeys] = useState<HostOpsKey[] | undefined>(undefined);
-  const [version, setVersion] = useState<HostOpsVersion | null>(null);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [actionError, setActionError] = useState<HostOpsError | null>(null);
   const [removeTarget, setRemoveTarget] = useState<HostOpsKey | null>(null);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
-  const load = async () => {
-    if (disabled) return;
-    setLoading(true);
-    setError(null);
-    try {
-      // 两个调用互不依赖，并行发出去（串行时总耗时是两者之和）。
-      const [versionResult, keysResult] = await Promise.all([
-        callHostOps(hubId, 'self', 'version'),
-        callHostOps(hubId, 'self', 'keys.list', {}),
-      ]);
-      if (versionResult.ok) setVersion(normalizeVersion(versionResult.data));
-      if (!keysResult.ok) setError(keysResult.error);
-      else setKeys(normalizeKeys(keysResult.data));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const versionQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'version', {}),
+    enabled: !disabled,
+  });
+  const keysQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'keys.list', {}),
+    enabled: !disabled,
+  });
 
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadToken, disabled]);
-
+  const version = useMemo(
+    () => (versionQuery.data ? normalizeVersion(versionQuery.data.data) : null),
+    [versionQuery.data],
+  );
+  const keys = useMemo(
+    () => (keysQuery.data ? normalizeKeys(keysQuery.data.data) : undefined),
+    [keysQuery.data],
+  );
+  const error = actionError ?? queryHostOpsError(keysQuery.error);
+  const loading = keysQuery.isFetching || versionQuery.isFetching;
+  const showSkeleton = keysQuery.isPending && keysQuery.isFetching && keys === undefined;
   const readOnly = version?.root === false;
+
+  const reload = async () => {
+    if (disabled) return;
+    setActionError(null);
+    await Promise.all([versionQuery.refetch(), keysQuery.refetch()]);
+  };
 
   const remove = async (key: HostOpsKey) => {
     const result = await callHostOps(hubId, 'self', 'keys.remove', {
       fingerprint: key.fingerprint,
     });
     if (!result.ok) {
-      if (result.error) setError(result.error);
+      if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
     }
+    setActionError(null);
     setRemoveTarget(null);
     toast.show({ message: zh.hostOps.keys.removed });
-    await load();
+    await queryClient.invalidateQueries({
+      queryKey: hostOpsQueryKey(hubId, HOST_OPS_TARGET_SELF, 'keys.list', {}),
+    });
   };
 
   const columns: ColumnDef<HostOpsKey>[] = [
@@ -873,8 +880,8 @@ export function KeysSegment({
   return (
     <Stack gap={3}>
       {readOnly ? <Banner tone="warn" title={zh.hostOps.keys.noPriv} /> : null}
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
-      {loading && keys === undefined ? (
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void reload()} /> : null}
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -905,7 +912,7 @@ export function KeysSegment({
           loading={loading}
           disabled={disabled}
           disabledReason={disabled ? zh.channels.controlFailed : undefined}
-          onClick={() => void load()}
+          onClick={() => void reload()}
         />
         <Button
           label={zh.actions['hostOps.keyAdd']}
@@ -1092,27 +1099,22 @@ function SystemErrorsSegment({
   hubId: string;
   disabled: boolean;
 }) {
-  const [logs, setLogs] = useState<HostOpsLogErrors | undefined>(undefined);
-  const [error, setError] = useState<HostOpsError | null>(null);
-  const [loading, setLoading] = useState(false);
+  const logsQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'logs.errors', {}),
+    enabled: !disabled,
+  });
+  const logs = useMemo(
+    () => (logsQuery.data ? normalizeLogErrors(logsQuery.data.data) : undefined),
+    [logsQuery.data],
+  );
+  const error = queryHostOpsError(logsQuery.error);
+  const loading = logsQuery.isFetching;
+  const showSkeleton = logsQuery.isPending && logsQuery.isFetching && logs === undefined && !error;
 
-  const load = async () => {
+  const reload = async () => {
     if (disabled) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await callHostOps(hubId, 'self', 'logs.errors');
-      if (!result.ok) setError(result.error);
-      else setLogs(normalizeLogErrors(result.data));
-    } finally {
-      setLoading(false);
-    }
+    await logsQuery.refetch();
   };
-
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disabled]);
 
   const columns: ColumnDef<HostOpsLogEntry>[] = [
     {
@@ -1141,8 +1143,8 @@ function SystemErrorsSegment({
 
   return (
     <Stack gap={3}>
-      {error ? <HostOpsErrorBanner error={error} onRetry={() => void load()} /> : null}
-      {loading && logs === undefined && !error ? (
+      {error ? <HostOpsErrorBanner error={error} onRetry={() => void reload()} /> : null}
+      {showSkeleton ? (
         <Stack gap={2}>
           <Skeleton height={10} />
           <Skeleton height={10} />
@@ -1179,7 +1181,7 @@ function SystemErrorsSegment({
           loading={loading}
           disabled={disabled}
           disabledReason={disabled ? zh.channels.controlFailed : undefined}
-          onClick={() => void load()}
+          onClick={() => void reload()}
         />
       </Row>
     </Stack>

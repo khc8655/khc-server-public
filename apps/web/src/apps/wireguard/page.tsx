@@ -16,7 +16,7 @@ import {
   type PeerSiteImpact,
 } from '../../data/sites';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
-import { hubAppsQueryOptions, hubQueryOptions, hubsQueryOptions } from '../../data/queries';
+import { hubAppsQueryOptions, hubQueryOptions, hubsQueryOptions, refreshHubRuntime } from '../../data/queries';
 import {
   WIREGUARD_APP,
   clientConfigText,
@@ -295,7 +295,7 @@ export default function WireGuardPage() {
   const toast = useToast();
   const search = useSearch({ strict: false }) as { drawer?: string };
 
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const configQuery = useQuery(wireGuardConfigQueryOptions(hubId));
   const modeQuery = useQuery(nodeModeQueryOptions(hubId));
@@ -400,7 +400,7 @@ export default function WireGuardPage() {
   };
 
   const invalidateState = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] });
+    await refreshHubRuntime(queryClient, hubId);
   };
 
   const applyNow = async () => {

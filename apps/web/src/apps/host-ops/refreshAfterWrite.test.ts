@@ -1,57 +1,67 @@
 /**
- * 写操作成功后的刷新（2026-11-16 §5 / N-3）。
- *
- * 回归目标：状态带「服务 N 个失败」来自打开页面时的 `/state`，重启成功后只重拉了
- * `svc.list`，计数停在旧值。真机还发现 Agent 侧 ops 有 5 秒缓存，单纯 invalidate
- * 仍会读到旧值 —— 所以必须带 force=1 重新拉取。
+ * 主机运维服务写操作精确刷新单测（2026-11-16 §5 / B2 收敛）：
+ * - 失效 `svc.list` 的 React Query 缓存；
+ * - 刷新轻量 `/snapshot` 失败计数（`live.refresh()`），不再重拉整份 `/state` 或 `/overview`；
+ * - 距上次快照不足 2.1s 时延迟到满 2.1s 再调用，避开 Worker 2s 同节点去重返回旧帧。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { hubStateQueryKey, refreshAfterWrite } from './refreshAfterWrite';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HOST_OPS_TARGET_SELF, hostOpsQueryKey } from '../../data/hostOps';
+import { SNAPSHOT_DEDUPE_DELAY_MS, refreshAfterServiceWrite } from './refreshAfterWrite';
 
-const fetchHubState = vi.fn();
-vi.mock('../../data/hubs', () => ({
-  fetchHubState: (...args: unknown[]) => fetchHubState(...args),
-}));
-
-beforeEach(() => {
-  fetchHubState.mockReset();
-});
-
-describe('hubStateQueryKey', () => {
-  it('与 hubStateQueryOptions 同口径（hubs / <id> / state）', () => {
-    expect(hubStateQueryKey('hub-1')).toEqual(['hubs', 'hub-1', 'state']);
+describe('refreshAfterServiceWrite', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
   });
 
-  it('不同节点不串键', () => {
-    expect(hubStateQueryKey('a')).not.toEqual(hubStateQueryKey('b'));
-  });
-});
-
-describe('refreshAfterWrite', () => {
-  it('带 force=1 重新拉 /state 并写入缓存（绕过 Agent 5 秒缓存）', async () => {
-    const state = { ok: true, state: { ops: { services: { failedUnits: [] } } } };
-    fetchHubState.mockResolvedValue(state);
-    const setQueryData = vi.fn();
-    const invalidateQueries = vi.fn();
-
-    await refreshAfterWrite({ setQueryData, invalidateQueries }, 'hub-1');
-
-    // 关键：必须带 force，否则会落进 Agent 的缓存窗口
-    expect(fetchHubState).toHaveBeenCalledWith('hub-1', { force: true });
-    expect(setQueryData).toHaveBeenCalledWith(['hubs', 'hub-1', 'state'], state);
-    expect(invalidateQueries).not.toHaveBeenCalled();
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('拉取失败时退回 invalidate，不把异常抛给写操作收尾', async () => {
-    fetchHubState.mockRejectedValue(new Error('boom'));
-    const setQueryData = vi.fn();
+  it('精确失效 svc.list 并在距上次快照已满 2.1s 时立即调 live.refresh()', async () => {
     const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn();
 
-    await expect(
-      refreshAfterWrite({ setQueryData, invalidateQueries }, 'hub-1'),
-    ).resolves.toBeUndefined();
+    await refreshAfterServiceWrite(
+      { invalidateQueries },
+      'hub-1',
+      { lastAt: 10_000 - SNAPSHOT_DEDUPE_DELAY_MS - 100, refresh },
+      () => 10_000,
+    );
 
-    expect(setQueryData).not.toHaveBeenCalled();
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['hubs', 'hub-1', 'state'] });
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: hostOpsQueryKey('hub-1', HOST_OPS_TARGET_SELF, 'svc.list', {}),
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('距上次快照不足 2.1s 时，延迟到满 2.1s 再调用 live.refresh() 避开 Worker 去重', async () => {
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn();
+
+    // 仅过了 500ms，还差 1_600ms 才到 2_100ms
+    await refreshAfterServiceWrite(
+      { invalidateQueries },
+      'hub-1',
+      { lastAt: 9_500, refresh },
+      () => 10_000,
+    );
+
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_599);
+    expect(refresh).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('首次无 lastAt 记录时直接调 live.refresh()', async () => {
+    const invalidateQueries = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn();
+
+    await refreshAfterServiceWrite({ invalidateQueries }, 'hub-1', { lastAt: null, refresh });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

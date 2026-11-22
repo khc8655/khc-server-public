@@ -142,6 +142,17 @@ let mode: 'issue' | 'error' | 'ok' | 'offline' | 'pending' | 'pending_apply' = '
 let truncated = false;
 let requests: { url: string; init?: RequestInit }[] = [];
 
+const emptyOverview = {
+  apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+  peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+  forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+  accessCert: { daysLeft: null, tlsState: 'none' },
+  host: null,
+  managedServices: [],
+  failedUnits: null,
+};
+
 function mockApi() {
   mode = 'issue';
   truncated = false;
@@ -154,13 +165,15 @@ function mockApi() {
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
       if (url === '/api/v1/nodes') return json({ nodes: [node] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node });
-      if (url === '/api/v1/nodes/tyo-1/state') {
+      if (url === '/api/v1/nodes/tyo-1/overview') {
         return json({
+          node,
           reachable: true,
           route: 'direct',
           via: 'fetch',
           error: null,
           state: { host: { hostname: 'hub-tyo' }, adapters: [], ports: [] },
+          overview: emptyOverview,
         });
       }
       if (url === '/api/v1/nodes/tyo-1/apps') {

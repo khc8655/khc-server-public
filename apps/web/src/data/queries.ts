@@ -1,7 +1,7 @@
 /** React Query 查询：唯一允许调用 API 的目录。 */
 import { useEffect } from 'react';
-import { queryOptions, useQueryClient } from '@tanstack/react-query';
-import type { Node } from '@khc/contracts';
+import { queryOptions, type QueryClient, useQueryClient } from '@tanstack/react-query';
+import type { Node, NodeOverviewResponse, NodeStateResponse } from '@khc/contracts';
 import { fetchAppConfig, fetchRevisions } from './apps';
 import { meQueryOptions } from './auth';
 import { fetchHub, fetchHubApps, fetchHubOverview, fetchHubState, fetchHubs } from './hubs';
@@ -62,6 +62,43 @@ export const revisionsQueryOptions = (hubId: string, app: string) =>
     staleTime: 5_000,
     enabled: Boolean(hubId && app),
   });
+
+/** 将 `/overview` 返回的节点与控制面状态回填进共享缓存，消除额外 `/nodes/:id` 与 `/state` 请求。 */
+export function fillHubOverviewCaches(
+  queryClient: Pick<QueryClient, 'setQueryData'>,
+  hubId: string,
+  data: NodeOverviewResponse,
+): void {
+  queryClient.setQueryData(['hubs', hubId], data.node);
+  queryClient.setQueryData<NodeStateResponse>(['hubs', hubId, 'state'], {
+    reachable: data.reachable,
+    route: data.route,
+    via: data.via,
+    error: data.error,
+    ...(data.epochStale ? { epochStale: data.epochStale } : {}),
+    tls: data.tls,
+    state: data.state,
+  });
+}
+
+/** 写操作后统一刷新工作区运行态（仅经 `/overview`，并回填共享缓存）。 */
+export async function refreshHubRuntime(
+  queryClient: Pick<QueryClient, 'invalidateQueries' | 'setQueryData'>,
+  hubId: string,
+  opts?: { force?: boolean },
+): Promise<void> {
+  if (opts?.force) {
+    try {
+      const fresh = await fetchHubOverview(hubId, { force: true });
+      queryClient.setQueryData(['hubs', hubId, 'overview'], fresh);
+      fillHubOverviewCaches(queryClient, hubId, fresh);
+      return;
+    } catch {
+      // force 直拉失败时退回失效，由挂载中的 Provider 重试。
+    }
+  }
+  await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'overview'] });
+}
 
 
 
