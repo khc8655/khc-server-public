@@ -10,6 +10,7 @@ import { D1TunnelRepo } from './db/d1/tunnels';
 import { HttpAgentClient } from './lib/node-client';
 import type { FetchLike, TcpFetchLike } from './lib/node-client';
 import { instrumentD1 } from './lib/timing';
+import { createSessionAwareD1 } from './lib/d1-session';
 import type { Env } from './types';
 
 export interface WorkerRuntime {
@@ -32,7 +33,8 @@ export interface WorkerRuntimeOptions {
 const runtimeByBinding = new WeakMap<object, WorkerRuntime>();
 
 function buildRuntime(env: Env, options: WorkerRuntimeOptions): WorkerRuntime {
-  const db = instrumentD1(env.DB);
+  // 外层 instrumentD1 统计 D1 时长，内层 createSessionAwareD1 将请求路由到 AsyncLocalStorage 会话
+  const db = instrumentD1(createSessionAwareD1(env.DB));
   const nodes = new D1NodeRepo(db);
   // §3.8：preferred_route 是节点创建/配置时选定的接入方案，运行时只走该方案，
   // 不再回写 D1；故不再构造 onRouteSuccess 回调。

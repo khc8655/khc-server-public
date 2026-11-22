@@ -33,35 +33,54 @@ interface BoundStatement {
   run(): Promise<{ success: true }>;
 }
 
-function boundApi(stmt: RawStatement, sql: string, params: unknown[]): BoundStatement {
-  return {
+export interface MockD1Options {
+  /** 每次调用 withSession 时触发，供测试断言传入的约束或 bookmark。 */
+  onWithSession?: (
+    constraintOrBookmark: string | undefined,
+    session: D1DatabaseSession,
+  ) => void;
+}
+
+function createQueryRunner(
+  raw: RawDatabase,
+  onExecuted?: () => void,
+): {
+  prepare(sql: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(sql: string): Promise<D1ExecResult>;
+} {
+  const wrapBound = (stmt: RawStatement, sql: string, params: unknown[]): BoundStatement => ({
     __sql: sql,
     __params: params,
-    first: async <T>(): Promise<T | null> => (stmt.get(...params) ?? null) as T | null,
-    all: async <T>(): Promise<{ results: T[] }> => ({
-      results: stmt.all(...params) as T[],
-    }),
+    first: async <T>(): Promise<T | null> => {
+      onExecuted?.();
+      return (stmt.get(...params) ?? null) as T | null;
+    },
+    all: async <T>(): Promise<{ results: T[] }> => {
+      onExecuted?.();
+      return { results: stmt.all(...params) as T[] };
+    },
     run: async () => {
+      onExecuted?.();
       stmt.run(...params);
       return { success: true as const };
     },
-  };
-}
+  });
 
-export function toD1(raw: RawDatabase): D1Database {
-  const d1 = {
+  return {
     prepare(sql: string) {
       const stmt = raw.prepare(sql);
       return {
-        ...boundApi(stmt, sql, []),
-        bind: (...params: unknown[]) => boundApi(stmt, sql, params),
-      };
+        ...wrapBound(stmt, sql, []),
+        bind: (...params: unknown[]) => wrapBound(stmt, sql, params),
+      } as unknown as D1PreparedStatement;
     },
-    batch: async (statements: BoundStatement[]): Promise<unknown[]> => {
+    batch: async <T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> => {
+      onExecuted?.();
       // D1 batch 是隐式事务：任一语句失败，整批回滚
       raw.exec('BEGIN');
       try {
-        for (const statement of statements) {
+        for (const statement of statements as unknown as BoundStatement[]) {
           raw.prepare(statement.__sql).run(...statement.__params);
         }
         raw.exec('COMMIT');
@@ -69,7 +88,38 @@ export function toD1(raw: RawDatabase): D1Database {
         raw.exec('ROLLBACK');
         throw error;
       }
-      return statements.map(() => ({ success: true }));
+      return statements.map(() => ({ success: true }) as unknown as D1Result<T>);
+    },
+    exec: async (sql: string): Promise<D1ExecResult> => {
+      onExecuted?.();
+      raw.exec(sql);
+      return { count: 1, duration: 0 };
+    },
+  };
+}
+
+export function toD1(raw: RawDatabase, options: MockD1Options = {}): D1Database {
+  const rootRunner = createQueryRunner(raw);
+  let bookmarkSeq = 0;
+
+  const d1 = {
+    prepare: rootRunner.prepare,
+    batch: rootRunner.batch,
+    exec: rootRunner.exec,
+    withSession(constraintOrBookmark?: D1SessionBookmark | D1SessionConstraint): D1DatabaseSession {
+      let currentBookmark: string | null = null;
+      const sessionRunner = createQueryRunner(raw, () => {
+        bookmarkSeq += 1;
+        currentBookmark = `00000001-00000000-00000000-${String(bookmarkSeq).padStart(8, '0')}`;
+      });
+      const session: D1DatabaseSession & { exec(sql: string): Promise<D1ExecResult> } = {
+        prepare: sessionRunner.prepare,
+        batch: sessionRunner.batch,
+        exec: sessionRunner.exec,
+        getBookmark: () => currentBookmark,
+      };
+      options.onWithSession?.(constraintOrBookmark, session);
+      return session;
     },
   };
   return d1 as unknown as D1Database;
