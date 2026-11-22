@@ -1,6 +1,6 @@
 # 故障排查手册（troubleshooting）
 
-> 状态：现行 ｜ 最后核验：2026-11-10 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`
 > 范围：控制面（Worker/面板）与 Agent 的线上故障排查；按症状组织，每节 = 症状 → 判定链 → 处置 → 验证
 
 ## 1. Agent 离线 / 节点不可达
@@ -33,7 +33,7 @@ sudo systemctl list-timers 'khc-fw-*'    # 看回滚定时器是否还在
 sudo nft delete table inet khc_fw        # 兜底：整表删除（Agent 侧 state 会在下次操作时复位）
 ```
 
-云防火墙（Lightsail/Oracle 控制台）与机内 nftables 是两层，排查时先分清在哪一层拦的。历史上保护端口硬编码 8880 与 hub 实际 8443 不符的问题已修复（P1-B）；如再遇「deny 自己入口端口却没报 E_LOCKOUT」，优先检查 Agent 进程是否在运行（保护端口靠 `/proc` 实测，Agent 没跑就没有固定保护端口）。
+云防火墙（Lightsail/Oracle 控制台）与机内 nftables 是两层，排查时先分清在哪一层拦的。在面板应用抽屉（`SiteDrawer` 与 `InstallAndPublishDrawer` 第 2/3 步）配置对外端口时也会联动检查 `fw.show` 并支持原地一键放行 TCP 端口。历史上保护端口硬编码 8880 与 hub 实际 8443 不符的问题已修复（P1-B）；如再遇「deny 自己入口端口却没报 E_LOCKOUT」，优先检查 Agent 进程是否在运行（保护端口靠 `/proc` 实测，Agent 没跑就没有固定保护端口）。
 
 ## 3. host-ops keys.* 失败（家目录不可见）
 
@@ -75,6 +75,7 @@ sudo /var/lib/khc-agent/host-ops/khc-host keys.list              # 绕过 Agent 
 5. **apply 后状态校验**（feat/server-capabilities，`6816fd5`）：wg apply 完成后 Agent 校验接口存在（`ip link`）与 peer 数量（兼容轮换 overlay 的双记录）；unit 未起会先在同一次操作内尝试启动（幂等安全）。校验失败抛 `code=wg_verify_failed`，错误信息明确"哪一步没生效 + 下一步做什么"（journalctl / ip link / wg show）。面板收到的 `ApplyFailed.message` 会带具体原因，不再只有笼统的"应用失败，已自动回滚"。
 6. Agent 重装后 peer 恢复：已修复（P1-A）——`/etc/wireguard/<name>.conf` 仍在时，重装后重新 apply 同一 rev 会从 conf 恢复接口私钥与 peer 公钥（AllowedIPs 严格匹配才恢复），实测 conf 不变、客户端 ping 不中断。
 7. 面板看不到 peer 列表/显示未知：已知未修（P1-6）——D1 不回存 peer 公钥（取舍：避免私钥出 Agent / 应用知识进核心路由）。以 hub 上 `wg show` 为准。【待实测补写：如后续决定回写 D1 再更新本节】
+8. **应用 502 / 转发指向已删除 Peer**：可在 `/hubs/:id/sites`「异常应用排查」卡直接区分本机端口未监听、Peer 离线/未接入与上游报错，或在 `/hubs/:id/wireguard`「端口转发」卡通过「停用失效转发」清理指向 WG 网段无效 IP 的规则。
 
 **超时踩线**（P1-7）：TCP 通道 `/state` 实测 2.1–2.4s，逼近 3s 超时；ops 页偶发「不可达」但重试即恢复。处置=重试即可；超时参数调优待主人拍板（现状 3s 不动）。
 

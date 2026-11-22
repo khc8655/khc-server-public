@@ -1,6 +1,6 @@
 # 端口转发适配器（C4）
 
-> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：agent/adapters/port_forward.py
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：agent/adapters/port_forward.py
 > 范围：端口转发适配器与页面
 
 ## 1. 模型
@@ -56,7 +56,7 @@
 ## 5. 实现 / 验收（2026-10-26）
 
 - 适配器：`agent/adapters/port_forward.py`（1.0.0）；测试 `agent/tests/test_port_forward.py`（71 项）；全量 Agent **643**。
-- UI：`apps/web/src/pages/ForwardPage.tsx` + `data/forwards.ts`；`/hubs/:id/forwards` 已替换占位页；前端 **105** 项测试。
+- UI：`apps/web/src/apps/wireguard/ForwardsCard.tsx`（收拢在 `/hubs/:id/wireguard`，`/hubs/:id/forwards` 已 302 重定向至此，详见 `docs/ui-redesign/page-specs.md` §2.4）+ `data/forwards.ts`；支持在 `/hubs/:id/sites`「本机监听端口」卡中自动过滤 `socat` 与转发监听端口，并在 `ForwardsCard` 中识别指向 WireGuard 网段内无对应 Peer IP 的启用转发规则（提示 [停用失效转发]）。
 - 真机：Hub 配置 `tcp/7001 -> 127.0.0.1:22`，apply 后 unit active、端口监听、连接可通；`enabled=false` apply 后 unit 被停止/删除、端口释放；status count/total 正确。
 - 安全提示固定展示；socat 已安装在测试机（`/usr/bin/socat`）。
 - 已知：停用/删除的 unit 在 `after_apply` 清理，因此 plan diff 可能为空（apply 仍正确）；socat 缺失时 validate 拦截并提示安装；仅改 note 时不会触发 socat validate（内核只在 changed unit 时 validate）。

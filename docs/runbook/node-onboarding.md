@@ -1,6 +1,6 @@
 # 节点接入 Runbook（node-onboarding）
 
-> 状态：现行 ｜ 最后核验：2026-11-06 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
 > 范围：把一台干净 Linux 机器从零接入面板，直至节点 `/state` 上线的端到端步骤
 
 ## 1. 前置条件
@@ -22,11 +22,11 @@ sudo ./install.sh --check
 - FAIL 项必须先解决（Python 版本、systemd 缺失等）。
 - 也可以直接跑面板 install-command 前先在目标机单独执行此步。
 
-## 3. 面板建节点与 token
+## 3. 面板建节点、token 与安装验活
 
-1. 面板「节点」页 → 添加节点：填 `name` 与 `endpoint`（如 `http://<IP>:8443` 或 `https://<域名>:8443`；格式 `scheme://host[:port]`）。
-2. 创建成功响应**一次性返回节点 token**（仅此一次显示，D1 只存 AES-GCM 密文）——立即妥善保存；后续 Agent 升级不需要它，但重装/换机需要。
-3. 在节点详情「Agent」卡复制 install-command（含发布包 URL 与 sha256）。
+1. 面板「节点」页 → [创建节点]，在统一接入抽屉（`AccessForm`，交互细节见 `docs/ui-redesign/page-specs.md` §1.3）中填节点名称并选定接入方式：**域名（ACME）** / **Tunnel** / **IP 直连**。域名模式支持选用已有解析记录、就地「+ 新建解析记录」（A/AAAA）或手动输入域名，并可在抽屉内直接点击 [检测解析]（DoH）。
+2. 创建成功后**同一抽屉**即时展示一次性节点 token（D1 只存 AES-GCM 密文，重装或换机时需保留）与安装命令（支持复制）。后续重发或修改接入方式可在节点设置「Agent 与接入」卡查看。
+3. 在目标机执行安装命令后，回到创建抽屉结果态点击 [我已完成安装]，自动探活 **Agent 在线 + Caddy 就绪态** 并给出失败排查提示，同时提供 [去发布应用]（直达 `/hubs/:id/sites`）与 [去节点设置] 入口。
 
 ## 4. 端口选择（8880 vs 8443，实测差异）
 

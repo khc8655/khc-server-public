@@ -22,7 +22,7 @@
 | 4c | `/settings?tab=tunnels` | SettingsPage + Tunnels | 新增「隧道」分段（全局隧道配置；`?tab=tunnels` 直达） | B（表）+ D（抽屉） |
 | 5 | `/settings?tab=manifests` | SettingsPage + AppManifests | 「应用管理」分段（控制面清单定义；移除冗余「应用目录」Tab，旧 `?tab=catalog` 映射到此） | B（表）+ D（抽屉） |
 | 6 | `/settings?tab=keys` | SettingsPage + SshKeys | 新增（P4，全局 SSH 公钥库） | B（表）+ D（抽屉） |
-| 7 | `/settings?tab=system` | SettingsPage | 保留 | B（表）|
+| 7 | `/settings?tab=system` | SettingsPage | **映射** → 4（旧参数兼容回落「证书库」，不再提供「系统变量」Tab） | — |
 | 8 | `/certs` | CertificatesPage | **302** → `/settings?tab=certs`（暗路由过渡，确认无引用后删除） | — |
 | 9 | `/dev/gallery` | GalleryPage | 保留（开发用，不进导航） | — |
 | 10 | `/hubs/:id` | HubOverviewPage | 保留，单请求聚合 `/overview` + 10s 快照，同源 R2/R3/R4/R5 | A |
@@ -236,8 +236,8 @@
 | Agent 卡 / ModeCard / 备份导出 / 备份导入 / 导入结果 / 证书摘要 | `/settings`（节点） | 节点设置 3 分区；证书摘要移到站点页分段；liveEndpoint 表单删除（域名自动推导） | 7 卡纵列 → 分区（已落地） |
 | 删除节点 | `/hubs` 行内「更多操作」 | 节点设置 · 危险区 | 入口回到列表行（已落地；L3 + 删除时总会生成卸载脚本） |
 | 证书库 | `/settings`（全局） | `/settings?tab=certs` 等 | 保留统一表格/抽屉；支持 CF DNS-01 签发/续期与「续期后自动同步」开关，取消「节点 ACME」与「系统变量」Tab |
-| 添加节点接入表单（endpoint/Zone/子域名/隧道/自签） | `/hubs` 创建抽屉 | `/hubs` 创建抽屉 · `AccessForm` | 三模式统一表单；域名只选已有记录；Tunnel 选全局配置；IP 必须确认明文 |
+| 添加节点接入表单（endpoint/Zone/子域名/隧道/自签） | `/hubs` 创建抽屉 | `/hubs` 创建抽屉 · `AccessForm` | 三模式统一表单；域名可选已有记录、就地新建 A/AAAA 或手动输入 + 行内 DoH 检测；Tunnel 选全局配置；IP 必须确认明文 |
 | 修改接入方式（域名/自定义二分） | `/hubs/:id/settings` | `/hubs/:id/settings` · `AccessForm` | 与添加节点共用；徽章按 `node.accessMode` |
-| CF DNS 记录只读列表 | `/settings?tab=cloudflare` | `/settings?tab=domain` | 分段更名「域名」；A/AAAA/CNAME 行内编辑 + L2 删除 |
+| CF DNS 记录只读列表 | `/settings?tab=cloudflare` | `/settings?tab=domain` | 拆分为「域名管理」（默认分段）与「账号」；A/AAAA/CNAME 抽屉内编辑与行内确认删除 + DoH 检测 |
 | Cloudflare Tunnel 配置 | 无（节点手填隧道地址） | `/settings?tab=tunnels` · `Tunnels` | 新增全局隧道表 + 单抽屉新增/编辑 + L2 删除 |
 | 删除节点确认文案 | `/hubs` 行内 | `/hubs` 行内 | 明确不删除全局域名解析与隧道配置，可复用 |
