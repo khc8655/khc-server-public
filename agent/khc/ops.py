@@ -471,12 +471,13 @@ def collect_ops(
 
 # ---------------------------------------------------------------------------
 # 轻量快照（10s 轮询）：只读 /proc + statvfs，不起子进程、不碰网络。
-# CPU 用计数器差分；首次/间隔过久时在请求内双采样 1 秒，保证首屏不是 0%/离谱值。
-# 无任何常驻线程或定时器（仅在请求线程内 sleep ≤1s）。
+# CPU 用计数器差分；首次/间隔过久时在请求内双采样 150ms，保证首屏不是 0%/离谱值。
+# 无任何常驻线程或定时器（仅在请求线程内 sleep ≤0.15s）。
 # ---------------------------------------------------------------------------
 
 SNAPSHOT_STALE_SECONDS = 30.0
-MIN_DIFF_SECONDS = 0.2
+SNAPSHOT_COLD_SAMPLE_SECONDS = 0.15
+MIN_DIFF_SECONDS = 0.1
 _snap_lock = threading.Lock()
 _snap_state: dict[str, Any] = {"times": None, "at": 0.0}
 _sleeper = time.sleep
@@ -513,9 +514,9 @@ def _snapshot_cpu(proc_root: str, moment: float) -> tuple[dict[str, Any], float]
         or elapsed < MIN_DIFF_SECONDS
     )
     if stale and times is not None:
-        # 请求内双采样：拿两次计数做 1 秒差分（只在首次/过久/过快时发生）。
-        _sleeper(1.0)
-        moment += 1.0
+        # 请求内短双采样：拿两次计数做 150ms 差分（只在首次/过久/过快时发生）。
+        _sleeper(SNAPSHOT_COLD_SAMPLE_SECONDS)
+        moment += SNAPSHOT_COLD_SAMPLE_SECONDS
         previous = times
         times = _cpu_times(proc_root)
 

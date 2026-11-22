@@ -10,9 +10,13 @@ import json
 import os
 import ssl
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from unittest import mock
+
+import adapters.caddy_site as caddy_site_mod
 
 from adapters.caddy_site import (
     APP_NAME,
@@ -1846,25 +1850,32 @@ class StatusHealthTests(RenderTestBase):
         )
         self._write_applied(cfg)
         calls: list[tuple] = []
+        calls_lock = threading.Lock()
 
         def fake(url: str, timeout: float = 3.0, headers=None) -> dict:
-            calls.append((url, headers))
+            key = (url, tuple(sorted(headers.items())) if headers else None)
+            with calls_lock:
+                calls.append(key)
             return {"state": "ok", "status": 200, "latencyMs": 3, "error": None}
 
         with mock.patch.object(self.adapter, "_probe_url", side_effect=fake):
             status = self.adapter.status(self.ctx)
-        self.assertEqual(
+        self.assertCountEqual(
             calls,
             [
                 ("https://a.example.com/", None),
                 ("https://b.example.com:8443/", None),
                 # TLS 关闭：走本机回环 + Host，避免 DNS 未就绪时误报 down
-                ("http://127.0.0.1/", {"Host": "c.example.com"}),
-                ("http://127.0.0.1:8080/", {"Host": "d.example.com"}),
+                ("http://127.0.0.1/", (("Host", "c.example.com"),)),
+                ("http://127.0.0.1:8080/", (("Host", "d.example.com"),)),
                 ("https://e.example.com/", None),
             ],
         )
         health = status["siteHealth"]
+        self.assertEqual(
+            [item["name"] for item in health],
+            ["auto443", "auto8443", "off80", "off8080", "internal"],
+        )
         self.assertEqual(len(health), 5)
         self.assertEqual(health[0]["name"], "auto443")
         self.assertEqual(health[0]["domain"], "a.example.com")
@@ -1907,13 +1918,13 @@ class StatusHealthTests(RenderTestBase):
             site(name="unknown", domain="unknown.example.com"),
         )
         self._write_applied(cfg)
-        probes = [
-            {"state": "ok", "status": 200, "latencyMs": 1, "error": None},
-            {"state": "warn", "status": 401, "latencyMs": 2, "error": "HTTP 401"},
-            {"state": "down", "status": None, "latencyMs": 3000, "error": "timed out"},
-            {"state": "unknown", "status": None, "latencyMs": None, "error": "探测超时预算用尽"},
-        ]
-        with mock.patch.object(self.adapter, "_probe_url", side_effect=probes):
+        probes_by_url = {
+            "https://ok.example.com/": {"state": "ok", "status": 200, "latencyMs": 1, "error": None},
+            "https://warn.example.com/": {"state": "warn", "status": 401, "latencyMs": 2, "error": "HTTP 401"},
+            "https://down.example.com/": {"state": "down", "status": None, "latencyMs": 3000, "error": "timed out"},
+            "https://unknown.example.com/": {"state": "unknown", "status": None, "latencyMs": None, "error": "探测超时预算用尽"},
+        }
+        with mock.patch.object(self.adapter, "_probe_url", side_effect=lambda url, **_: probes_by_url[url]):
             status = self.adapter.status(self.ctx)
         self.assertEqual([item["state"] for item in status["siteHealth"]], ["ok", "warn", "down", "unknown"])
         self.assertEqual(status["siteHealth"][1]["error"], "HTTP 401")
@@ -2022,6 +2033,119 @@ class StatusHealthTests(RenderTestBase):
         ):
             result = self.adapter._probe_url("https://a.example.com/")
         self.assertEqual(result["state"], "down")
+
+    def test_site_health_swr_returns_stale_immediately_and_refreshes_async(self) -> None:
+        self._write_applied(config(site(name="s1", domain="s1.example.com")))
+        with mock.patch.object(
+            self.adapter,
+            "_probe_url",
+            return_value={"state": "ok", "status": 200, "latencyMs": 1, "error": None},
+        ):
+            first = self.adapter.status(self.ctx)
+        self.assertEqual(first["siteHealth"][0]["state"], "ok")
+
+        refresh_started = threading.Event()
+        allow_finish = threading.Event()
+
+        def slow_refresh(_url: str, **_kwargs) -> dict:
+            refresh_started.set()
+            allow_finish.wait(timeout=1.0)
+            return {"state": "down", "status": None, "latencyMs": 1500, "error": "timed out"}
+
+        time.sleep(0.05)
+        with (
+            mock.patch.object(caddy_site_mod, "HEALTH_CACHE_TTL", 0.02),
+            mock.patch.object(self.adapter, "_probe_url", side_effect=slow_refresh),
+        ):
+            started = time.monotonic()
+            stale = self.adapter.status(self.ctx)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.1)
+            self.assertEqual(stale["siteHealth"][0]["state"], "ok")
+            self.assertTrue(refresh_started.wait(timeout=0.5))
+            allow_finish.set()
+            # 等后台线程把新状态写回缓存
+            deadline = time.monotonic() + 1.0
+            while self.adapter._health_inflight is not None and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        with mock.patch.object(
+            self.adapter,
+            "_probe_url",
+            side_effect=AssertionError("新鲜缓存窗口内不应重复探测"),
+        ):
+            refreshed = self.adapter.status(self.ctx)
+        self.assertEqual(refreshed["siteHealth"][0]["state"], "down")
+
+    def test_site_health_cold_wait_caps_blocking_on_slow_site(self) -> None:
+        cfg = config(
+            site(name="fast", domain="fast.example.com"),
+            site(name="slow", domain="slow.example.com"),
+        )
+        self._write_applied(cfg)
+        slow_release = threading.Event()
+
+        def fake(url: str, **_kwargs) -> dict:
+            if "fast" in url:
+                return {"state": "ok", "status": 200, "latencyMs": 1, "error": None}
+            slow_release.wait(timeout=1.0)
+            return {"state": "down", "status": None, "latencyMs": 600, "error": "timed out"}
+
+        with (
+            mock.patch.object(caddy_site_mod, "HEALTH_COLD_WAIT", 0.08),
+            mock.patch.object(self.adapter, "_probe_url", side_effect=fake),
+        ):
+            started = time.monotonic()
+            first = self.adapter.status(self.ctx)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.25)
+            self.assertEqual([item["state"] for item in first["siteHealth"]], ["ok", "unknown"])
+            slow_release.set()
+            deadline = time.monotonic() + 1.0
+            while self.adapter._health_inflight is not None and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        with mock.patch.object(
+            self.adapter,
+            "_probe_url",
+            side_effect=AssertionError("后台完成后应直接命中缓存"),
+        ):
+            second = self.adapter.status(self.ctx)
+        self.assertEqual([item["state"] for item in second["siteHealth"]], ["ok", "down"])
+
+    def test_site_health_probes_sites_concurrently(self) -> None:
+        cfg = config(
+            site(name="s1", domain="s1.example.com"),
+            site(name="s2", domain="s2.example.com"),
+            site(name="s3", domain="s3.example.com"),
+            site(name="s4", domain="s4.example.com"),
+        )
+        self._write_applied(cfg)
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+
+        def fake(_url: str, **_kwargs) -> dict:
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.09)
+            with lock:
+                active -= 1
+            return {"state": "ok", "status": 200, "latencyMs": 90, "error": None}
+
+        with (
+            mock.patch.object(caddy_site_mod, "HEALTH_COLD_WAIT", 1.0),
+            mock.patch.object(self.adapter, "_probe_url", side_effect=fake),
+        ):
+            started = time.monotonic()
+            status = self.adapter.status(self.ctx)
+            elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.28)
+        self.assertGreaterEqual(peak, 2)
+        self.assertEqual([item["name"] for item in status["siteHealth"]], ["s1", "s2", "s3", "s4"])
 
 
 # ---------------------------------------------------------------------------
