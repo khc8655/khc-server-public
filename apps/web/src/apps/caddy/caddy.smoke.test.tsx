@@ -257,7 +257,13 @@ describe('站点抽屉与列表交互规范（T3）', () => {
     ];
     await renderRoute('/hubs/tyo-1/sites');
     expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
+    // 无真实未托管站点块时，「外部配置（未托管）」默认折叠进页底「高级」区。
+    await waitFor(() => {
+      expect(requests.some((item) => item.url.endsWith('/caddy_import_scan'))).toBe(true);
+    });
+    expect(screen.queryByText('外部配置（未托管）')).toBeNull();
     await expandAdvanced();
+    expect(await screen.findByText('外部配置（未托管）')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '导出 JSON' })).toBeNull();
     expect(screen.queryByRole('button', { name: '导入 JSON' })).toBeNull();
     expect(screen.getByRole('button', { name: '清空站点' })).toBeTruthy();
@@ -512,5 +518,108 @@ describe('应用页分段与本机监听端口（U3）', () => {
     await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
     expect(await screen.findByRole('heading', { name: '安装并发布应用' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: '添加站点' })).toBeNull();
+  });
+
+  it('存在未托管外部站点块时自动顶升外部配置卡到「高级」区外，且过滤 socat 转发端口', async () => {
+    mockApi({
+      listening: [
+        { proto: 'tcp', address: '0.0.0.0', port: 2083, process: 'socat' },
+        { proto: 'tcp', address: '0.0.0.0', port: 9099, process: 'python3' },
+      ],
+    });
+    scanBlocks = [
+      {
+        id: 'legacy-1',
+        hash: 'h-legacy',
+        address: ':8443',
+        startLine: 1,
+        endLine: 6,
+        text: 'legacy.example.com { reverse_proxy 127.0.0.1:8080 }',
+        supported: true,
+        reason: null,
+        domains: ['legacy.example.com'],
+        listenPort: 8443,
+        kind: 'proxy',
+        upstreams: ['127.0.0.1:8080'],
+      },
+    ];
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByText('外部配置（未托管）')).toBeTruthy();
+    expect((await screen.findAllByText('legacy.example.com')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('2083 · socat')).toBeNull();
+    expect((await screen.findAllByText('9099 · python3')).length).toBeGreaterThan(0);
+  });
+
+  it('启用 host-ops 时，SiteDrawer 检查宿主防火墙并在抽屉内一键放行 TCP 8443（不叠 Dialog）', async () => {
+    mockApi({ withCerts: false });
+    let fwRules = [
+      { id: '__ssh_22', action: 'allow', proto: 'tcp', port: '22', source: '0.0.0.0/0', note: 'SSH', locked: true },
+      { id: 'r-443', action: 'allow', proto: 'tcp', port: '443', source: '0.0.0.0/0', note: 'web' },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, init });
+        if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
+        if (url === '/api/v1/nodes') return json({ nodes: [currentNode] });
+        if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
+        if (url === '/api/v1/certs') return json({ certificates: [] });
+        if (url === '/api/v1/settings') return json({ settings: [] });
+        if (url === '/api/v1/nodes/tyo-1/apps') {
+          return json({
+            apps: [appConfig()],
+            adapters: [
+              { name: 'caddy-site', version: '1.0.0', api: 1 },
+              { name: 'host-ops', version: '1.4.0', api: 1 },
+            ],
+            adaptersError: null,
+          });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site') return json({ app: appConfig() });
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/caddy_import_scan') {
+          return json({ ok: true, result: { exists: true, caddyfilePath: '/etc/caddy/Caddyfile', blocks: [], imports: [], backups: [] } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/state') {
+          return json({
+            reachable: true,
+            route: 'direct',
+            via: 'fetch',
+            error: null,
+            state: {
+              host: { hostname: 'tyo-1' },
+              ops: {},
+              adapters: [{ name: 'caddy-site', version: '1.0.0', status: { installed: true, running: true, sites: [] } }],
+              ports: [],
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/host-ops/call') {
+          const verb = (JSON.parse(String(init?.body)) as { params: { verb: string } }).params.verb;
+          if (verb === 'version') return json({ ok: true, data: { root: true, nft: true } });
+          if (verb === 'fw.show') return json({ ok: true, data: { baseRev: 'rev-1', rules: fwRules, autoRules: [] } });
+          if (verb === 'fw.confirm') return json({ ok: true, data: { confirmed: true } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/host-ops/call_task') {
+          const body = JSON.parse(String(init?.body)) as { params: { params: { rules: typeof fwRules } } };
+          fwRules = body.params.params.rules;
+          return json({ ok: true, accepted: true, taskId: 'task-fw', result: { taskId: 'task-fw' } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/tasks/task-fw') {
+          return json({ ok: true, task: { id: 'task-fw', state: 'done', result: { ok: true, data: { token: 'tok-fw' } }, error: null } });
+        }
+        return json({});
+      }),
+    );
+
+    await renderRoute('/hubs/tyo-1/sites');
+    await userEvent.click(await screen.findByRole('button', { name: '添加站点' }));
+    const drawer = await screen.findByRole('dialog');
+    expect(await within(drawer).findByText('主机防火墙尚未放行 TCP 8443')).toBeTruthy();
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '一键放行 TCP 8443' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(await within(drawer).findByText('主机防火墙已放行 TCP 8443')).toBeTruthy();
+    expect(fwRules.some((rule) => rule.port === '8443' && rule.action === 'allow')).toBe(true);
   });
 });

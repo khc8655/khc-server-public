@@ -263,4 +263,18 @@ describe('本机监听端口（T-C 批次 3）', () => {
     expect(rows).toHaveLength(30);
     expect(rows[29]?.port).toBe(20029);
   });
+
+  it('过滤 socat 转发进程与面板 port 字段登记端口，避免诱导二次反代（P2）', () => {
+    const rows = unpublishedListeningPorts(
+      ops([
+        { proto: 'tcp', address: '0.0.0.0', port: 2083, process: 'socat' },
+        { proto: 'tcp', address: '0.0.0.0', port: 7001, process: 'socat' },
+        { proto: 'tcp', address: '0.0.0.0', port: 9099, process: 'python3' },
+        { proto: 'tcp', address: '0.0.0.0', port: 8443, process: 'agent-proxy' },
+      ]),
+      [],
+      [{ listenPort: 7001 }, { port: 8443 }],
+    );
+    expect(rows.map((row) => row.port)).toEqual([9099]);
+  });
 });

@@ -24,6 +24,7 @@ import {
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { formatExpiry } from '../../i18n/format';
+import { HostFirewallPortAlert } from './HostFirewallPortAlert';
 import {
   isLocalUpstreamHost,
   isNonPublicDomain,
@@ -159,8 +160,10 @@ export function SiteDrawer({
   errors,
   saveError,
   saving,
+  hubId,
   hubName,
   node,
+  hasHostOps = false,
   offlineReason,
   certificates,
   peers,
@@ -180,6 +183,7 @@ export function SiteDrawer({
   hubId?: string;
   hubName: string;
   node?: Node | undefined;
+  hasHostOps?: boolean;
   offlineReason?: string;
   certificates: { id: string; name: string; domains: string[]; notAfter: number | null }[];
   peers: { name: string; host: string }[];
@@ -413,6 +417,19 @@ export function SiteDrawer({
               />
             </Row>
           ) : null}
+          <HostFirewallPortAlert
+            hubId={hubId ?? ''}
+            port={form.listenPort}
+            enabled={Boolean(
+              hubId &&
+                hasHostOps &&
+                !offlineReason &&
+                node?.accessMode !== 'tunnel' &&
+                !portFieldError &&
+                form.listenPort !== null,
+            )}
+            appLabel={form.name.trim() || undefined}
+          />
           <Field id="site-enabled" label={zh.sites.enabled} variant="row">
             <Toggle
               checked={form.enabled}

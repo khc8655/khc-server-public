@@ -10,7 +10,9 @@ import {
   PORT_FORWARD_APP,
   emptyForwardConfig,
   forwardConfigQueryOptions,
+  normalizeForwardStatus,
 } from '../../data/forwards';
+import { HOST_OPS_APP } from '../../data/hostOps';
 import {
   listeningUpstream,
   unpublishedListeningPorts,
@@ -318,6 +320,9 @@ export default function SitesPage() {
   const adapterMissing = Boolean(
     appsQuery.data && !appsQuery.data.adapters.some((adapter) => adapter.name === CADDY_SITE_APP),
   );
+  const hasHostOps = Boolean(
+    appsQuery.data?.adapters.some((adapter) => adapter.name === HOST_OPS_APP),
+  );
   // 能力驱动：只有新 Agent 明确声明 pkgInstall 才显示「安装 Caddy」，
   // 旧 Agent（0.1.16）不会半可用地露出按钮。
   const canPkgInstall = Boolean(
@@ -368,14 +373,27 @@ export default function SitesPage() {
   }, [search.tab]);
 
   const forwardConfig = forwardQuery.data?.config ?? emptyForwardConfig();
+  const forwardRuntime = normalizeForwardStatus(liveState?.adapters);
+  const claimedTcpPorts = (stateQuery.data?.state?.ports ?? [])
+    .filter((entry) => entry.proto.toLowerCase().startsWith('tcp'))
+    .map((entry) => ({ port: entry.port }));
+  const nodeAgentPort = parseEndpointPort(hubQuery.data?.endpoint);
   const listeningPorts = useMemo(
     () =>
-      unpublishedListeningPorts(
-        stateQuery.data?.state?.ops,
-        config.sites,
-        forwardConfig.forwards,
-      ),
-    [stateQuery.data?.state?.ops, config.sites, forwardConfig.forwards],
+      unpublishedListeningPorts(stateQuery.data?.state?.ops, config.sites, [
+        ...forwardConfig.forwards,
+        ...(forwardRuntime?.rules ?? []),
+        ...claimedTcpPorts,
+        ...(nodeAgentPort ? [{ port: nodeAgentPort }] : []),
+      ]),
+    [
+      stateQuery.data?.state?.ops,
+      config.sites,
+      forwardConfig.forwards,
+      forwardRuntime?.rules,
+      stateQuery.data?.state?.ports,
+      nodeAgentPort,
+    ],
   );
 
   const importScanQuery = useQuery({
@@ -1399,6 +1417,113 @@ export default function SitesPage() {
       : []),
   ];
 
+  const hasActionableExternal =
+    hasExternalBlocks(externalBlocks) ||
+    Boolean(importPending) ||
+    Boolean(importScanQuery.data?.imports.length);
+
+  const externalConfigCard = (
+    <Card
+      title={zh.sites.importTitle}
+      action={
+        <Row gap={2}>
+          {/* 只有扫描确实发现外部站点块时才这样标注；0 站点不等于未纳管。 */}
+          {hasExternalBlocks(externalBlocks) ? (
+            <Badge tone="warn" label={zh.hub.appExternal} />
+          ) : null}
+          <Button
+            label={zh.sites.importRefresh}
+            variant="ghost"
+            size="sm"
+            icon="refresh"
+            loading={importScanQuery.isFetching}
+            disabled={unreachable || adapterMissing}
+            disabledReason={zh.sites.importDisabledOffline}
+            onClick={() => void importScanQuery.refetch()}
+          />
+        </Row>
+      }
+    >
+      <Stack gap={2}>
+        {importPending ? (
+          <>
+            <Banner
+              tone="warn"
+              title={zh.sites.importPendingTitle}
+              description={fmt(zh.sites.importPendingDesc, { reason: importPending.reason })}
+            />
+            <Row gap={2} wrap>
+              <Button
+                label={zh.sites.importRetryApply}
+                size="sm"
+                loading={importBusy}
+                onClick={() => void retryImportedApply()}
+              />
+              <Button
+                label={zh.sites.importRestore}
+                size="sm"
+                variant="ghost"
+                disabled={importBusy}
+                onClick={() => setImportRestoreConfirm(true)}
+              />
+            </Row>
+          </>
+        ) : null}
+        {unreachable || adapterMissing ? (
+          <Banner tone="info" title={zh.sites.importDisabledOffline} />
+        ) : importScanQuery.isLoading ? (
+          <Stack gap={2}>
+            <Skeleton height={12} />
+            <Skeleton height={12} />
+            <Skeleton height={12} />
+          </Stack>
+        ) : importScanQuery.isError ? (
+          <InlineError
+            message={
+              friendlyAgentError(
+                importScanQuery.error instanceof Error
+                  ? importScanQuery.error.message
+                  : null,
+              ) ?? zh.sites.importScanFailed
+            }
+          />
+        ) : !importScanQuery.data?.exists ? (
+          <Banner tone="info" title={zh.sites.importCaddyfileMissing} />
+        ) : importRows.length === 0 ? (
+          <Banner tone="info" title={zh.sites.importEmpty} />
+        ) : (
+          <>
+            {importScanQuery.data.imports.length > 0 ? (
+              <Banner
+                tone="warn"
+                title={fmt(zh.sites.importImports, {
+                  list: importScanQuery.data.imports.join(', '),
+                })}
+              />
+            ) : null}
+            <Table
+              rows={importRows}
+              columns={importColumns}
+              rowKey={(row) => row.block.hash}
+              objectLabel={zh.sites.importTitle}
+              empty={{ icon: 'globe', title: zh.sites.importEmpty }}
+              rowActions={importRowActions}
+              rowActionDisabled={importRowActionDisabled}
+              onRowAction={handleImportRowAction}
+              onRowOpen={(row) => setImportView(row.block)}
+            />
+          </>
+        )}
+        <span className="ui-field-help">
+          {fmt(zh.sites.importDesc, {
+            path: importScanQuery.data?.caddyfilePath || 'Caddyfile',
+          })}
+          {importScanQuery.data?.imports.length ? ` · ${zh.sites.importTruncatedHint}` : ''}
+        </span>
+      </Stack>
+    </Card>
+  );
+
   return (
     <Stack gap={4}>
       <PageHeader
@@ -1521,120 +1646,25 @@ export default function SitesPage() {
             </Card>
           ) : null}
 
-          <Card
-            title={zh.sites.importTitle}
-            action={
-              <Row gap={2}>
-                {/* 只有扫描确实发现外部站点块时才这样标注；0 站点不等于未纳管。 */}
-                {hasExternalBlocks(externalBlocks) ? (
-                  <Badge tone="warn" label={zh.hub.appExternal} />
-                ) : null}
-                <Button
-                  label={zh.sites.importRefresh}
-                  variant="ghost"
-                  size="sm"
-                  icon="refresh"
-                  loading={importScanQuery.isFetching}
-                  disabled={unreachable || adapterMissing}
-                  disabledReason={zh.sites.importDisabledOffline}
-                  onClick={() => void importScanQuery.refetch()}
-                />
-              </Row>
-            }
-          >
-            <Stack gap={2}>
-              {importPending ? (
-                <>
-                  <Banner
-                    tone="warn"
-                    title={zh.sites.importPendingTitle}
-                    description={fmt(zh.sites.importPendingDesc, { reason: importPending.reason })}
-                  />
-                  <Row gap={2} wrap>
-                    <Button
-                      label={zh.sites.importRetryApply}
-                      size="sm"
-                      loading={importBusy}
-                      onClick={() => void retryImportedApply()}
-                    />
-                    <Button
-                      label={zh.sites.importRestore}
-                      size="sm"
-                      variant="ghost"
-                      disabled={importBusy}
-                      onClick={() => setImportRestoreConfirm(true)}
-                    />
-                  </Row>
-                </>
-              ) : null}
-              {unreachable || adapterMissing ? (
-                <Banner tone="info" title={zh.sites.importDisabledOffline} />
-              ) : importScanQuery.isLoading ? (
-                <Stack gap={2}>
-                  <Skeleton height={12} />
-                  <Skeleton height={12} />
-                  <Skeleton height={12} />
-                </Stack>
-              ) : importScanQuery.isError ? (
-                <InlineError
-                  message={
-                    friendlyAgentError(
-                      importScanQuery.error instanceof Error
-                        ? importScanQuery.error.message
-                        : null,
-                    ) ?? zh.sites.importScanFailed
-                  }
-                />
-              ) : !importScanQuery.data?.exists ? (
-                <Banner tone="info" title={zh.sites.importCaddyfileMissing} />
-              ) : importRows.length === 0 ? (
-                <Banner tone="info" title={zh.sites.importEmpty} />
-              ) : (
-                <>
-                  {importScanQuery.data.imports.length > 0 ? (
-                    <Banner
-                      tone="warn"
-                      title={fmt(zh.sites.importImports, {
-                        list: importScanQuery.data.imports.join(', '),
-                      })}
-                    />
-                  ) : null}
-                  <Table
-                    rows={importRows}
-                    columns={importColumns}
-                    rowKey={(row) => row.block.hash}
-                    objectLabel={zh.sites.importTitle}
-                    empty={{ icon: 'globe', title: zh.sites.importEmpty }}
-                    rowActions={importRowActions}
-                    rowActionDisabled={importRowActionDisabled}
-                    onRowAction={handleImportRowAction}
-                    onRowOpen={(row) => setImportView(row.block)}
-                  />
-                </>
-              )}
-              <span className="ui-field-help">
-                {fmt(zh.sites.importDesc, {
-                  path: importScanQuery.data?.caddyfilePath || 'Caddyfile',
-                })}
-                {importScanQuery.data?.imports.length ? ` · ${zh.sites.importTruncatedHint}` : ''}
-              </span>
-            </Stack>
-          </Card>
+          {hasActionableExternal ? externalConfigCard : null}
 
           <AdvancedSection title={zh.common.advancedSection}>
-            <Row gap={2} wrap>
-              <Button
-                label={actionLabel(action('site.clear'))}
-                size="sm"
-                variant="danger-text"
-                disabled={config.sites.length === 0 || unreachable}
-                disabledReason={writeDisabledReason}
-                onClick={() => {
-                  if (config.sites.length === 0 || unreachable) return;
-                  setClearConfirm(true);
-                }}
-              />
-            </Row>
+            <Stack gap={3}>
+              {!hasActionableExternal ? externalConfigCard : null}
+              <Row gap={2} wrap>
+                <Button
+                  label={actionLabel(action('site.clear'))}
+                  size="sm"
+                  variant="danger-text"
+                  disabled={config.sites.length === 0 || unreachable}
+                  disabledReason={writeDisabledReason}
+                  onClick={() => {
+                    if (config.sites.length === 0 || unreachable) return;
+                    setClearConfirm(true);
+                  }}
+                />
+              </Row>
+            </Stack>
           </AdvancedSection>
         </>
       ) : null}
@@ -1689,6 +1719,7 @@ export default function SitesPage() {
           hubId={hubId}
           hubName={hubName}
           node={hubQuery.data}
+          hasHostOps={hasHostOps}
           offlineReason={writeDisabledReason}
           certificates={certs}
           peers={peerTargets}
@@ -1714,6 +1745,7 @@ export default function SitesPage() {
           hubId={hubId}
           hubName={hubName}
           node={hubQuery.data}
+          hasHostOps={hasHostOps}
           certificates={certs}
           existingSites={config.sites}
           offlineReason={writeDisabledReason}
