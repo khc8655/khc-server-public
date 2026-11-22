@@ -25,7 +25,6 @@ import shutil
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
@@ -473,6 +472,14 @@ class Backup:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _StatusJob:
+    event: threading.Event = field(default_factory=threading.Event)
+    ok: bool = False
+    status: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+
+
 class Kernel:
     def __init__(
         self,
@@ -487,6 +494,7 @@ class Kernel:
         health_interval: float = 0.4,
         backup_keep: int = 20,
         idempotency_ttl: float = 600.0,
+        status_deadline: float = 2.0,
         ctx_factory: Optional[Callable[..., Ctx]] = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -516,6 +524,11 @@ class Kernel:
         self.health_attempts = max(1, int(health_attempts))
         self.health_interval = max(0.0, float(health_interval))
         self.backup_keep = max(1, int(backup_keep))
+        self.status_deadline = float(status_deadline)
+
+        self._status_lock = threading.Lock()
+        self._status_cache: dict[str, tuple[dict[str, Any], float]] = {}
+        self._status_inflight: dict[str, _StatusJob] = {}
 
         # A-8：写锁 per-node（节点级串行）——同一时刻整节点只允许一个写动作，
         # 不再按应用分锁；与 docs/design-v3.md §2.2 的口径一致。
@@ -574,33 +587,85 @@ class Kernel:
             )
         return result
 
+    def _start_status_job(self, adapter: Adapter) -> _StatusJob:
+        name = adapter.name
+        with self._status_lock:
+            existing = self._status_inflight.get(name)
+            if existing is not None:
+                return existing
+            job = _StatusJob()
+            self._status_inflight[name] = job
+
+        def _worker() -> None:
+            try:
+                raw = adapter.status(self._ctx())
+                status = raw if isinstance(raw, dict) else {"value": raw}
+                stored = copy.deepcopy(status)
+                captured_at = float(self.clock())
+                with self._status_lock:
+                    self._status_cache[name] = (stored, captured_at)
+                    job.ok = True
+                    job.status = stored
+            except Exception as exc:  # noqa: BLE001 - 单个应用状态失败不能影响 /state
+                LOG.warning("adapter %s status() failed: %s", name, exc)
+                with self._status_lock:
+                    job.ok = False
+                    job.error = str(exc)
+            finally:
+                with self._status_lock:
+                    if self._status_inflight.get(name) is job:
+                        self._status_inflight.pop(name, None)
+                    job.event.set()
+
+        # 守护线程 + 在途去重：避免 ThreadPoolExecutor 退出时卡死停止/重启/远程升级。
+        thread = threading.Thread(
+            target=_worker,
+            name=f"khc-status-{name}",
+            daemon=True,
+        )
+        thread.start()
+        return job
+
     def adapter_state_entries(self) -> list[dict[str, Any]]:
         adapters = self.adapters()
         if not adapters:
             return []
 
-        def _collect_one(adapter: Adapter) -> dict[str, Any]:
-            status: dict[str, Any] = {}
-            try:
-                status = adapter.status(self._ctx())
-                if not isinstance(status, dict):
-                    status = {"value": status}
-            except Exception as exc:  # noqa: BLE001 - 单个应用状态失败不能影响 /state
-                LOG.warning("adapter %s status() failed: %s", adapter.name, exc)
-                status = {"error": str(exc)}
-            return {
-                "name": adapter.name,
-                "version": str(adapter.version),
-                "appliedRev": self.store.applied_rev(adapter.name),
-                "status": status,
-            }
+        jobs = [(adapter, self._start_status_job(adapter)) for adapter in adapters]
+        if self.status_deadline <= 0:
+            for _adapter, job in jobs:
+                job.event.wait()
+        else:
+            deadline = time.monotonic() + self.status_deadline
+            for _adapter, job in jobs:
+                job.event.wait(max(0.0, deadline - time.monotonic()))
 
-        if len(adapters) == 1:
-            return [_collect_one(adapters[0])]
-        # 并发采集各适配器状态并按注册顺序返回，避免单个慢适配器串行拖慢 /state。
-        with ThreadPoolExecutor(max_workers=min(8, len(adapters))) as pool:
-            futures = [pool.submit(_collect_one, adapter) for adapter in adapters]
-            return [future.result() for future in futures]
+        entries: list[dict[str, Any]] = []
+        for adapter, job in jobs:
+            name = adapter.name
+            with self._status_lock:
+                if job.event.is_set():
+                    if job.ok:
+                        status = copy.deepcopy(job.status) if job.status is not None else {}
+                    else:
+                        status = {"error": job.error or "status error"}
+                else:
+                    cached = self._status_cache.get(name)
+                    if cached is not None:
+                        cached_status, cached_at = cached
+                        status = copy.deepcopy(cached_status)
+                        status["stale"] = {"since": int(cached_at), "reason": "timeout"}
+                    else:
+                        status = {"error": "status timeout", "pending": True}
+            entries.append(
+                {
+                    "name": name,
+                    "version": str(adapter.version),
+                    "appliedRev": self.store.applied_rev(name),
+                    "status": status,
+                }
+            )
+        return entries
 
     def task_status(self, task_id: str) -> dict[str, Any]:
         status = self.tasks.status(str(task_id))

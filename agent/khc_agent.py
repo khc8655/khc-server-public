@@ -119,7 +119,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if len(tokens) > 1:
         LOG.info("accepted tokens: %d (dual-window rotation)", len(tokens))
 
-    kernel = Kernel(paths, adapters, version=VERSION)
+    kernel = Kernel(paths, adapters, version=VERSION, status_deadline=args.status_deadline)
     upgrade = UpgradeService(paths, current_version=VERSION, install_dir=_HERE, agent_port=args.port)
     try:
         # P1：清理上次被 kill -9 留下的升级临时目录，并把 upgrade.json 的
@@ -227,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--root", default=None, help="覆盖 KHC_ROOT（演练/测试）")
     run.add_argument("--data-dir", default=None, help="覆盖 KHC_DATA_DIR")
     run.add_argument("--log-level", default=os.environ.get("KHC_LOG_LEVEL", "INFO"))
+    run.add_argument(
+        "--status-deadline",
+        type=float,
+        default=2.0,
+        help="单次 /state 所有适配器状态采集共享截止时间（秒，<=0 表示不限时）",
+    )
     # 历史直连观测参数保留为空操作解析，确保旧 systemd unit / cron / 脚本升级后不报错（ADR-0021）。
     run.add_argument("--live-host", default="", help=argparse.SUPPRESS)
     run.add_argument("--live-port", type=int, default=0, help=argparse.SUPPRESS)
