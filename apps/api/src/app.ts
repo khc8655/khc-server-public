@@ -10,6 +10,7 @@ import type { AppBindings, AppDeps } from './types';
 import { AppError } from './lib/errors';
 import { instrumentAgent } from './lib/timing';
 import { requireAuth } from './middleware/auth';
+import { d1Session } from './middleware/d1-session';
 import { serverTiming } from './middleware/timing';
 import { authRoutes } from './routes/auth';
 import { nodeRoutes } from './routes/nodes';
@@ -88,6 +89,8 @@ export function createApp(rawDeps: AppDeps): Hono<AppBindings> {
 
   // ---- 外层分段计时（覆盖健康检查、鉴权失败与 404/5xx 错误响应）----
   app.use('/api/*', serverTiming);
+  // ---- D1 Read Replication：按请求绑定独立会话并维护 khc_d1bm 书签 ----
+  app.use('/api/*', d1Session);
 
   // ---- 无鉴权探活 ----
   app.get('/api/v1/health', (c) =>

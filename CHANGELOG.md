@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.38.2] - 2026-11-23
+### Changed
+- 接入 Cloudflare D1 Read Replication 会话与 khc_d1bm 读己之写书签，读多写少请求改走就近只读副本并保障单浏览器顺序一致。
+
 ## [0.38.1] - 2026-11-22
 ### Changed
 - 首页节点批量探测改为并发上限 6 的滑动并发池，不再被单台慢节点队头阻塞。
