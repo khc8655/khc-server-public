@@ -4,7 +4,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import type { Certificate, TaskResponse } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
-import { hubAppsQueryOptions, hubQueryOptions } from '../../data/queries';
+import { hubAppsQueryOptions, hubQueryOptions, refreshHubRuntime } from '../../data/queries';
 import { certificatesQueryOptions } from '../../data/certs';
 import {
   PORT_FORWARD_APP,
@@ -269,7 +269,7 @@ export default function SitesPage() {
     tab?: string;
   };
 
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const caddyQuery = useQuery(caddyConfigQueryOptions(hubId));
   const certsQuery = useQuery(certificatesQueryOptions());
@@ -634,7 +634,7 @@ export default function SitesPage() {
   };
 
   const invalidateState = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] });
+    await refreshHubRuntime(queryClient, hubId);
   };
 
   const applyActionOnly = async (showPageError = true) => {

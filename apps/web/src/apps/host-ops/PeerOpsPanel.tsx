@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AgentState } from '@khc/contracts';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
+import { refreshHubRuntime } from '../../data/queries';
 import type { WgPeer } from '../../data/wireguard';
 import {
   applyHostOpsConfig,
@@ -263,7 +264,7 @@ export function PeerOpsPanel({
       toast.show({ message: zh.hostOps.onboardSuccess });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
-        queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+        refreshHubRuntime(queryClient, hubId),
       ]);
       void configQuery.refetch();
       await fetchStatus();

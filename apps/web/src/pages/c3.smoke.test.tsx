@@ -272,13 +272,24 @@ function mockApi() {
       if (url === '/api/v1/nodes/tyo-1/apps/caddy-site') {
         return json({ app: caddyConfig });
       }
-      if (url === '/api/v1/nodes/tyo-1/state') {
+      if (url === '/api/v1/nodes/tyo-1/overview') {
         return json({
+          node,
           reachable: true,
           route: 'direct',
           via: 'fetch',
           error: null,
           state: agentState(),
+          overview: {
+            apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+            peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+            forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+            certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+            accessCert: { daysLeft: null, tlsState: 'none' },
+            host: null,
+            managedServices: [],
+            failedUnits: null,
+          },
         });
       }
       return json({});

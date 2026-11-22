@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DiagnosticCheck } from '@khc/contracts';
 import { useParams } from '@tanstack/react-router';
 import { hubQueryOptions } from '../data/queries';
@@ -11,7 +11,12 @@ import {
   indexDiagnosticHints,
   nodeDiagnosticsQueryOptions,
 } from '../data/diagnostics';
-import type { HostOpsCronEntry, HostOpsProcess } from '../data/hostOps';
+import {
+  HOST_OPS_TARGET_SELF,
+  hostOpsQueryKey,
+  type HostOpsCronEntry,
+  type HostOpsProcess,
+} from '../data/hostOps';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { StatusBar, type StatusTile } from '../apps/host-ops/StatusBar';
 import { pickFailedUnits } from '../data/failedUnits';
@@ -67,9 +72,10 @@ type OpsDrawer =
  */
 export default function HubOpsPage() {
   const { hubId } = useParams({ from: '/hubs/$hubId/ops' });
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const queryClient = useQueryClient();
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const { live, channels, stateQuery } = useHubChannelsContext();
-  // 指标走 10s 快照；服务/进程等重数据来自打开页面时的一次性 /state（不周期轮询）。
+  // 指标走 10s 快照；服务/进程等重数据来自进入工作区时的一次性 /overview 回填（不周期轮询）。
   const state = stateQuery.data?.state;
   const metrics = live.snapshot?.ops ?? state?.ops ?? null;
   const uptime = live.snapshot?.host?.uptime ?? state?.host?.uptime ?? null;
@@ -80,8 +86,6 @@ export default function HubOpsPage() {
 
   const [segment, setSegment] = useState<Segment>('services');
   const [processSort, setProcessSort] = useState<'cpu' | 'mem'>('cpu');
-  const [keysReloadToken, setKeysReloadToken] = useState(0);
-  const [cronReloadToken, setCronReloadToken] = useState(0);
   const [drawer, setDrawer] = useState<OpsDrawer | null>(null);
   const fw = useFirewallState(hubId, opsDisabled, segment === 'firewall');
 
@@ -288,7 +292,9 @@ export default function HubOpsPage() {
               hubId={hubId}
               onAdded={() => {
                 setDrawer(null);
-                setKeysReloadToken((value) => value + 1);
+                void queryClient.invalidateQueries({
+                  queryKey: hostOpsQueryKey(hubId, HOST_OPS_TARGET_SELF, 'keys.list', {}),
+                });
               }}
             />
           </Drawer>
@@ -319,7 +325,9 @@ export default function HubOpsPage() {
               entry={drawer.entry}
               onSaved={() => {
                 setDrawer(null);
-                setCronReloadToken((value) => value + 1);
+                void queryClient.invalidateQueries({
+                  queryKey: hostOpsQueryKey(hubId, HOST_OPS_TARGET_SELF, 'cron.list', {}),
+                });
               }}
             />
           </Drawer>
@@ -484,7 +492,6 @@ export default function HubOpsPage() {
           hubId={hubId}
           disabled={opsDisabled}
           onAdd={() => setDrawer({ kind: 'key-add' })}
-          reloadToken={keysReloadToken}
         />
       ) : null}
       {segment === 'cron' ? (
@@ -492,7 +499,6 @@ export default function HubOpsPage() {
           hubId={hubId}
           disabled={opsDisabled}
           onEdit={(entry) => setDrawer({ kind: 'cron-edit', entry })}
-          reloadToken={cronReloadToken}
         />
       ) : null}
 

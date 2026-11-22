@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTask, hostFwMessages } from '../../data/apps';
 import type { TaskResponse } from '@khc/contracts';
-import { hubAppsQueryOptions } from '../../data/queries';
+import { hubAppsQueryOptions, refreshHubRuntime } from '../../data/queries';
 import {
   PORT_FORWARD_APP,
   emptyForwardConfig,
@@ -181,7 +181,7 @@ export function ForwardsCard({
       if (envelope.taskId) {
         setSocatTask(await fetchTask(hubId, envelope.taskId));
       } else {
-        await stateQuery.refetch();
+        await refreshHubRuntime(queryClient, hubId);
       }
       toast.show({ message: zh.forwards.installSocatSubmitted });
     } catch (error) {
@@ -199,7 +199,7 @@ export function ForwardsCard({
     try {
       const task = await fetchTask(hubId, socatTask.task.id);
       setSocatTask(task);
-      if (task.task.state === 'done') await stateQuery.refetch();
+      if (task.task.state === 'done') await refreshHubRuntime(queryClient, hubId);
     } catch (error) {
       toast.show({
         message: `${zh.forwards.installSocatFailed}：${forwardApiError(error, zh.forwards.installSocatFailed).message}`,
@@ -236,7 +236,7 @@ export function ForwardsCard({
   };
 
   const invalidateState = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] });
+    await refreshHubRuntime(queryClient, hubId);
   };
 
   const applyConfig = async (nextConfig?: ForwardConfig) => {

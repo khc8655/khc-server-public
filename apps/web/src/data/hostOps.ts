@@ -66,6 +66,17 @@ export interface HostOpsError {
   details: string | null;
 }
 
+/** 主机运维只读查询失败抛出的结构化错误（React Query 不把 !result.ok 当成成功缓存）。 */
+export class HostOpsQueryError extends Error {
+  readonly hostOpsError: HostOpsError | null;
+
+  constructor(error: HostOpsError | null) {
+    super(error?.message || error?.code || '主机运维请求失败');
+    this.name = 'HostOpsQueryError';
+    this.hostOpsError = error;
+  }
+}
+
 export interface HostOpsResult<T> {
   ok: boolean;
   v: string | null;
@@ -412,6 +423,33 @@ export async function callHostOps<T = unknown>(
   params: Record<string, unknown> = {},
 ): Promise<HostOpsResult<T>> {
   return hostOpsAction<T>(hubId, 'call', { target, verb, params });
+}
+
+/** 稳定结构化 queryKey（不含每次新建的 idempotencyKey，便于 30s 缓存与精确失效）。 */
+export const hostOpsQueryKey = (
+  hubId: string,
+  target: string,
+  verb: HostOpsVerb,
+  params: Record<string, unknown> = {},
+) => ['hubs', hubId, 'host-ops', target, verb, params] as const;
+
+export function hostOpsQueryOptions<T = unknown>(
+  hubId: string,
+  target: string,
+  verb: HostOpsVerb,
+  params: Record<string, unknown> = {},
+) {
+  return queryOptions({
+    queryKey: hostOpsQueryKey(hubId, target, verb, params),
+    queryFn: async (): Promise<HostOpsResult<T>> => {
+      const result = await callHostOps<T>(hubId, target, verb, params);
+      if (!result.ok) {
+        throw new HostOpsQueryError(result.error);
+      }
+      return result;
+    },
+    staleTime: 30_000,
+  });
 }
 
 export interface HostOpsTaskOptions {

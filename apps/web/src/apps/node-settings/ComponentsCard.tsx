@@ -6,7 +6,7 @@ import { fetchTask, friendlyAgentError } from '../../data/apps';
 import { CADDY_SITE_APP, envelopeErrorText, parseCaddyStatus, runCaddyAction } from '../../data/sites';
 import { WIREGUARD_APP, parseWireGuardStatus, runWireGuardAction } from '../../data/wireguard';
 import { PORT_FORWARD_APP, normalizeForwardStatus, runForwardAction } from '../../data/forwards';
-import { hubAppsQueryOptions } from '../../data/queries';
+import { hubAppsQueryOptions, refreshHubRuntime } from '../../data/queries';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { action } from '../../registry/actions';
 import { paths } from '../../registry/routes';
@@ -105,7 +105,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
       setInstallTask({ name: installTask.name, task: next });
       if (next.task.state === 'done') {
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+          refreshHubRuntime(queryClient, hubId),
           queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
         ]);
       }
@@ -135,7 +135,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
         setInstallTask({ name: row.name, task });
       } else {
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+          refreshHubRuntime(queryClient, hubId),
           queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
         ]);
       }

@@ -79,7 +79,7 @@ export default function HubSettingsPage() {
   const search = useSearch({ strict: false }) as { tab?: string };
   const queryClient = useQueryClient();
   const toast = useToast();
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const hubName = hubQuery.data?.name ?? hubId;
   const { channels } = useHubChannelsContext();

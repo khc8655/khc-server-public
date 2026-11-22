@@ -71,6 +71,17 @@ let cfDnsDeleteResult: unknown = null;
 /** 批次 Q：host-ops 适配器是否安装在节点上（决定删除节点清理项的默认值/可用性）。 */
 let hostOpsAdapterInstalled = true;
 
+const emptyOverview = {
+  apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+  peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+  forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+  accessCert: { daysLeft: null, tlsState: 'none' },
+  host: null,
+  managedServices: [],
+  failedUnits: null,
+};
+
 function mockApi() {
   requests = [];
   currentNode = { ...node };
@@ -122,17 +133,20 @@ function mockApi() {
           data: { cleaned: ['wg-conf', 'caddy-khcd'], remaining: cleanupRemaining },
         });
       }
-      if (url === '/api/v1/nodes/tyo-1/state') {
+      if (url === '/api/v1/nodes/tyo-1/overview') {
         if (!stateReachable) {
           return json({
+            node: currentNode,
             reachable: false,
             route: null,
             via: null,
             error: 'timeout',
             state: null,
+            overview: emptyOverview,
           });
         }
         return json({
+          node: currentNode,
           reachable: true,
           route: 'direct',
           via: 'fetch',
@@ -150,6 +164,7 @@ function mockApi() {
             ],
             ports: [],
           },
+          overview: emptyOverview,
         });
       }
       if (url === '/api/v1/nodes/tyo-1/apps') {

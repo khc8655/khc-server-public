@@ -18,7 +18,7 @@ export function HubSectionPlaceholder({ section }: { section: HubSection }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const match = matchHubPath(pathname);
   const hubId = match?.hubId ?? '';
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const title = zh.nav[sectionTitleKey[section]];
 
   return (

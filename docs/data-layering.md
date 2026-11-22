@@ -9,11 +9,11 @@
 
 ```text
 A. 浏览器 ──同源 Cookie──▶ Worker/D1                        配置、审计、回滚
-B. 浏览器 → Worker /nodes/:id/* ──HMAC──▶ Agent 主端口     控制面 RPC（/state、/apps、/tasks）
+B. 浏览器 → Worker /nodes/:id/* ──HMAC──▶ Agent 主端口     控制面 RPC（/overview、/apps、/tasks）
 C. 浏览器 → Worker /nodes/:id/snapshot ──HMAC──▶ Agent /snapshot  10s 轻量指标（2s 去重）
 ```
 
-- 控制面是**唯一入口**，浏览器不再直连 Agent（`live-ticket`、8899 端口与 `/_live/snapshot` 已下线）；`/state` 只在打开工作区时探测一次，提供适配器/端口/服务/进程等重数据，**不做周期轮询**。
+- 控制面是**唯一入口**，浏览器不再直连 Agent（`live-ticket`、8899 端口与 `/_live/snapshot` 已下线）；进入节点工作区时仅在 `HubChannelsProvider` 拉取一次 `/overview`（聚合节点详情、控制面 `/state` 与 D1 投影并回填共享缓存），工作区内切换子页不再发 `/state` 或 `/nodes/:id`，**不做周期轮询**。
 - 轻量快照只提供 **CPU/内存/磁盘/负载/uptime/tasks**，页面可见时每 10s 轮询一次、隐藏即停、支持 `BroadcastChannel` 多标签页共享、单次 10 分钟/60 次上限（ADR-0010）；连不上/到顶时页面保留上一帧并给出状态文案。
 - 浏览器不持有节点 token 与直连票据。
 
@@ -45,7 +45,7 @@ C. 浏览器 → Worker /nodes/:id/snapshot ──HMAC──▶ Agent /snapshot 
 - port-forward unit 运行状态、socat 版本
 - 诊断结果
 
-`GET /nodes/:id/state` 仅用于「打开工作区时探测一次」控制面可达性、更新
+`GET /nodes/:id/overview`（及节点证书作用域内的 `/state` 共享缓存）仅用于「打开工作区时探测一次」控制面可达性、更新
 `last_seen_at` 租约与写闸门，并作为适配器/端口/服务/进程等重数据的一次性来源；
 **没有周期性 ops 轮询**。`GET /nodes/:id/snapshot` 只返回轻量指标，
 `Cache-Control: no-store`，不写运行快照。
@@ -89,11 +89,12 @@ canSave 恒为 true（保存只写 D1，与通道无关，见 docs/design-v3.md 
 4. 不允许节点 token 进入浏览器。
 5. 配置以 D1 为 authority；运行态观测数据不落 D1，未连通时保留上一帧或提示离线（见 §1）。
 
-## 7. Worker 请求预算（2026-11-04）
+## 7. Worker 请求预算
 
-- **刷新策略**：打开页面拉一次 + 手动刷新。`QueryClient` 默认
+- **刷新策略**：打开页面拉一次 + 写后/手动刷新。`QueryClient` 默认
   `retry: false`、`refetchOnWindowFocus: false`、`refetchOnReconnect: false`；全仓无
   `refetchInterval`。
+- **工作区单一入口与分段缓存**：进入节点工作区只请求一次 `/overview` 并回填节点与运行态缓存，切换工作区页签不重发 `/state` 或 `/nodes/:id`（写操作后由 `refreshHubRuntime` 按需刷新 `/overview`）。主机运维页各分段（服务、进程、定时任务、SSH 公钥、日志错误）读结果缓存 30s（失败不缓存，手动刷新可重拉）；服务类写操作后只刷新 `svc.list` 与 `/snapshot`（2.1s 内避开 Worker 2s 去重窗口）。
 - **不做按节点 fan-out**：概览页只拉 `/nodes` + `/certificates`；`/hubs` 打开不探测，
   [刷新状态] 才 1 + N 次（单次、手动）；证书站点占用只在打开详情/删除确认时按需拉取。
 - **页内进度回执**：host-ops 任务 1→2→4→8s 退避（≤120s 约 16 次）；模式切换

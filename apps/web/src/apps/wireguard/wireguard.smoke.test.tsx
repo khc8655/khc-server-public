@@ -290,8 +290,33 @@ function mockApi(options: {
           adaptersError: null,
         });
       }
-      if (url === '/api/v1/nodes/tyo-1/state') {
-        return json(options.state ? options.state() : wireGuardState(options.peers.length > 0));
+      if (url === '/api/v1/nodes/tyo-1/overview') {
+        const statePayload = (options.state ? options.state() : wireGuardState(options.peers.length > 0)) as Record<string, unknown>;
+        return json({
+          node: {
+            id: 'tyo-1',
+            name: 'tyo-1',
+            endpoint: 'https://203.0.113.10:8880',
+            tunnelEndpoint: null,
+            liveEndpoint: 'https://hub.example.com',
+            preferredRoute: 'direct',
+            status: 'online',
+            lastSeenAt: NOW,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          ...statePayload,
+          overview: {
+            apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+            peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+            forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+            certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+            accessCert: { daysLeft: null, tlsState: 'none' },
+            host: null,
+            managedServices: [],
+            failedUnits: null,
+          },
+        });
       }
       return json({});
     }),

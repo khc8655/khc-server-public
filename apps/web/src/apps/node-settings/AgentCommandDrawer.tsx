@@ -74,7 +74,7 @@ export function AgentCommandDrawer({
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  const nodeQuery = useQuery(hubQueryOptions(hubId));
+  const nodeQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const node = nodeQuery.data;
   const modeLabel =
     node?.accessMode === 'domain'

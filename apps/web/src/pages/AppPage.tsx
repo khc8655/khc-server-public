@@ -8,7 +8,7 @@ import {
   appConfigQueryOptions,
   hubAppsQueryOptions,
   hubQueryOptions,
-  hubStateQueryOptions,
+  refreshHubRuntime,
   revisionsQueryOptions,
 } from '../data/queries';
 import {
@@ -53,7 +53,7 @@ export default function AppPage() {
   const toast = useToast();
   const meta = useMemo(() => getAppMeta(app), [app]);
 
-  const hubQuery = useQuery(hubQueryOptions(hubId));
+  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const configQuery = useQuery(appConfigQueryOptions(hubId, app));
   const revisionsQuery = useQuery(revisionsQueryOptions(hubId, app));
@@ -118,7 +118,7 @@ export default function AppPage() {
   const invalidate = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
-      queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+      refreshHubRuntime(queryClient, hubId),
       queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps', app, 'revisions'] }),
     ]);
   };

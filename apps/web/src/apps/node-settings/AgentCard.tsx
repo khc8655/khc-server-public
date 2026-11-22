@@ -4,7 +4,7 @@
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { hubStateQueryOptions } from '../../data/queries';
+import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import {
   agentReleasesQueryOptions,
   latestNewerAgentRelease,
@@ -47,7 +47,7 @@ export function AgentCard({
   lastSeenAt: number | null;
   offline: boolean;
 }) {
-  const stateQuery = useQuery(hubStateQueryOptions(hubId));
+  const { stateQuery, runtimePending, runtimeError, refreshRuntime } = useHubChannelsContext();
   const releasesQuery = useQuery(agentReleasesQueryOptions());
   const toast = useToast();
   const [drawerKind, setDrawerKind] = useState<'install' | 'uninstall' | null>(null);
@@ -116,23 +116,23 @@ export function AgentCard({
     <>
       <Card title={zh.agent.title}>
         <Stack gap={3}>
-          {stateQuery.isLoading && !stateQuery.data ? (
+          {runtimePending && !stateQuery.data ? (
             <Stack gap={2}>
               <Skeleton height={10} width="35%" />
               <Skeleton height={10} width="55%" />
             </Stack>
           ) : null}
 
-          {stateQuery.error ? (
+          {runtimeError ? (
             <Banner
               tone="danger"
               title={zh.agent.loadError}
-              description={stateQuery.error instanceof Error ? stateQuery.error.message : undefined}
+              description={runtimeError instanceof Error ? runtimeError.message : undefined}
               action={
                 <Button
                   label={zh.common.retry}
                   size="sm"
-                  onClick={() => void stateQuery.refetch()}
+                  onClick={() => void refreshRuntime()}
                 />
               }
             />

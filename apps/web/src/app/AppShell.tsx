@@ -57,10 +57,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const match = matchHubPath(pathname);
   const hubId = match?.hubId ?? '';
-  const isOverviewRoute = Boolean(match && !match.section && !match.app);
+  // 工作区内由 HubChannelsProvider 的 /overview 统一回填 ['hubs', hubId]，此处不再单独发起 /nodes/:id。
   const hubQuery = useQuery({
     ...hubQueryOptions(hubId),
-    enabled: Boolean(hubId) && !isOverviewRoute,
+    enabled: false,
   });
 
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -307,7 +307,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         />
         <div className="ui-main">
           {match ? (
-            <HubChannelsProvider hubId={hubId} useOverview={isOverviewRoute}>
+            <HubChannelsProvider hubId={hubId}>
               {topbar(<TaskCenter />)}
               <HubBarWithConnection
                 activeHub={activeHub}

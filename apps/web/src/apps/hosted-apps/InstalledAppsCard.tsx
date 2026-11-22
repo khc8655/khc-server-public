@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
+import { refreshHubRuntime } from '../../data/queries';
 import { action } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
 import { Button, Card, InlineError, Row, Skeleton, Stack, useToast } from '../../ui';
@@ -97,7 +98,7 @@ export function InstalledAppsCard({
       toast.show({ message: zh.catalog.uninstallSubmitted });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: hostedAppsInstalledQueryKey(hubId) }),
-        queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'state'] }),
+        refreshHubRuntime(queryClient, hubId),
       ]);
     } catch (cause) {
       setError(

@@ -54,6 +54,17 @@ const mode = {
   checkedAt: NOW,
 };
 
+const emptyOverview = {
+  apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+  peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+  forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+  accessCert: { daysLeft: null, tlsState: 'none' },
+  host: null,
+  managedServices: [],
+  failedUnits: null,
+};
+
 function mockApi() {
   nodeStatus = 'online';
   commandFails = false;
@@ -67,8 +78,9 @@ function mockApi() {
       if (url === '/api/v1/nodes') return json({ nodes: [{ ...node, status: nodeStatus }] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node: { ...node, status: nodeStatus } });
       if (url === '/api/v1/nodes/tyo-1/mode') return json(mode);
-      if (url === '/api/v1/nodes/tyo-1/state') {
+      if (url === '/api/v1/nodes/tyo-1/overview') {
         return json({
+          node: { ...node, status: nodeStatus },
           reachable: nodeStatus === 'online',
           route: 'direct',
           via: 'tcp',
@@ -79,6 +91,7 @@ function mockApi() {
             ports: [],
             agent: { version: reportedAgentVersion, serverTime: NOW, mode: 'wg' },
           },
+          overview: emptyOverview,
         });
       }
       if (url === '/api/v1/nodes/tyo-1/apps') {

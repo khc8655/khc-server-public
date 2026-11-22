@@ -59,6 +59,17 @@ function appConfig() {
   };
 }
 
+const emptyOverview = {
+  apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
+  peers: { enabled: false, online: 0, total: 0, offline: [], interfaceName: null, listenPort: null, items: [] },
+  forwards: { total: 0, tcpCount: 0, udpCount: 0, items: [] },
+  certs: { count: 0, soonestDaysLeft: null, expiring: [] },
+  accessCert: { daysLeft: null, tlsState: 'none' },
+  host: null,
+  managedServices: [],
+  failedUnits: null,
+};
+
 function mockApi(
   options: {
     nodeOverride?: Record<string, unknown>;
@@ -151,8 +162,9 @@ function mockApi(
           },
         });
       }
-      if (url === '/api/v1/nodes/tyo-1/state') {
+      if (url === '/api/v1/nodes/tyo-1/overview') {
         return json({
+          node: { ...currentNode, caddyMode: caddyInstalled ? 'installed' : 'none' },
           reachable: true,
           route: 'direct',
           via: 'fetch',
@@ -177,6 +189,7 @@ function mockApi(
             ],
             ports: [],
           },
+          overview: emptyOverview,
         });
       }
       return json({});
@@ -580,8 +593,9 @@ describe('应用页分段与本机监听端口（U3）', () => {
         if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/caddy_import_scan') {
           return json({ ok: true, result: { exists: true, caddyfilePath: '/etc/caddy/Caddyfile', blocks: [], imports: [], backups: [] } });
         }
-        if (url === '/api/v1/nodes/tyo-1/state') {
+        if (url === '/api/v1/nodes/tyo-1/overview') {
           return json({
+            node,
             reachable: true,
             route: 'direct',
             via: 'fetch',
@@ -592,6 +606,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
               adapters: [{ name: 'caddy-site', version: '1.0.0', status: { installed: true, running: true, sites: [] } }],
               ports: [],
             },
+            overview: emptyOverview,
           });
         }
         if (url === '/api/v1/nodes/tyo-1/apps/host-ops/call') {
@@ -657,8 +672,9 @@ describe('应用页分段与本机监听端口（U3）', () => {
         if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/caddy_import_scan') {
           return json({ ok: true, result: { exists: true, caddyfilePath: '/etc/caddy/Caddyfile', blocks: [], imports: [], backups: [] } });
         }
-        if (url === '/api/v1/nodes/tyo-1/state') {
+        if (url === '/api/v1/nodes/tyo-1/overview') {
           return json({
+            node: currentNode,
             reachable: true,
             route: 'direct',
             via: 'fetch',
@@ -697,6 +713,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
               ],
               ports: [],
             },
+            overview: emptyOverview,
           });
         }
         return json({});
