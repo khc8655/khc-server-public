@@ -20,6 +20,11 @@ export async function verifyAdminPassword(env: Env, password: string): Promise<b
 
 /** 受保护路由：校验签名 Cookie 会话 + 会话版本（auth.session_epoch） */
 export const requireAuth = createMiddleware<AppBindings>(async (c, next) => {
+  // 全局 /api/v1/* 已鉴权时跳过子路由重复挂接，避免同一请求串行查两遍 D1。
+  if (c.get('user')) {
+    await next();
+    return;
+  }
   const secret = c.env.SESSION_SECRET;
   if (!secret || secret.length < 32) {
     throw misconfigured('SESSION_SECRET 未配置（需 ≥32 字节）');

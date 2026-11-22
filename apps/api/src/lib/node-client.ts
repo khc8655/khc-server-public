@@ -219,6 +219,7 @@ export class HttpAgentClient implements AgentClient {
    * 成功一次即清除。诊断探测用 bypassCooldown 跳过。
    */
   private readonly cooldown = new Map<string, number>();
+  private readonly timeoutCooldownMs = 5_000;
 
   constructor(
     fetchImpl?: FetchLike,
@@ -359,7 +360,8 @@ export class HttpAgentClient implements AgentClient {
     } catch (error) {
       errors[target.route] = error instanceof Error ? error.message : String(error);
       const timedOut = error instanceof RouteAttemptError ? error.timedOut : false;
-      this.cooldown.set(node.id, Date.now() + this.cooldownMs);
+      const penaltyMs = timedOut ? Math.min(this.cooldownMs, this.timeoutCooldownMs) : this.cooldownMs;
+      this.cooldown.set(node.id, Date.now() + penaltyMs);
       throw new HubUnreachableError('Hub 不可达（按选定方案接入失败）', errors, timedOut);
     }
     const text = await response.text();

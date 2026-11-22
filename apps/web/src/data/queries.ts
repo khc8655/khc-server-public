@@ -12,14 +12,14 @@ export const hubsQueryOptions = () =>
   queryOptions({
     queryKey: ['hubs'],
     queryFn: fetchHubs,
-    staleTime: 10_000,
+    staleTime: 30_000,
   });
 
 export const hubQueryOptions = (hubId: string) =>
   queryOptions({
     queryKey: ['hubs', hubId],
     queryFn: () => fetchHub(hubId),
-    staleTime: 10_000,
+    staleTime: 30_000,
     enabled: Boolean(hubId),
   });
 
@@ -27,7 +27,7 @@ export const hubStateQueryOptions = (hubId: string) =>
   queryOptions({
     queryKey: ['hubs', hubId, 'state'],
     queryFn: () => fetchHubState(hubId),
-    staleTime: 5_000,
+    staleTime: 30_000,
     enabled: Boolean(hubId),
   });
 
@@ -35,7 +35,7 @@ export const hubOverviewQueryOptions = (hubId: string) =>
   queryOptions({
     queryKey: ['hubs', hubId, 'overview'],
     queryFn: () => fetchHubOverview(hubId),
-    staleTime: 5_000,
+    staleTime: 30_000,
     enabled: Boolean(hubId),
   });
 
@@ -43,7 +43,7 @@ export const hubAppsQueryOptions = (hubId: string) =>
   queryOptions({
     queryKey: ['hubs', hubId, 'apps'],
     queryFn: () => fetchHubApps(hubId),
-    staleTime: 10_000,
+    staleTime: 30_000,
     enabled: Boolean(hubId),
   });
 
@@ -51,7 +51,7 @@ export const appConfigQueryOptions = (hubId: string, app: string) =>
   queryOptions({
     queryKey: ['hubs', hubId, 'apps', app],
     queryFn: () => fetchAppConfig(hubId, app),
-    staleTime: 5_000,
+    staleTime: 30_000,
     enabled: Boolean(hubId && app),
   });
 

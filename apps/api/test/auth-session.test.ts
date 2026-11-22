@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { signSession } from '../src/lib/session';
+import { describe, expect, it, vi } from 'vitest';
+import { SESSION_EPOCH_KEY, signSession } from '../src/lib/session';
 import { loginAsAdmin, makeTestContext } from './helpers/context';
 import { b64UrlToBytes, bytesToB64Url, stringToBytes } from '../src/lib/encoding';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
@@ -101,5 +101,33 @@ describe('会话语义（批次 F）', () => {
       ctx.env,
     );
     expect(me.status).toBe(200);
+  });
+
+  it('单次受保护请求最多查询一次 auth.session_epoch，紧邻请求复用 isolate 缓存', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-22T12:00:00Z'));
+      const ctx = makeTestContext();
+      const cookie = await loginAsAdmin(ctx);
+      // 推进时间超过 15s 缓存 TTL，确保首个请求真实回源校验，但仅查 1 次 D1（非全局+子路由 2 次）。
+      vi.advanceTimersByTime(16_000);
+
+      const origGetValue = ctx.settings.getValue.bind(ctx.settings);
+      let epochReads = 0;
+      vi.spyOn(ctx.settings, 'getValue').mockImplementation(async (key) => {
+        if (key === SESSION_EPOCH_KEY) epochReads += 1;
+        return origGetValue(key);
+      });
+
+      const first = await ctx.app.request('/api/v1/nodes', { headers: { cookie } }, ctx.env);
+      expect(first.status).toBe(200);
+      expect(epochReads).toBe(1);
+
+      const second = await ctx.app.request('/api/v1/nodes', { headers: { cookie } }, ctx.env);
+      expect(second.status).toBe(200);
+      expect(epochReads).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

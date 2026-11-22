@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nowSec } from '../src/lib/ids';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { HubUnreachableError } from '../src/lib/node-client';
@@ -312,6 +312,25 @@ describe('nodes CRUD（v3）', () => {
     expect(stored?.lastSeenAt).toBeTruthy();
     // 数据分层：运行快照不进入 D1/仓储，只保留轻量可达租约。
     expect(stored && 'lastStateJson' in stored).toBe(false);
+  });
+
+  it('60 秒内重复拉取 /state 跳过冗余的 lastSeenAt D1 写入', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    ctx.agent.handler = async () => ({
+      status: 200,
+      body: { ok: true, host: { hostname: 'hub-a' }, adapters: [], ports: [] },
+    });
+
+    const spyUpdate = vi.spyOn(ctx.nodes, 'update');
+    const res1 = await ctx.app.request(`/api/v1/nodes/${id}/state`, { headers: authHeaders(cookie) }, ctx.env);
+    expect(res1.status).toBe(200);
+    expect(spyUpdate).toHaveBeenCalledTimes(1);
+
+    const res2 = await ctx.app.request(`/api/v1/nodes/${id}/state`, { headers: authHeaders(cookie) }, ctx.env);
+    expect(res2.status).toBe(200);
+    expect(spyUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('GET /state 附带控制面实测的 TLS 结论（https 探测成功 = verified）', async () => {

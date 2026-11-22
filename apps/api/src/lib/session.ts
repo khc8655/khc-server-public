@@ -8,6 +8,19 @@ export const SESSION_TTL_SEC = 8 * 60 * 60;
 export const SESSION_EPOCH_KEY = 'auth.session_epoch';
 export const TOTP_SECRET_KEY = 'auth.totp_secret';
 export const TOTP_PENDING_KEY = 'auth.totp_pending';
+export const SESSION_EPOCH_CACHE_TTL_MS = 15_000;
+
+interface EpochCacheEntry {
+  epoch: number;
+  at: number;
+}
+
+// 按 SettingsRepo 实例隔离缓存，避免跨环境/跨测试污染，且允许同一 isolate 15s 内免重复读 D1。
+const epochCache = new WeakMap<SettingsRepo, EpochCacheEntry>();
+
+function parseEpoch(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
 
 export interface SessionPayload {
   sub: string;
@@ -18,15 +31,27 @@ export interface SessionPayload {
 }
 
 /** 读取当前会话版本号；未配置或值非法一律按 0（部署前旧会话仍可用） */
-export async function readSessionEpoch(settings: SettingsRepo): Promise<number> {
-  const value = await settings.getValue(SESSION_EPOCH_KEY);
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+export async function readSessionEpoch(
+  settings: SettingsRepo,
+  opts: { bypassCache?: boolean } = {},
+): Promise<number> {
+  const now = Date.now();
+  if (!opts.bypassCache) {
+    const cached = epochCache.get(settings);
+    if (cached && now - cached.at < SESSION_EPOCH_CACHE_TTL_MS) {
+      return cached.epoch;
+    }
+  }
+  const epoch = parseEpoch(await settings.getValue(SESSION_EPOCH_KEY));
+  epochCache.set(settings, { epoch, at: now });
+  return epoch;
 }
 
 /** 递增会话版本号（撤销全部既有会话）；返回新版本号 */
 export async function bumpSessionEpoch(settings: SettingsRepo): Promise<number> {
-  const next = (await readSessionEpoch(settings)) + 1;
+  const next = (await readSessionEpoch(settings, { bypassCache: true })) + 1;
   await settings.put(SESSION_EPOCH_KEY, next);
+  epochCache.set(settings, { epoch: next, at: Date.now() });
   return next;
 }
 
