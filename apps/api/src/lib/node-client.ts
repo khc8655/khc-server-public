@@ -124,7 +124,9 @@ export async function signAgentRequest(
   const ts = Math.floor(Date.now() / 1000).toString();
   const nonce = randomNonce();
   const bodyHash = await sha256Hex(bodyText);
-  const canonical = `${method.toUpperCase()}|${path}|${ts}|${nonce}|${bodyHash}`;
+  const queryIdx = path.indexOf('?');
+  const canonicalPath = queryIdx >= 0 ? path.slice(0, queryIdx) : path;
+  const canonical = `${method.toUpperCase()}|${canonicalPath}|${ts}|${nonce}|${bodyHash}`;
   const signature = await hmacHex(token, canonical);
   return {
     'x-khc-ts': ts,

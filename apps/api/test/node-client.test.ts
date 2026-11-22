@@ -59,6 +59,12 @@ describe('node-client: HMAC 签名', () => {
     const canonical = `GET|/state|${headers['x-khc-ts']}|${headers['x-khc-nonce']}|${await sha256Hex('')}`;
     expect(headers['x-khc-sig']).toBe(await hmacHex('tok', canonical));
   });
+
+  it('path 带 query 时剥离查询串再签名（如 /state?force=1 按 /state 签）', async () => {
+    const headers = await signAgentRequest('tok', 'GET', '/state?force=1', '');
+    const canonical = `GET|/state|${headers['x-khc-ts']}|${headers['x-khc-nonce']}|${await sha256Hex('')}`;
+    expect(headers['x-khc-sig']).toBe(await hmacHex('tok', canonical));
+  });
 });
 
 describe('node-client: 版本协商失败（426 panel_too_old）', () => {
