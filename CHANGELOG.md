@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.37.1] - 2026-11-22
+### Added
+- 面板接口响应新增 `Server-Timing` 分段耗时（鉴权 / D1 / Agent / 总计）与慢请求日志，在浏览器开发者工具即可看出慢在哪一段。
+
 ## [0.37.0] - 2026-11-22
 ### Changed
 - 消除 Worker 全局与子路由重复鉴权导致的串行 D1 查询，并为 `session_epoch` 与快照节点查找引入 isolate 15s 短缓存，同时对 `/state` 与 `/probe` 的 `lastSeenAt` 落库增加 60 秒节流以大幅压降中转延迟。

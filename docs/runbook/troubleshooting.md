@@ -122,3 +122,24 @@ feat/server-capabilities（`01cdd8f`）起，面板删除节点/删除 Peer 的�
    - `watchdog`：看门狗 unit 与脚本位置；`backup` 指向上一版目录（默认 `/opt/khc-agent.prev`）。
 3. **判定以 `/health` 回显为准**：`curl -s http://127.0.0.1:<端口>/health` 的 `version` 是升级是否真正生效的唯一事实。实测存在 `upgrade.json` 记 `ok:false / status:unknown` 但 `/health` 已回显目标版本的假失败（2026-11-10，0.1.23→0.1.35），此时**不要重试**，否则会撞上第 1 条的重叠回滚。
 4. 需要人工回退时，停服务 → 把 `backup` 目录换回 `/opt/khc-agent` → 重启，再核对 `/health`；看门狗/重叠检测本身属已知缺陷（`docs/agent-lifecycle.md` §13），修复单独立项，**不要在执行升级时顺手改**。
+
+## 12. 面板 / 节点页面响应慢
+
+控制面 `/api/*` 响应均携带 `Server-Timing` 头（浏览器开发者工具 Network → 选中请求 → Timing 底部 **Server Timing** 可查看）：
+
+```text
+Server-Timing: auth;dur=12.0;desc="n=1", d1;dur=280.4;desc="n=3", agent;dur=1402.7;desc="n=1 tcp", total;dur=1731.2
+```
+
+- **各段含义**：`auth` = 会话验签与 `session_epoch` 查询；`d1` = D1 并集墙钟时间；`agent` = Worker 调节点 Agent（`desc` 带 `fetch` / `tcp`）；`total` = Worker 入口到出口总耗时。同类并行算并集，且 `auth` / `d1` 与并发 I/O 可能重叠，因此各段之和可以大于 `total`。
+- **拆出外网与边缘开销**：`浏览器总时长 − total ≈ 浏览器 → 第三方边缘 → workers.dev 回源网络耗时`。
+- **按大头处置**：
+  - `agent` 最大：排查节点链路、超时冷却与端口（见 §1、§6）；
+  - `d1` 最大：跨洲 D1 RTT 较高，先记录实测基线再评估节点缓存或 D1 读副本；
+  - `total` 很小但浏览器总时长很大：大头在用户网络或第三方边缘回源，不属 Agent/D1 故障。
+- **响应头缺失或被剥离时**：在 Cloudflare Workers Logs 搜索 `[timing] slow request`（`total ≥ 1500ms` 自动落日志），或执行基线脚本对比生产入口与原生 `workers.dev` 入口：
+
+```bash
+KHC_PASSWORD='<口令>' node scripts/relay-latency-baseline.mjs \
+  --base https://<生产域名> --base https://<worker>.workers.dev
+```
