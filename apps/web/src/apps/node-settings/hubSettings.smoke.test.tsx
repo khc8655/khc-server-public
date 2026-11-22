@@ -357,47 +357,22 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     expect(await screen.findByText('文件不是合法 JSON')).toBeTruthy();
   });
 
-  it('U4 到期日期设置：节点离线时仍可设置、保存与清除 expiresAt', async () => {
+  it('设置收敛为三分区：移除节点模式 Tab 与到期日期卡，节点模式并入默认页', async () => {
     stateReachable = false;
     await renderRoute('/hubs/tyo-1/settings');
 
-    expect(await screen.findByText('到期日期')).toBeTruthy();
-    expect(screen.getByText('未设置')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Agent 与接入' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '组件' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '备份与恢复' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '节点模式' })).toBeNull();
+    expect(screen.queryByText('到期日期')).toBeNull();
+    expect(await screen.findByText('节点模式')).toBeTruthy();
+  });
 
-    const dateInput = document.querySelector('#node-expires-at') as HTMLInputElement;
-    expect(dateInput).toBeTruthy();
-    expect(dateInput.type).toBe('date');
-    const saveBtn = screen.getByRole('button', { name: '保存到期日期' }) as HTMLButtonElement;
-    expect(saveBtn.disabled).toBe(true);
-
-    fireEvent.change(dateInput, { target: { value: '2099-12-31' } });
-    expect(saveBtn.disabled).toBe(false);
-    await userEvent.click(saveBtn);
-
-    await waitFor(() => {
-      const patch = requests.find(
-        (item) =>
-          item.url === '/api/v1/nodes/tyo-1' &&
-          item.init?.method === 'PATCH' &&
-          String(item.init?.body ?? '').includes('2099-12-31'),
-      );
-      expect(patch).toBeTruthy();
-    });
-    expect(await screen.findByText('到期日期已保存')).toBeTruthy();
-    expect(document.querySelector('.ui-expiry-chip')).toBeTruthy();
-
-    const clearBtn = await screen.findByRole('button', { name: '清除到期日期' });
-    await userEvent.click(clearBtn);
-    await waitFor(() => {
-      const patch = requests.find(
-        (item) =>
-          item.url === '/api/v1/nodes/tyo-1' &&
-          item.init?.method === 'PATCH' &&
-          String(item.init?.body ?? '').includes('"expiresAt":null'),
-      );
-      expect(patch).toBeTruthy();
-    });
-    expect(await screen.findByText('到期日期已清除')).toBeTruthy();
-    expect(await screen.findByText('未设置')).toBeTruthy();
+  it('?tab=mode 向后兼容并入 Agent 与接入，展示节点模式卡与安装入口', async () => {
+    await renderRoute('/hubs/tyo-1/settings?tab=mode');
+    expect(await screen.findByText('节点模式')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '安装 Agent' })).toBeTruthy();
   });
 });

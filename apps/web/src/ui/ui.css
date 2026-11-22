@@ -283,6 +283,9 @@
   display: inline-flex;
   align-items: center;
   height: 20px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0 var(--s15);
   border: 1px solid var(--border);
   border-radius: var(--r-xs);
@@ -1101,13 +1104,21 @@
 
 .ui-seg {
   display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   padding: var(--s05);
   gap: var(--s05);
   background: var(--surface-2);
   border-radius: var(--r-sm);
 }
 
+.ui-seg::-webkit-scrollbar {
+  display: none;
+}
+
 .ui-seg-item {
+  flex: 0 0 auto;
   height: var(--h-control-sm);
   padding: 0 var(--s25);
   border: 0;
@@ -1644,7 +1655,7 @@
   right: 0;
   bottom: 0;
   width: var(--drawer);
-  max-width: 100%;
+  max-width: 100vw;
   background: var(--surface);
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow-overlay);
@@ -3235,7 +3246,8 @@
   }
 
   .ui-drawer {
-    width: 100%;
+    width: 100vw;
+    max-width: 100vw;
   }
 
   .ui-page-head {
@@ -3529,6 +3541,49 @@
   font-size: var(--fs-sm);
   font-weight: var(--fw-regular);
   color: var(--text-3);
+}
+
+.ui-overview-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s5);
+  padding: var(--s25) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.ui-overview-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-sm);
+}
+
+.ui-overview-stat-label {
+  color: var(--text-2);
+}
+
+.ui-overview-stat-value {
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+
+.ui-overview-stat-value .ui-stat-den {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  color: var(--text-3);
+}
+
+.ui-overview-stat-value .is-warn,
+.ui-overview-stat.is-warn .ui-overview-stat-label {
+  color: var(--warn);
+}
+
+.ui-overview-stat-value .is-danger,
+.ui-overview-stat.is-danger .ui-overview-stat-label {
+  color: var(--danger);
 }
 
 .ui-section-header {
@@ -4727,13 +4782,14 @@ button.ui-statusbar-tile:hover {
 
 .ui-record-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s15);
   min-width: 0;
 }
 
 .ui-record-name {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

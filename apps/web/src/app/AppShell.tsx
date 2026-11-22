@@ -300,8 +300,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
           allHubsLabel={fmt(zh.nav.allHubs, { count: hubs.length })}
           backLabel={zh.nav.backToConsole}
           groupLabel={zh.nav.groupHubs}
-          footerLabel={me.data ? zh.app.controlPlaneConnected : zh.app.controlPlaneOffline}
-          footerTone={me.data ? 'ok' : 'neutral'}
           onSelectHub={handleSelectHub}
           onCreateHub={() => void router.navigate({ href: '/hubs?create=1' })}
           mobileOpen={mobileOpen}

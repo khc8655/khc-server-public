@@ -1304,12 +1304,16 @@ export default function WireGuardPage() {
       });
     }
     const wireguardMissing = Boolean(status && !status.installed);
-    if (!configState?.exists || wireguardMissing) {
+    if (!configQuery.isLoading && !appsQuery.isLoading && (!configState?.exists || wireguardMissing)) {
       banners.push({
         key: wireguardMissing ? 'not-installed' : 'not-configured',
         // 未安装 = 中性事实（按需安装，不是告警）；只有未配置才是信息提示。
         tone: wireguardMissing ? 'neutral' : 'info',
-        title: wireguardMissing ? zh.wireguard.notInstalledTitle : zh.wireguard.notConfiguredTitle,
+        title: wireguardMissing
+          ? zh.wireguard.notInstalledTitle
+          : status?.running
+            ? zh.wireguard.notConfiguredRunningTitle
+            : zh.wireguard.notConfiguredTitle,
         description: installTask
           ? installTaskText(installTask, zh.wireguard.installTaskState)
           : wireguardMissing

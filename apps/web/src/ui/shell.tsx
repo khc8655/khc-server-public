@@ -42,8 +42,8 @@ export interface SidebarProps {
   allHubsLabel: string;
   backLabel: string;
   groupLabel: string;
-  footerLabel: string;
-  footerTone: Tone;
+  footerLabel?: string;
+  footerTone?: Tone;
   onSelectHub: (hubId: string) => void;
   /** 节点列表标题右侧的新增入口 */
   onCreateHub?: () => void;
@@ -249,10 +249,12 @@ export function Sidebar({
           </>
         ) : null}
 
-        <div className="ui-sidebar-foot">
-          <StatusDot tone={footerTone} />
-          <span>{footerLabel}</span>
-        </div>
+        {footerLabel ? (
+          <div className="ui-sidebar-foot">
+            <StatusDot tone={footerTone ?? 'neutral'} />
+            <span>{footerLabel}</span>
+          </div>
+        ) : null}
       </aside>
     </>
   );

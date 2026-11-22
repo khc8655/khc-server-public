@@ -2523,6 +2523,7 @@ export const zh = {
     notInstalledTitle: '节点上尚未安装 WireGuard',
     notInstalledDesc: '安装后会创建接口并启动服务。',
     notConfiguredTitle: '节点上尚未配置 WireGuard',
+    notConfiguredRunningTitle: '面板尚未纳管节点上的 WireGuard',
     notConfiguredDesc: '保存并生效后会创建接口并启动服务。',
     notConfiguredRunningDesc: '节点上已有运行中的 WireGuard 接口；保存并生效后会按面板配置同步。',
     installAction: '安装 wireguard-tools',

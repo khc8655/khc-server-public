@@ -18,7 +18,6 @@ import {
   Row,
   Skeleton,
   Stack,
-  Truncate,
 } from '../ui';
 
 interface KpiItem {
@@ -74,11 +73,15 @@ export function OverviewPage() {
     if (hub.probed && hub.status === 'online' && hub.projection) {
       for (const issue of hub.projection.apps.issues) {
         appIssueCount += 1;
+        const siteLabel =
+          issue.domain && issue.domain !== issue.name
+            ? `${issue.domain}（${issue.name}）`
+            : issue.domain || issue.name;
         todos.push({
           id: `app:${hub.id}:${issue.name}`,
           tone: 'danger',
           badge: zh.overview.todoAppIssueBadge,
-          name: `${hub.name} · ${issue.name}`,
+          name: `${hub.name} · ${siteLabel}`,
           desc:
             issue.status !== null
               ? `HTTP ${issue.status}`
@@ -336,21 +339,15 @@ export function OverviewPage() {
       ) : null}
 
       {kpis.length > 0 ? (
-        <div className="ui-kpi-strip" data-cols={String(kpis.length)}>
+        <div className="ui-overview-strip" role="region" aria-label={zh.overview.title}>
           {kpis.map((kpi) => (
             <div
               key={kpi.key}
-              className={`ui-stat${kpi.tone === 'warn' ? ' ui-stat--warn' : kpi.tone === 'danger' ? ' ui-stat--danger' : ''}`}
+              className={`ui-overview-stat${kpi.tone === 'warn' ? ' is-warn' : kpi.tone === 'danger' ? ' is-danger' : ''}`}
+              title={kpi.hint || undefined}
             >
-              <div className="ui-stat-label">
-                <Truncate text={kpi.label} mode="end" />
-              </div>
-              <div className="ui-stat-value num">{kpi.value}</div>
-              {kpi.hint ? (
-                <div className="ui-stat-hint">
-                  <Truncate text={kpi.hint} />
-                </div>
-              ) : null}
+              <span className="ui-overview-stat-label">{kpi.label}</span>
+              <span className="ui-overview-stat-value num">{kpi.value}</span>
             </div>
           ))}
         </div>

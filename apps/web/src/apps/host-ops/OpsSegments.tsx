@@ -387,14 +387,6 @@ export function CronSegment({
         empty={{
           icon: 'refresh',
           title: zh.hostOps.cron.empty,
-          action: disabled ? undefined : (
-            <Button
-              label={zh.actions['hostOps.cronAdd']}
-              size="sm"
-              variant="primary"
-              onClick={() => onEdit(null)}
-            />
-          ),
         }}
       />
       <Row gap={2}>

@@ -147,6 +147,31 @@ function resolveLink(route: string, hubId: string): string {
 
 /* --------------------------------------------------------------- 文案工具 */
 
+const PENDING_APP_LABELS: Record<string, string> = {
+  'caddy-site': '应用站点',
+  wireguard: '内网穿透',
+  'port-forward': '端口转发',
+};
+
+export function formatCheckTitle(check: DiagnosticCheck): string {
+  if (check.code !== 'khc.config.pending_apply') return check.title;
+  const source = String(check.evidence?.apps ?? check.detail ?? '');
+  const matched = Object.keys(PENDING_APP_LABELS).filter((key) =>
+    new RegExp(`\\b${key}\\b`).test(source),
+  );
+  if (matched.length === 0) return check.title;
+  const labels = matched.map((key) => PENDING_APP_LABELS[key] ?? key).join('、');
+  return `${labels}：${check.title}`;
+}
+
+function formatCheckDetail(check: DiagnosticCheck): string {
+  if (check.code !== 'khc.config.pending_apply' || !check.detail) return check.detail;
+  return check.detail.replace(
+    /\b(caddy-site|wireguard|port-forward)\b/g,
+    (key) => `${PENDING_APP_LABELS[key] ?? key}（${key}）`,
+  );
+}
+
 function severityText(check: DiagnosticCheck): string {
   const map: Record<DiagnosticCheck['severity'], string> = {
     info: zh.diagnostics.severityInfo,
@@ -159,9 +184,13 @@ function severityText(check: DiagnosticCheck): string {
 function buildReport(check: DiagnosticCheck, hint: DiagnosticHint | null): string {
   const lines: string[] = [
     zh.diagnostics.reportTitle,
-    `${zh.diagnostics.checkItem}: ${check.title}`,
+    `${zh.diagnostics.checkItem}: ${formatCheckTitle(check)}`,
     `${zh.diagnostics.status}: ${severityText(check)}`,
-    `${zh.diagnostics.rootCause}: ${hint?.summary ?? check.detail}`,
+    `${zh.diagnostics.rootCause}: ${
+      check.code === 'khc.config.pending_apply'
+        ? formatCheckDetail(check) || hint?.summary || ''
+        : (hint?.summary ?? check.detail)
+    }`,
   ];
   if (hint) {
     lines.push(`${zh.diagnostics.impact}: ${hint.impact}`);
@@ -210,7 +239,7 @@ export function DiagnosticsIssueList({
       key: 'title',
       type: 'name',
       header: zh.diagnostics.checkItem,
-      value: (check) => check.title,
+      value: (check) => formatCheckTitle(check),
       dot: (check) => severityTone(check.severity),
     },
     {
@@ -223,7 +252,7 @@ export function DiagnosticsIssueList({
       key: 'hint',
       type: 'text',
       header: zh.diagnostics.impact,
-      value: (check) => hints.get(check.code)?.impact ?? check.detail,
+      value: (check) => formatCheckDetail(check) || hints.get(check.code)?.impact || '',
     },
   ];
 
@@ -378,11 +407,15 @@ export function DiagnosticsCheckDetail({
       <Banner
         tone="neutral"
         title={zh.diagnostics.rootCause}
-        description={hint?.summary ?? check.detail}
+        description={
+          check.code === 'khc.config.pending_apply'
+            ? formatCheckDetail(check) || hint?.summary || ''
+            : (hint?.summary ?? check.detail)
+        }
       />
       <KeyValue
         items={[
-          { key: zh.diagnostics.impact, value: hint?.impact ?? check.detail },
+          { key: zh.diagnostics.impact, value: formatCheckDetail(check) || hint?.impact || '' },
           { key: zh.diagnostics.status, value: severityText(check) },
         ]}
       />

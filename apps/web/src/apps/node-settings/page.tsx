@@ -37,15 +37,13 @@ import { formatAbsoluteTime, formatBytes } from '../../i18n/format';
 import { ModeCard } from './ModeCard';
 import { AgentCard } from './AgentCard';
 import { AccessCard } from './AccessCard';
-import { ExpiryCard } from './ExpiryCard';
 import { ComponentsCard } from './ComponentsCard';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 
-type Segment = 'agent' | 'components' | 'mode' | 'backup';
+type Segment = 'agent' | 'components' | 'backup';
 
 function resolveSettingsSegment(tab?: string): Segment {
   if (tab === 'components') return 'components';
-  if (tab === 'mode') return 'mode';
   if (tab === 'backup') return 'backup';
   return 'agent';
 }
@@ -234,7 +232,6 @@ export default function HubSettingsPage() {
   const segmentOptions = [
     { value: 'agent', label: zh.nodeSettings.segmentAgent },
     { value: 'components', label: zh.nodeSettings.segmentComponents },
-    { value: 'mode', label: zh.nodeSettings.segmentMode },
     { value: 'backup', label: zh.nodeSettings.segmentBackup },
   ];
 
@@ -256,16 +253,12 @@ export default function HubSettingsPage() {
       {segment === 'agent' ? (
         <>
           {hubQuery.data ? <AccessCard hub={hubQuery.data} /> : null}
-          {hubQuery.data ? <ExpiryCard hub={hubQuery.data} /> : null}
           <AgentCard hubId={hubId} hubName={hubName} lastSeenAt={hubQuery.data?.lastSeenAt ?? null} offline={offline} />
+          <ModeCard hubId={hubId} hubName={hubName} offline={offline} />
         </>
       ) : null}
 
       {segment === 'components' ? <ComponentsCard hubId={hubId} offline={offline} /> : null}
-
-      {segment === 'mode' ? (
-        <ModeCard hubId={hubId} hubName={hubName} offline={offline} />
-      ) : null}
 
       {segment === 'backup' ? (
         <>

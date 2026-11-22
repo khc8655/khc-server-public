@@ -242,7 +242,7 @@ async function renderRoute(path: string) {
 }
 
 async function openModeSegment() {
-  await userEvent.click(await screen.findByRole('button', { name: '节点模式' }));
+  await screen.findByText('节点模式');
 }
 
 async function openSwitchDrawer() {

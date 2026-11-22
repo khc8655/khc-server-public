@@ -25,11 +25,20 @@ export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
   return mode === 'system' ? (prefersDark() ? 'dark' : 'light') : mode;
 }
 
-/** 只设置 data-theme；颜色值全部来自 tokens.css。 */
+/** 只设置 data-theme；颜色值全部来自 tokens.css。切换瞬间禁过渡，防止深/浅色互切主按钮闪烁 mid-gray。 */
 export function applyTheme(mode: ThemeMode): 'light' | 'dark' {
   const resolved = resolveTheme(mode);
   if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = resolved;
+    const root = document.documentElement;
+    root.classList.add('is-theme-switching');
+    root.dataset.theme = resolved;
+    void root.offsetHeight;
+    const clear = () => root.classList.remove('is-theme-switching');
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(clear));
+    } else {
+      setTimeout(clear, 0);
+    }
   }
   return resolved;
 }

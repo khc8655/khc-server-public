@@ -68,7 +68,7 @@ export function AgentCommandDrawer({
   const [sha256, setSha256] = useState('');
   const [purge, setPurge] = useState(false);
   /** P0-1：安装命令可选组件（仅 kind==='install'；默认全不勾）。 */
-  const [installOpts, setInstallOpts] = useState({ withCaddy: false, tls: false, tlsCn: '' });
+  const [installOpts, setInstallOpts] = useState({ withCaddy: false });
   const [errors, setErrors] = useState<FormErrors>({});
   const [command, setCommand] = useState<AgentCommandResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,11 +124,6 @@ export function AgentCommandDrawer({
   const generate = async () => {
     setError(null);
     if (!validate()) return;
-    const cn = installOpts.tlsCn.trim();
-    if (kind === 'install' && cn && !/^[A-Za-z0-9.*-]+$/.test(cn)) {
-      setError(zh.hubs.installTlsCnInvalid);
-      return;
-    }
     setGenerating(true);
     try {
       const result = await generateAgentCommand(hubId, kind, {
@@ -140,8 +135,6 @@ export function AgentCommandDrawer({
           kind === 'install'
             ? {
                 withCaddy: installOpts.withCaddy,
-                tls: installOpts.tls,
-                ...(cn && installOpts.tls ? { tlsCn: cn } : {}),
               }
             : undefined,
       });
@@ -275,34 +268,6 @@ export function AgentCommandDrawer({
               }}
               label={zh.hubs.installWithCaddy}
             />
-            <Checkbox
-              checked={installOpts.tls}
-              onChange={(checked) => {
-                setInstallOpts((prev) => ({ ...prev, tls: checked }));
-                clearResult();
-              }}
-              label={zh.hubs.installTls}
-            />
-            {installOpts.tls ? (
-              <Field
-                id="agent-install-tls-cn"
-                label={zh.hubs.installTlsCn}
-                help={zh.hubs.installTlsCnHelp}
-                optional
-              >
-                <TextInput
-                  id="agent-install-tls-cn"
-                  value={installOpts.tlsCn}
-                  mono
-                  autoComplete="off"
-                  placeholder="agent.example.com"
-                  onChange={(value) => {
-                    setInstallOpts((prev) => ({ ...prev, tlsCn: value }));
-                    clearResult();
-                  }}
-                />
-              </Field>
-            ) : null}
             <p className="ui-field-help">{zh.hubs.installOptionsHint}</p>
           </Stack>
         ) : null}

@@ -1,6 +1,6 @@
 # 面板 UI 规范（ui-guidelines）
 
-> 状态：现行 ｜ 最后核验：2026-11-20 ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)
 > 范围：`apps/web/src` 全部页面与后续 UI 改动
 > 总原则：**一页一套范式**。看状态用状态带/指标，看明细用一张对象表，所有详情与操作都进全页唯一的右侧抽屉。
 > 轻量约束：只复用 `apps/web/src/ui/` 现有组件（Card / Table / Drawer / Dialog / ConfirmDialog / Banner / Badge / Button / Segmented / KeyValue / Stat / Field / CodeBlock / InlineError / EmptyState / Skeleton / Toast / Menu），**不引入任何重型组件库**（不加 antd/MUI/echarts/xterm 等），不做多层弹窗与重动效。
@@ -168,7 +168,7 @@
 | Peer | Peer 客户端 / 客户端 / Peer 主机 | 对象名统一为 Peer |
 | 端口转发 | 转发 / Forward | 对象名统一为「端口转发」 |
 | 主机 | 主机运维 / 服务器运维 / 运维 | 节点层主机运维 Tab 与概况主机卡片名 |
-| 设置 | 节点设置 / 节点设置与证书 | 节点层「设置」Tab；含 Agent 与接入、组件、节点模式、备份与恢复 |
+| 设置 | 节点设置 / 节点设置与证书 | 节点层「设置」Tab；含 Agent 与接入（含节点模式）、组件、备份与恢复 |
 | 证书库 | SSL 证书库 / 域名证书 / 域名与证书 | 全局设置下的分区名；统计仅计证书库，不含 Caddy 自动签发 |
 | 保存并生效 | 保存并应用 / 应用 | 保存后立即触发 apply 的配置按钮；仅写草稿不触发 apply 时用"保存"，两者不得混用 |
 | 保存 | 提交 / 确定 | 仅写草稿、不立即 apply 的保存按钮 |

@@ -130,7 +130,7 @@ describe('AppShell 与页面渲染', () => {
     await renderRoute('/hubs');
     expect(await screen.findByRole('heading', { name: '节点' })).toBeTruthy();
     expect((await screen.findAllByText('tyo-1')).length).toBeGreaterThan(0);
-    expect(screen.getByText('控制面已连接')).toBeTruthy();
+    expect(screen.queryByText('控制面已连接')).toBeNull();
   });
 
   it('概览页渲染面板版本与节点卡片', async () => {
