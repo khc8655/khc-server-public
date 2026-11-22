@@ -1,6 +1,6 @@
 # plan: 线上实测缺陷修复与产品瘦身（T1–T4）
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：docs/ui-redesign/page-specs.md、docs/hosted-apps.md、docs/cf-dns.md
+> 状态：已实施 ｜ 最后核验：2026-11-22 ｜ 关联：docs/ui-redesign/page-specs.md、docs/hosted-apps.md、docs/cf-dns.md
 
 ## 1. 背景
 
