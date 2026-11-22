@@ -1,6 +1,6 @@
 # khc-agent（Hub 端 Agent 内核）
 
-> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
 > 范围：Agent 内核/适配器契约与已知限制
 
 只用 **Python 3.11 标准库**，供 Cloudflare Worker 按需 HTTPS 调用（HMAC 鉴权）。
@@ -126,6 +126,7 @@ class MyApp(Adapter):
 
 `plan/apply/备份/回滚/原子写/unit reload/端口/幂等/写锁/Caddy 装配`全部由内核完成，
 适配器**不允许**自己做这些。外部命令一律走 `ctx.run()`（单测注入 mock）。
+`status()` 应尽快返回；内核为单次 `/state` 的所有适配器采集设置共享截止时间（默认 2 秒，可通过 `--status-deadline` 调整，`<= 0` 关闭）。超过截止时间尚未返回的适配器会在后台继续完成采集并更新缓存，同时本次先返回上次成功结果并附 `"stale": {"since": <unix 秒>, "reason": "timeout"}`；首次即超时则返回 `{"error": "status timeout", "pending": true}`，因此内核不保证每次 `/state` 调用都等慢适配器跑完。
 
 ## WireGuard 适配器（C2）
 
