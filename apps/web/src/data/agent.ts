@@ -11,6 +11,7 @@ import {
   type AgentInstallOptions,
   type AgentUpgradeResponse,
 } from '@khc/contracts';
+import { queryOptions } from '@tanstack/react-query';
 import { apiRequest } from './client';
 
 export type AgentCommandKind = AgentCommandType;
@@ -47,6 +48,86 @@ export async function fetchAgentReleases(): Promise<AgentRelease[]> {
     const sha256 = typeof release.sha256 === 'string' ? release.sha256 : '';
     if (!version || !url || !/^[0-9a-f]{64}$/i.test(sha256)) return [];
     return [{ version, url, sha256 }];
+  });
+}
+
+export const AGENT_RELEASES_QUERY_KEY = ['agent', 'releases'] as const;
+
+const SEMVER_RE = /^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/;
+
+function parseSemver(raw: string): { core: [number, number, number]; pre: string } | null {
+  const match = raw.trim().match(SEMVER_RE);
+  if (!match) return null;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3] ?? '0')],
+    pre: match[4] ?? '',
+  };
+}
+
+function comparePreRelease(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  const pa = a.split('.');
+  const pb = b.split('.');
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const sa = pa[i];
+    const sb = pb[i];
+    if (sa === undefined) return -1;
+    if (sb === undefined) return 1;
+    const na = /^\d+$/.test(sa) ? Number(sa) : null;
+    const nb = /^\d+$/.test(sb) ? Number(sb) : null;
+    if (na !== null && nb !== null) {
+      if (na !== nb) return na > nb ? 1 : -1;
+    } else if (na !== null) {
+      return -1;
+    } else if (nb !== null) {
+      return 1;
+    } else if (sa !== sb) {
+      return sa > sb ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+/** 比较两个语义化版本号（允许前导 v），返回 >0 表示 a 新于 b，0 表示相等或无法解析。 */
+export function compareSemver(a: string, b: string): number {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return 0;
+  for (let i = 0; i < 3; i++) {
+    const ca = pa.core[i] ?? 0;
+    const cb = pb.core[i] ?? 0;
+    if (ca !== cb) return ca > cb ? 1 : -1;
+  }
+  return comparePreRelease(pa.pre, pb.pre);
+}
+
+/** 返回比当前节点版本更新的最新发布包；版本相等、更新或缺失时返回 null。 */
+export function latestNewerAgentRelease(
+  releases: readonly AgentRelease[] | null | undefined,
+  currentVersion: string | null | undefined,
+): AgentRelease | null {
+  const latest = releases?.[0];
+  if (!latest || !currentVersion) return null;
+  return compareSemver(latest.version, currentVersion) > 0 ? latest : null;
+}
+
+/** 判断发布清单是否存在比节点当前上报版本更新的 Agent。 */
+export function hasNewerAgentRelease(
+  releases: readonly AgentRelease[] | null | undefined,
+  currentVersion: string | null | undefined,
+): boolean {
+  return latestNewerAgentRelease(releases, currentVersion) !== null;
+}
+
+export function agentReleasesQueryOptions() {
+  return queryOptions({
+    queryKey: AGENT_RELEASES_QUERY_KEY,
+    queryFn: fetchAgentReleases,
+    staleTime: 60_000,
+    retry: false,
   });
 }
 

@@ -754,14 +754,25 @@ export default function HubsPage() {
               ) : null}
             </Stack>
             {createdNodeId ? (
-              <Button
-                label={zh.hubs.goToNode}
-                size="sm"
-                onClick={() => {
-                  closeDrawer();
-                  void navigate({ href: paths.hub(createdNodeId) });
-                }}
-              />
+              <Row gap={2} wrap>
+                <Button
+                  label={zh.hubs.goToNode}
+                  size="sm"
+                  onClick={() => {
+                    closeDrawer();
+                    void navigate({ href: paths.hub(createdNodeId) });
+                  }}
+                />
+                <Button
+                  label={zh.hubs.goToSites}
+                  size="sm"
+                  variant={probeState === 'done' && probeItem?.reachable ? 'primary' : 'default'}
+                  onClick={() => {
+                    closeDrawer();
+                    void navigate({ href: paths.hubSection(createdNodeId, 'sites') });
+                  }}
+                />
+              </Row>
             ) : null}
           </Stack>
         ) : (

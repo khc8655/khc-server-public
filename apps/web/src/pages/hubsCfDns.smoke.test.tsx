@@ -77,6 +77,7 @@ let accounts: Array<{
   zones: Array<{ id: string; name: string }>;
   enabledZoneIds: string[];
 }> = [];
+let resolveCheckOk = true;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function mockApi() {
@@ -121,6 +122,39 @@ function mockApi() {
           .filter((zone) => account.enabledZoneIds.includes(zone.id))
           .map((zone) => ({ ...zone, accountId: account.id, accountName: account.name }));
         return json({ account });
+      }
+      if (/^\/api\/v1\/cf-dns\/records\/[^/]+$/.test(url) && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          type: 'A' | 'AAAA' | 'CNAME';
+          name: string;
+          content: string;
+          proxied?: boolean;
+        };
+        const created = {
+          id: `rec-created-${records.length + 1}`,
+          type: body.type,
+          name: body.name,
+          content: body.content,
+          proxied: Boolean(body.proxied),
+          comment: null,
+          managed: true,
+        };
+        records = [created, ...records];
+        return json({ record: created }, 201);
+      }
+      if (url === '/api/v1/cf-dns/resolve-check' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          name: string;
+          type?: 'A' | 'AAAA' | 'CNAME';
+        };
+        return json({
+          name: body.name,
+          type: body.type ?? 'A',
+          resolved: resolveCheckOk,
+          answers: resolveCheckOk ? ['203.0.113.10'] : [],
+          status: resolveCheckOk ? 0 : 3,
+          checkedAt: 1700000000,
+        });
       }
       if (url.startsWith('/api/v1/cf-dns/records')) {
         if (init?.method === 'POST') {
@@ -214,6 +248,7 @@ beforeEach(() => {
   records = [];
   tunnels = [];
   accounts = [];
+  resolveCheckOk = true;
   probeReachable = false;
   caddyInstalled = true;
   tlsVerified = false;
@@ -236,6 +271,7 @@ async function renderHubs() {
     </QueryClientProvider>,
   );
   await screen.findByRole('heading', { name: '节点' });
+  return router;
 }
 
 async function openCreateDrawer() {
@@ -800,5 +836,48 @@ describe('添加节点：统一接入表单', () => {
     expect(screen.getByText('cloudflared / 隧道尚未启动（Tunnel 模式）')).toBeTruthy();
     expect(screen.getByText('防火墙未放行端口（IP 直连）')).toBeTruthy();
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('域名模式：就地新建解析记录、检测 DoH 解析生效、创建后直达「去发布应用」', async () => {
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    const router = await renderHubs();
+    await openCreateDrawer();
+
+    await userEvent.type(screen.getByLabelText('节点名称'), 'edge-node');
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    await userEvent.click(await screen.findByRole('button', { name: '+ 新建解析记录' }));
+
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/记录名/), 'edge');
+    await userEvent.type(within(dialog).getByLabelText(/内容/), '203.0.113.10');
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建并选中' }));
+
+    await waitFor(() => {
+      const createdReq = requests.find(
+        (item) => item.url === '/api/v1/cf-dns/records/z1' && item.init?.method === 'POST',
+      );
+      expect(createdReq).toBeTruthy();
+      expect(JSON.parse(String(createdReq?.init?.body))).toEqual({
+        type: 'A',
+        name: 'edge.example.com',
+        content: '203.0.113.10',
+        proxied: false,
+      });
+    });
+
+    await waitFor(() => {
+      const preview = within(dialog).getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement;
+      expect(preview.value).toBe('https://edge.example.com:2053');
+    });
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '检测解析' }));
+    expect(await within(dialog).findByText('解析已生效（203.0.113.10）')).toBeTruthy();
+
+    await submitCreate();
+    await screen.findByText('节点已创建');
+    await userEvent.click(await screen.findByRole('button', { name: '去发布应用' }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/hubs/node-9/sites');
+    });
   });
 });

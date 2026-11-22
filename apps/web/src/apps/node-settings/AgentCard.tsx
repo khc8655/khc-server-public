@@ -2,14 +2,14 @@
  * 节点设置 · Agent 卡片（C5 + E3）：上报信息展示 + 安装/卸载命令（复制粘贴）
  * + 远程升级（发布清单 → POST /agent/upgrade，Agent 拉取式自重启，替换升级命令）。
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { hubStateQueryOptions } from '../../data/queries';
 import {
-  fetchAgentReleases,
+  agentReleasesQueryOptions,
+  latestNewerAgentRelease,
   rollbackTarget,
   upgradeAgentRemote,
-  type AgentRelease,
 } from '../../data/agent';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import { ConfirmAction } from '../../patterns';
@@ -48,38 +48,25 @@ export function AgentCard({
   offline: boolean;
 }) {
   const stateQuery = useQuery(hubStateQueryOptions(hubId));
+  const releasesQuery = useQuery(agentReleasesQueryOptions());
   const toast = useToast();
   const [drawerKind, setDrawerKind] = useState<'install' | 'uninstall' | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeConfirm, setUpgradeConfirm] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);
-  const [releases, setReleases] = useState<AgentRelease[] | null>(null);
   const [dispatched, setDispatched] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
   const agent = stateQuery.data?.state?.agent;
   const version = agent?.version ?? null;
+  const releases = releasesQuery.data ?? null;
   const stateOffline = offline || stateQuery.data?.reachable === false;
   const authFailed = Boolean(
     stateQuery.data?.error && /鉴权失败|HTTP 40[13]|unauthorized|invalid token/i.test(stateQuery.data.error),
   );
   const latest = releases?.[0] ?? null;
+  const newerRelease = latestNewerAgentRelease(releases, version);
   // ADR-0019：清单第 2 条是上一版；仅当节点正跑最新版时才提供回滚入口。
   const previous = rollbackTarget(releases, version);
-
-  // 发布清单（#32）：远程升级从中取包地址与 sha256。
-  useEffect(() => {
-    let cancelled = false;
-    void fetchAgentReleases()
-      .then((items) => {
-        if (!cancelled) setReleases(items);
-      })
-      .catch(() => {
-        if (!cancelled) setReleases([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const confirmRemoteUpgrade = async () => {
     if (!latest) return;
@@ -158,6 +145,13 @@ export function AgentCard({
             <>
               <Row gap={2} wrap>
                 <Badge tone="ok" label={version ? `v${version}` : zh.agent.notReported} />
+                {newerRelease ? (
+                  <Badge
+                    tone="warn"
+                    label={fmt(zh.agent.upgradeAvailableBadge, { version: newerRelease.version })}
+                    dot
+                  />
+                ) : null}
               </Row>
               <KeyValue
                 items={[
@@ -193,7 +187,7 @@ export function AgentCard({
               label={actionLabel(action('agent.remoteUpgrade'))}
               icon="refresh"
               size="sm"
-              variant="primary"
+              variant={newerRelease ? 'primary' : 'default'}
               disabled={stateOffline || !latest || authFailed}
               disabledReason={
                 authFailed

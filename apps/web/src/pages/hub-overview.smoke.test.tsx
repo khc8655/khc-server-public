@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import type { NodeOverviewData } from '@khc/contracts';
@@ -46,6 +47,7 @@ let overviewStatus = 200;
 let overviewPatch: Partial<NodeOverviewData> = {};
 let accessMode: 'domain' | 'tunnel' | 'ip' = 'domain';
 let nodeExpiresAt: string | null = null;
+let agentReleases: Array<{ version: string; url: string; sha256: string }> = [];
 let requests: string[] = [];
 
 function buildOverviewResponse() {
@@ -161,6 +163,7 @@ beforeEach(() => {
   overviewPatch = {};
   accessMode = 'domain';
   nodeExpiresAt = null;
+  agentReleases = [];
   requests = [];
   vi.stubGlobal(
     'fetch',
@@ -178,6 +181,9 @@ beforeEach(() => {
       if (url === '/api/v1/nodes/x86-2/snapshot') {
         return json({ ok: false, snapshot: null });
       }
+      if (url === '/api/v1/agent/releases') {
+        return json({ releases: agentReleases });
+      }
       return json({});
     }),
   );
@@ -194,11 +200,12 @@ async function renderOverview() {
     queryClient,
     createMemoryHistory({ initialEntries: ['/hubs/x86-2'] }),
   );
-  return render(
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return Object.assign(rendered, { router });
 }
 
 describe('节点概况页 · 单请求与核心展示（U3）', () => {
@@ -367,5 +374,48 @@ describe('节点概况页 · 单请求与核心展示（U3）', () => {
     const dueTriage = dueRender.container.querySelector('.ui-triage-strip')?.textContent ?? '';
     expect(dueTriage).toContain('节点已过期');
     expect(dueTriage).toContain('节点今日到期');
+  });
+
+  it('Agent 落后发布清单时在「需要处理」提示可升级并直达节点设置，已是最新版时不提示', async () => {
+    agentReleases = [
+      {
+        version: '0.6.5',
+        url: 'https://example.com/khc-agent-0.6.5.tar.gz',
+        sha256: 'a'.repeat(64),
+      },
+    ];
+    overviewPatch = {
+      host: {
+        hostname: 'hub-x86',
+        os: 'Debian 12',
+        kernel: '6.1.0',
+        uptime: 86400,
+        agentVersion: '0.6.0',
+      },
+    };
+    const outdated = await renderOverview();
+    expect(await screen.findByText('可升级')).toBeTruthy();
+    expect(screen.getByText('Agent v0.6.5')).toBeTruthy();
+    expect(screen.getByText('当前 v0.6.0 · 最新 v0.6.5')).toBeTruthy();
+    await userEvent.click(screen.getByText('Agent v0.6.5'));
+    await waitFor(() => {
+      expect(outdated.router.state.location.pathname).toBe('/hubs/x86-2/settings');
+    });
+    cleanup();
+
+    overviewPatch = {
+      host: {
+        hostname: 'hub-x86',
+        os: 'Debian 12',
+        kernel: '6.1.0',
+        uptime: 86400,
+        agentVersion: '0.6.5',
+      },
+    };
+    const current = await renderOverview();
+    expect(await screen.findByText('Agent v0.6.5')).toBeTruthy();
+    expect(current.container.querySelector('.ui-triage-strip')?.textContent ?? '').not.toContain(
+      '可升级',
+    );
   });
 });
