@@ -114,7 +114,7 @@ describe('AccessForm 纯函数', () => {
     });
   });
 
-  it('域名模式：手动输入时框空 / 非法域名不可提交', () => {
+  it('域名模式：手动输入时框空 / 含协议端口或路径 / 非法域名不可提交', () => {
     expect(accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: '' }))).toBe(
       '请填写域名',
     );
@@ -122,8 +122,51 @@ describe('AccessForm 纯函数', () => {
       accessDraftIssue(draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'not a domain' })),
     ).toBe('域名格式不正确');
     expect(
-      isAccessDraftSubmittable(
+      accessDraftIssue(
         draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'https://app.other.net/x' }),
+      ),
+    ).toBe('请只填写纯域名（例如 app.example.com），不要包含 http/https:// 或 :端口号');
+    expect(
+      accessDraftIssue(
+        draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'foo.com:8443' }),
+      ),
+    ).toBe('请只填写纯域名（例如 app.example.com），不要包含 http/https:// 或 :端口号');
+    expect(
+      isAccessDraftSubmittable(
+        draft({ domainSource: 'manual', zoneId: '', recordId: '', domain: 'app.other.net' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('域名模式自动发布：upstreamPort 与 publishPort 或 domainPort 冲突时不可提交', () => {
+    expect(
+      accessDraftIssue(
+        draft({
+          autoPublish: true,
+          upstreamPort: '443',
+          publishPort: '443',
+          domainPort: '8443',
+        }),
+      ),
+    ).toBe('上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）');
+    expect(
+      accessDraftIssue(
+        draft({
+          autoPublish: true,
+          upstreamPort: '8443',
+          publishPort: '443',
+          domainPort: '8443',
+        }),
+      ),
+    ).toBe('上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）');
+    expect(
+      isAccessDraftSubmittable(
+        draft({
+          autoPublish: true,
+          upstreamPort: '3000',
+          publishPort: '443',
+          domainPort: '8443',
+        }),
       ),
     ).toBe(true);
   });

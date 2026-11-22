@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useSearch } from '@tanstack/react-router';
 import type {
   Certificate,
   CertificateSyncTargetResult,
   CreateCertificateRequest,
-  TaskResponse,
 } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { hubStateQueryOptions, hubsQueryOptions } from '../../data/queries';
@@ -17,23 +16,18 @@ import {
   deleteCertificate,
   extractCertificateResult,
   extractInspectResult,
-  extractTaskCertificateResult,
   fetchCertificateMaterial,
-  fetchCertificateTask,
   fetchCertificateUsages,
   issueCfDnsCertificate,
   patchCertificateAutoSync,
   renewCertificate,
   runCertificateAction,
   syncCertificate,
-  updateCertificate,
-  type CertActionEnvelope,
 } from '../../data/certs';
 import { fetchCfDnsAccounts } from '../../data/cfDns';
-import { settingsQueryOptions } from '../../data/settings';
 import { paths } from '../../registry/routes';
 import { action, actionLabel, type ActionRef } from '../../registry/actions';
-import { ConfirmAction, TaskView } from '../../patterns';
+import { ConfirmAction } from '../../patterns';
 import {
   Badge,
   Banner,
@@ -70,7 +64,7 @@ import {
   formatExpiry,
 } from '../../i18n/format';
 
-type CertMode = 'cf-dns01' | 'selfsigned' | 'acme' | 'manual';
+type CertMode = 'cf-dns01' | 'selfsigned' | 'manual';
 
 interface IssueForm {
   mode: CertMode;
@@ -80,31 +74,12 @@ interface IssueForm {
   accountId: string;
   days: number | null;
   keyType: '' | 'ec' | 'rsa';
-  provider: string;
-  credentialsKey: string;
   ca: string;
   certPem: string;
   keyPem: string;
   parsedNotAfter: number | null;
   error: string | null;
   busy: boolean;
-}
-
-interface AcmeTask {
-  nodeId: string;
-  taskId: string;
-  name: string;
-  domains: string[];
-  provider: string;
-  credentialsKey: string;
-  ca: string;
-  keyType: '' | 'ec' | 'rsa';
-}
-
-interface RenewTask {
-  nodeId: string;
-  taskId: string;
-  cert: Certificate;
 }
 
 interface ExportDialogState {
@@ -141,8 +116,6 @@ function defaultForm(mode: CertMode, scopeNodeId?: string): IssueForm {
     accountId: '',
     days: 365,
     keyType: '',
-    provider: '',
-    credentialsKey: '',
     ca: mode === 'cf-dns01' ? 'letsencrypt' : '',
     certPem: '',
     keyPem: '',
@@ -163,9 +136,11 @@ function expiryTone(notAfter: number | null): 'ok' | 'warn' | 'danger' | 'neutra
 export default function CertificatesPage({
   scopeHubId,
   embedded = false,
+  createSignal = 0,
 }: {
   scopeHubId?: string;
   embedded?: boolean;
+  createSignal?: number;
 } = {}) {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -173,22 +148,17 @@ export default function CertificatesPage({
 
   const certsQuery = useQuery(certificatesQueryOptions());
   const hubsQuery = useQuery(hubsQueryOptions());
-  const settingsQuery = useQuery(settingsQueryOptions());
 
   const allCerts = certsQuery.data ?? [];
   const hubs = hubsQuery.data ?? [];
   const onlineHubs = hubs.filter((hub) => hub.status === 'online');
-  const settings = settingsQuery.data ?? [];
 
   const [searchText, setSearchText] = useState('');
   const [form, setForm] = useState<IssueForm | null>(null);
   const [detailCert, setDetailCert] = useState<Certificate | null>(null);
-  const [acmeTask, setAcmeTask] = useState<AcmeTask | null>(null);
-  const [renewTask, setRenewTask] = useState<RenewTask | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [exportState, setExportState] = useState<ExportDialogState | null>(null);
   const [inspecting, setInspecting] = useState(false);
-  const [finishing, setFinishing] = useState(false);
   const [bindTarget, setBindTarget] = useState('');
   const [bindBusy, setBindBusy] = useState(false);
   const [bindMessage, setBindMessage] = useState<string | null>(null);
@@ -199,8 +169,10 @@ export default function CertificatesPage({
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncResults, setSyncResults] = useState<CertificateSyncTargetResult[] | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const formRef = useRef<IssueForm | null>(null);
-  formRef.current = form;
+  const [detailDeleteArmed, setDetailDeleteArmed] = useState(false);
+  const [detailDeleteBusy, setDetailDeleteBusy] = useState(false);
+  const [detailDeleteError, setDetailDeleteError] = useState<string | null>(null);
+  const lastCreateSignal = useRef(createSignal);
 
   const usagesQuery = useQuery({
     queryKey: ['certs', detailCert?.id, 'usages'],
@@ -278,22 +250,6 @@ export default function CertificatesPage({
     return days !== null && days <= 14;
   }).length;
 
-  const taskQuery = useQuery({
-    queryKey: ['hubs', acmeTask?.nodeId, 'tasks', acmeTask?.taskId],
-    queryFn: () => fetchCertificateTask(acmeTask?.nodeId as string, acmeTask?.taskId as string),
-    enabled: Boolean(acmeTask),
-    // 签发进度不自动轮询：用户点「刷新」再拉取，避免持续消耗 Worker 请求。
-    retry: false,
-  });
-
-  const renewTaskQuery = useQuery({
-    queryKey: ['hubs', renewTask?.nodeId, 'tasks', renewTask?.taskId],
-    queryFn: () =>
-      fetchCertificateTask(renewTask?.nodeId as string, renewTask?.taskId as string),
-    enabled: Boolean(renewTask),
-    retry: false,
-  });
-
   // 节点作用域：读 Agent 自身的 TLS 状态，展示控制通道证书是否已生效/何时到期。
   const scopeStateQuery = useQuery({
     ...hubStateQueryOptions(scopeHubId ?? ''),
@@ -312,9 +268,16 @@ export default function CertificatesPage({
     setDrawerSearch(mode === 'manual' ? 'import' : 'issue', false);
   };
 
+  useEffect(() => {
+    if (createSignal !== lastCreateSignal.current) {
+      lastCreateSignal.current = createSignal;
+      openIssue(defaultCreateMode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createSignal, defaultCreateMode]);
+
   const closeIssue = () => {
     setForm(null);
-    // ACME 任务在后台继续，完成后仍会入库并提示
     setDrawerSearch(undefined);
   };
 
@@ -324,9 +287,10 @@ export default function CertificatesPage({
     setBindMessage(null);
     setBindError(null);
     setRenewError(null);
-    setRenewTask(null);
     setSyncResults(null);
     setSyncError(null);
+    setDetailDeleteArmed(false);
+    setDetailDeleteError(null);
     setDrawerSearch(`cert:${encodeURIComponent(cert.id)}`, false);
   };
 
@@ -336,9 +300,10 @@ export default function CertificatesPage({
     setBindMessage(null);
     setBindError(null);
     setRenewError(null);
-    setRenewTask(null);
     setSyncResults(null);
     setSyncError(null);
+    setDetailDeleteArmed(false);
+    setDetailDeleteError(null);
     setDrawerSearch(undefined);
   };
 
@@ -369,89 +334,8 @@ export default function CertificatesPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.drawer, certsQuery.isSuccess]);
 
-  // ACME 任务完成 → 自动入库
-  useEffect(() => {
-    const task = taskQuery.data?.task;
-    if (!acmeTask || !task) return;
-    if (task.state === 'error' || task.state === 'canceled') {
-      setForm((prev) =>
-        prev && prev.mode === 'acme'
-          ? { ...prev, busy: false, error: task.error?.message ?? zh.certs.actionFailed }
-          : prev,
-      );
-      if (formRef.current?.mode !== 'acme') {
-        toast.show({ message: task.error?.message ?? zh.certs.actionFailed });
-      }
-      setAcmeTask(null);
-      return;
-    }
-    if (task.state !== 'done' || finishing) return;
-    setFinishing(true);
-    void (async () => {
-      try {
-        const material = extractTaskCertificateResult(task);
-        if (!material) throw new Error(zh.certs.actionFailed);
-        await createAndMaybeBind(
-          {
-            name: acmeTask.name,
-            domains: material.domains.length > 0 ? material.domains : acmeTask.domains,
-            issuer: 'acme',
-            notAfter: material.notAfter ?? undefined,
-            certPem: material.certPem,
-            keyPem: material.keyPem,
-            sourceNodeId: acmeTask.nodeId,
-            acme: {
-              provider: acmeTask.provider,
-              credentialKey: acmeTask.credentialsKey,
-              ...(acmeTask.ca ? { ca: acmeTask.ca } : {}),
-              ...(acmeTask.keyType ? { keyType: acmeTask.keyType } : {}),
-            },
-          },
-          acmeTask.nodeId,
-        );
-        await queryClient.invalidateQueries({ queryKey: ['certs'] });
-        toast.show({ message: zh.certs.issueSuccess });
-        setAcmeTask(null);
-        if (formRef.current?.mode === 'acme') {
-          setForm(null);
-          setDrawerSearch(undefined);
-        }
-      } catch (error) {
-        const text = message(error, zh.certs.createFailed);
-        setForm((prev) => (prev ? { ...prev, busy: false, error: text } : prev));
-        if (formRef.current?.mode !== 'acme') toast.show({ message: text });
-        setAcmeTask(null);
-      } finally {
-        setFinishing(false);
-      }
-    })();
-  }, [acmeTask, finishing, queryClient, taskQuery.data?.task, toast]);
-
   const setFormField = (patch: Partial<IssueForm>) => {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev));
-  };
-
-  /** 签发成功后：域名为接入方式的节点自动把证书装到 Agent 并热重载。 */
-  const createAndMaybeBind = async (input: CreateCertificateRequest, nodeId: string) => {
-    const cert = await createCertificate(input);
-    const hub = (hubsQuery.data ?? []).find((item) => item.id === nodeId);
-    if (cert.issuer === 'acme' && hub?.accessMode === 'domain') {
-      try {
-        const bind = await bindCertificate(cert.id, nodeId);
-        toast.show({
-          message: bind.restartRequired
-            ? (bind.message ?? zh.certs.bindRestartRequired)
-            : zh.certs.bindSuccess,
-        });
-      } catch (error) {
-        toast.show({
-          message: fmt(zh.certs.bindAfterIssueFailed, {
-            error: message(error, zh.certs.bindFailed),
-          }),
-        });
-      }
-    }
-    return cert;
   };
 
   const bindCertToNode = async (cert: Certificate, nodeId: string) => {
@@ -479,34 +363,18 @@ export default function CertificatesPage({
     }
   };
 
-  const applyRenewMaterial = async (
-    cert: Certificate,
-    material: NonNullable<ReturnType<typeof extractCertificateResult>>,
-    nodeId: string,
-  ) => {
-    const updated = await updateCertificate(cert.id, {
-      certPem: material.certPem,
-      keyPem: material.keyPem,
-      ...(material.notAfter === null ? {} : { notAfter: material.notAfter }),
-      ...(material.domains.length === 0 ? {} : { domains: material.domains }),
-      issuer: 'acme',
-    });
-    await queryClient.invalidateQueries({ queryKey: ['certs'] });
-    setDetailCert(updated);
-    toast.show({ message: zh.certs.renewSuccess });
-    // 续期后自动重新安装到原节点，保持控制通道证书最新
-    await bindCertToNode(updated, nodeId);
-  };
-
   const toggleAutoSync = async (cert: Certificate, autoSync: boolean) => {
+    const previous = cert.autoSync;
     setAutoSyncBusy(true);
     setSyncError(null);
+    setDetailCert((prev) => (prev && prev.id === cert.id ? { ...prev, autoSync } : prev));
     try {
       const updated = await patchCertificateAutoSync(cert.id, autoSync);
       await queryClient.invalidateQueries({ queryKey: ['certs'] });
       setDetailCert(updated);
       toast.show({ message: zh.certs.autoSyncSaved });
     } catch (error) {
+      setDetailCert((prev) => (prev && prev.id === cert.id ? { ...prev, autoSync: previous } : prev));
       setSyncError(message(error, zh.certs.actionFailed));
     } finally {
       setAutoSyncBusy(false);
@@ -541,66 +409,20 @@ export default function CertificatesPage({
     setRenewError(null);
     setRenewing(true);
     try {
-      if (cert.acmeProvider === 'cf-dns01') {
-        const { certificate: updated, syncResults: autoResults } = await renewCertificate(cert.id);
-        await queryClient.invalidateQueries({ queryKey: ['certs'] });
-        setDetailCert(updated);
-        if (autoResults) setSyncResults(autoResults);
-        toast.show({ message: zh.certs.renewSuccess });
-        return;
+      if (cert.acmeProvider !== 'cf-dns01') {
+        throw new Error('仅支持控制面 Cloudflare DNS-01 签发证书一键续期');
       }
-      if (!cert.sourceNodeId || !cert.acmeProvider || !cert.acmeCredentialKey) {
-        throw new Error(zh.certs.renewUnsupported);
-      }
-      const envelope = await runCertificateAction(cert.sourceNodeId, 'issue_acme', {
-        domains: cert.domains,
-        provider: cert.acmeProvider,
-        credentials: { $dnsCred: cert.acmeCredentialKey },
-        ca: cert.acmeCa ?? undefined,
-        keyType: cert.acmeKeyType ?? undefined,
-      });
-      if (!envelope.ok) throw new Error(envelope.error?.message ?? zh.certs.actionFailed);
-      if (envelope.taskId) {
-        setRenewTask({ nodeId: cert.sourceNodeId, taskId: envelope.taskId, cert });
-        return;
-      }
-      const material = extractCertificateResult(envelope);
-      if (!material) throw new Error(zh.certs.actionFailed);
-      await applyRenewMaterial(cert, material, cert.sourceNodeId);
+      const { certificate: updated, syncResults: autoResults } = await renewCertificate(cert.id);
+      await queryClient.invalidateQueries({ queryKey: ['certs'] });
+      setDetailCert(updated);
+      if (autoResults) setSyncResults(autoResults);
+      toast.show({ message: zh.certs.renewSuccess });
     } catch (error) {
       setRenewError(message(error, zh.certs.renewFailed));
     } finally {
       setRenewing(false);
     }
   };
-
-  // 续期任务完成 → 替换材料并重新安装到节点
-  useEffect(() => {
-    const task = renewTaskQuery.data?.task;
-    if (!renewTask || !task || renewing) return;
-    if (task.state === 'error' || task.state === 'canceled') {
-      setRenewError(task.error?.message ?? zh.certs.renewFailed);
-      setRenewTask(null);
-      return;
-    }
-    if (task.state !== 'done') return;
-    setRenewing(true);
-    void (async () => {
-      try {
-        const material = extractTaskCertificateResult(task);
-        if (!material) throw new Error(zh.certs.actionFailed);
-        await applyRenewMaterial(renewTask.cert, material, renewTask.nodeId);
-        setRenewTask(null);
-      } catch (error) {
-        setRenewError(message(error, zh.certs.renewFailed));
-        setRenewTask(null);
-      } finally {
-        setRenewing(false);
-      }
-    })();
-    // applyRenewMaterial 依赖 queryClient/toast（稳定引用），不放进依赖数组
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renewTask, renewTaskQuery.data?.task, renewing]);
 
   const submit = async () => {
     if (!form) return;
@@ -614,20 +436,12 @@ export default function CertificatesPage({
       setFormField({ error: zh.certs.invalidDomains });
       return;
     }
-    if ((form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId) {
+    if (form.mode === 'selfsigned' && !effectiveNodeId) {
       setFormField({ error: zh.certs.nodeMissing });
       return;
     }
     if (form.mode === 'cf-dns01' && !form.accountId) {
       setFormField({ error: zh.certs.cfAccountMissing });
-      return;
-    }
-    if (form.mode === 'acme' && !form.provider.trim()) {
-      setFormField({ error: fmt(zh.certs.required, { field: zh.fields.provider }) });
-      return;
-    }
-    if (form.mode === 'acme' && !form.credentialsKey) {
-      setFormField({ error: zh.certs.credentialsMissing });
       return;
     }
     if (form.mode === 'manual' && (!form.certPem.trim() || !form.keyPem.trim())) {
@@ -664,75 +478,23 @@ export default function CertificatesPage({
         closeIssue();
         return;
       }
-      if (form.mode === 'selfsigned') {
-        const envelope = await runCertificateAction(effectiveNodeId, 'issue_selfsigned', {
-          domains,
-          days: form.days ?? undefined,
-          keyType: form.keyType || undefined,
-        });
-        if (!envelope.ok) throw new Error(envelope.error?.message ?? zh.certs.actionFailed);
-        const material = extractCertificateResult(envelope);
-        if (!material) throw new Error(zh.certs.actionFailed);
-        await createCertificate({
-          name,
-          domains: material.domains.length > 0 ? material.domains : domains,
-          issuer: 'selfsigned',
-          notAfter: material.notAfter ?? undefined,
-          certPem: material.certPem,
-          keyPem: material.keyPem,
-          sourceNodeId: effectiveNodeId,
-        });
-        await queryClient.invalidateQueries({ queryKey: ['certs'] });
-        toast.show({ message: zh.certs.issueSuccess });
-        closeIssue();
-        return;
-      }
-      const envelope: CertActionEnvelope = await runCertificateAction(
-        effectiveNodeId,
-        'issue_acme',
-        {
-          domains,
-          provider: form.provider.trim(),
-          credentials: { $dnsCred: form.credentialsKey },
-          ca: form.ca.trim() || undefined,
-          keyType: form.keyType || undefined,
-        },
-      );
+      const envelope = await runCertificateAction(effectiveNodeId, 'issue_selfsigned', {
+        domains,
+        days: form.days ?? undefined,
+        keyType: form.keyType || undefined,
+      });
       if (!envelope.ok) throw new Error(envelope.error?.message ?? zh.certs.actionFailed);
-      if (envelope.taskId) {
-        setAcmeTask({
-          nodeId: effectiveNodeId,
-          taskId: envelope.taskId,
-          name,
-          domains,
-          provider: form.provider.trim(),
-          credentialsKey: form.credentialsKey,
-          ca: form.ca.trim(),
-          keyType: form.keyType,
-        });
-        setFormField({ busy: true, error: null, name });
-        return;
-      }
       const material = extractCertificateResult(envelope);
       if (!material) throw new Error(zh.certs.actionFailed);
-      await createAndMaybeBind(
-        {
-          name,
-          domains: material.domains.length > 0 ? material.domains : domains,
-          issuer: 'acme',
-          notAfter: material.notAfter ?? undefined,
-          certPem: material.certPem,
-          keyPem: material.keyPem,
-          sourceNodeId: effectiveNodeId,
-          acme: {
-            provider: form.provider.trim(),
-            credentialKey: form.credentialsKey,
-            ...(form.ca.trim() ? { ca: form.ca.trim() } : {}),
-            ...(form.keyType ? { keyType: form.keyType } : {}),
-          },
-        },
-        effectiveNodeId,
-      );
+      await createCertificate({
+        name,
+        domains: material.domains.length > 0 ? material.domains : domains,
+        issuer: 'selfsigned',
+        notAfter: material.notAfter ?? undefined,
+        certPem: material.certPem,
+        keyPem: material.keyPem,
+        sourceNodeId: effectiveNodeId,
+      });
       await queryClient.invalidateQueries({ queryKey: ['certs'] });
       toast.show({ message: zh.certs.issueSuccess });
       closeIssue();
@@ -850,6 +612,12 @@ export default function CertificatesPage({
       },
     },
     {
+      key: 'sync',
+      type: 'text',
+      header: '同步方式',
+      value: (cert) => (cert.autoSync ? '自动同步' : '手动同步'),
+    },
+    {
       key: 'source',
       type: 'text',
       header: zh.certs.colSource,
@@ -870,8 +638,6 @@ export default function CertificatesPage({
     if (ref.id === 'cert.create') openIssue(defaultCreateMode);
   };
 
-  const task = taskQuery.data?.task;
-  const acmeBusy = Boolean(acmeTask && form?.mode === 'acme');
   const nodeOptions = hubs.map((hub) => ({
     value: hub.id,
     label: `${hub.name} · ${hub.status === 'online' ? zh.certs.nodeOnline : zh.certs.nodeOffline}`,
@@ -889,22 +655,9 @@ export default function CertificatesPage({
           onAction={handlePageAction}
         />
       ) : (
-        <Card
-          title="证书库"
-          action={
-            <Button
-              label={actionLabel(action('cert.create'))}
-              variant="primary"
-              size="sm"
-              icon="plus"
-              onClick={() => openIssue(defaultCreateMode)}
-            />
-          }
-        >
-          <p className="t3 sm">
-            {fmt(zh.certs.summaryCount, { count: certs.length })} · 支持自动 ACME 签发、自签名证书与手动导入 PEM，用于 Caddy 站点与域名绑定。
-          </p>
-        </Card>
+        <span className="ui-muted">
+          {fmt(zh.certs.summaryCount, { count: certs.length })} · 支持控制面 Cloudflare DNS-01 签发/续期、自签与导入 PEM，用于 Caddy 站点共享绑定。
+        </span>
       )}
 
       {expiryWarnings > 0 ? (
@@ -1009,19 +762,27 @@ export default function CertificatesPage({
         columns={columns}
         rowKey={(cert) => cert.id}
         objectLabel={zh.nav.certs}
-        search={{ value: searchText, onChange: setSearchText, placeholder: zh.certs.colDomains }}
+        search={
+          certs.length > 0
+            ? { value: searchText, onChange: setSearchText, placeholder: zh.certs.colDomains }
+            : undefined
+        }
         empty={{
           icon: 'lock',
           title: zh.certs.emptyTitle,
           description: zh.certs.emptyHint,
-          action: (
-            <Button
-              label={actionLabel(action('cert.create'))}
-              variant="primary"
-              icon="plus"
-              onClick={() => openIssue(defaultCreateMode)}
-            />
-          ),
+          ...(embedded
+            ? {}
+            : {
+                action: (
+                  <Button
+                    label={actionLabel(action('cert.create'))}
+                    variant="primary"
+                    icon="plus"
+                    onClick={() => openIssue(defaultCreateMode)}
+                  />
+                ),
+              }),
         }}
         rowActions={() => [action('cert.export'), action('cert.delete')]}
         onRowAction={handleRowAction}
@@ -1033,88 +794,55 @@ export default function CertificatesPage({
           open
           title={form.mode === 'manual' ? zh.certs.importTitle : zh.certs.issueTitle}
           context={zh.certs.context}
-          dirty={!acmeBusy && Boolean(form.name || form.domains || form.certPem || form.keyPem)}
+          dirty={Boolean(form.name || form.domains || form.certPem || form.keyPem)}
           onClose={closeIssue}
           footer={
-            acmeBusy ? (
-              <Row gap={2}>
-                <Button label={zh.common.close} onClick={closeIssue} />
-              </Row>
-            ) : (
-              <Row gap={2}>
-                <Button label={zh.common.cancel} onClick={closeIssue} />
-                <Button
-                  label={
-                    form.mode === 'manual' ? zh.certs.importSubmit : zh.certs.issueSubmit
-                  }
-                  variant="primary"
-                  loading={form.busy}
-                  disabled={
-                    (form.mode === 'cf-dns01' && !form.accountId) ||
-                    ((form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId) ||
-                    (form.mode === 'acme' && !form.credentialsKey)
-                  }
-                  disabledReason={
-                    form.mode === 'cf-dns01'
-                      ? zh.certs.cfAccountMissing
-                      : (form.mode === 'selfsigned' || form.mode === 'acme') && !effectiveNodeId
-                        ? zh.certs.nodeMissing
-                        : zh.certs.credentialsMissing
-                  }
-                  onClick={() => void submit()}
-                />
-              </Row>
-            )
+            <Row gap={2}>
+              <Button label={zh.common.cancel} disabled={form.busy} onClick={closeIssue} />
+              <Button
+                label={
+                  form.mode === 'manual' ? zh.certs.importSubmit : zh.certs.issueSubmit
+                }
+                loadingLabel={form.mode === 'cf-dns01' ? '签发中（等待 DNS 传播与校验）…' : undefined}
+                variant="primary"
+                loading={form.busy}
+                disabled={
+                  (form.mode === 'cf-dns01' && (!form.accountId || cfAccountsQuery.isLoading)) ||
+                  (form.mode === 'selfsigned' && !effectiveNodeId)
+                }
+                disabledReason={
+                  form.mode === 'cf-dns01'
+                    ? zh.certs.cfAccountMissing
+                    : form.mode === 'selfsigned' && !effectiveNodeId
+                      ? zh.certs.nodeMissing
+                      : undefined
+                }
+                onClick={() => void submit()}
+              />
+            </Row>
           }
         >
           <Stack gap={4}>
-            {!acmeBusy ? (
-              <Segmented
-                value={form.mode}
-                ariaLabel={zh.certs.issueTitle}
-                options={[
-                  { value: 'cf-dns01', label: zh.certs.modeCfDns01 },
-                  { value: 'selfsigned', label: zh.certs.modeSelfsigned },
-                  { value: 'acme', label: zh.certs.modeAcme },
-                  { value: 'manual', label: zh.certs.modeImport },
-                ]}
-                onChange={(value) => {
-                  const mode = value as CertMode;
-                  setFormField({
-                    mode,
-                    ca: mode === 'cf-dns01' && !form.ca ? 'letsencrypt' : form.ca,
-                    error: null,
-                  });
-                  setDrawerSearch(mode === 'manual' ? 'import' : 'issue', true);
-                }}
-              />
-            ) : null}
+            <Segmented
+              value={form.mode}
+              ariaLabel={zh.certs.issueTitle}
+              options={[
+                { value: 'cf-dns01', label: zh.certs.modeCfDns01 },
+                { value: 'selfsigned', label: zh.certs.modeSelfsigned },
+                { value: 'manual', label: zh.certs.modeImport },
+              ]}
+              onChange={(value) => {
+                const mode = value as CertMode;
+                setFormField({
+                  mode,
+                  ca: mode === 'cf-dns01' && !form.ca ? 'letsencrypt' : form.ca,
+                  error: null,
+                });
+                setDrawerSearch(mode === 'manual' ? 'import' : 'issue', true);
+              }}
+            />
 
-            {acmeBusy ? (
-              <Stack gap={3}>
-                <Banner tone="info" title={zh.certs.taskRunningHint} />
-                {taskQuery.error ? (
-                  <Banner
-                    tone="danger"
-                    title={zh.certs.actionFailed}
-                    description={(taskQuery.error as Error).message}
-                  />
-                ) : task ? (
-                  <TaskView task={task as TaskResponse['task']} />
-                ) : (
-                  <Skeleton height={80} />
-                )}
-                <Row gap={2}>
-                  <Button
-                    label={zh.common.refresh}
-                    size="sm"
-                    loading={taskQuery.isFetching}
-                    onClick={() => void taskQuery.refetch()}
-                  />
-                </Row>
-              </Stack>
-            ) : (
-              <>
+            <>
                 <Field id="cert-name" label={zh.certs.name} help={zh.certs.nameHelp}>
                   <TextInput
                     id="cert-name"
@@ -1143,13 +871,16 @@ export default function CertificatesPage({
                       <Select
                         id="cert-cf-account"
                         value={form.accountId}
+                        disabled={cfAccountsQuery.isLoading}
                         options={enabledCfAccounts.map((account) => ({
                           value: account.id,
                           label: account.accountName
                             ? `${account.name} · ${account.accountName}`
                             : account.name,
                         }))}
-                        placeholder={zh.form.choose}
+                        placeholder={
+                          cfAccountsQuery.isLoading ? '正在读取 Cloudflare 账号…' : zh.form.choose
+                        }
                         onChange={(value) => setFormField({ accountId: value })}
                       />
                     </Field>
@@ -1176,10 +907,17 @@ export default function CertificatesPage({
                         onChange={(value) => setFormField({ ca: value })}
                       />
                     </Field>
+                    {form.busy ? (
+                      <Banner
+                        tone="info"
+                        title="正在写入 Cloudflare TXT → 等待公网 DoH 传播 → 向 Let's Encrypt 申请证书…"
+                        description="通常耗时 10–30 秒，请勿关闭抽屉；无论成功或失败均会自动清理临时 TXT 记录。"
+                      />
+                    ) : null}
                   </>
                 ) : null}
 
-                {form.mode === 'selfsigned' || form.mode === 'acme' ? (
+                {form.mode === 'selfsigned' ? (
                   <Field id="cert-node" label={zh.fields.node} help={zh.certs.nodeHelp}>
                     <Select
                       id="cert-node"
@@ -1215,50 +953,6 @@ export default function CertificatesPage({
                         onChange={(value) =>
                           setFormField({ keyType: value === 'ec' || value === 'rsa' ? value : '' })
                         }
-                      />
-                    </Field>
-                  </>
-                ) : null}
-
-                {form.mode === 'acme' ? (
-                  <>
-                    <Field id="cert-provider" label={zh.fields.provider} help={zh.certs.providerHelp}>
-                      <TextInput
-                        id="cert-provider"
-                        value={form.provider}
-                        mono
-                        onChange={(value) => setFormField({ provider: value })}
-                      />
-                    </Field>
-                    <Field
-                      id="cert-credentials"
-                      label={zh.fields.credentials}
-                      help={zh.certs.credentialsHelp}
-                    >
-                      <Select
-                        id="cert-credentials"
-                        value={form.credentialsKey}
-                        options={settings.map((setting) => ({
-                          value: setting.key,
-                          label: setting.key,
-                        }))}
-                        placeholder={zh.form.choose}
-                        onChange={(value) => setFormField({ credentialsKey: value })}
-                      />
-                    </Field>
-                    {settings.length === 0 ? (
-                      <Banner
-                        tone="warn"
-                        title={zh.certs.credentialsMissing}
-                        action={<LinkToSettings />}
-                      />
-                    ) : null}
-                    <Field id="cert-ca" label={zh.fields.ca} help={zh.certs.caHelp} optional>
-                      <TextInput
-                        id="cert-ca"
-                        value={form.ca}
-                        mono
-                        onChange={(value) => setFormField({ ca: value })}
                       />
                     </Field>
                   </>
@@ -1325,7 +1019,6 @@ export default function CertificatesPage({
 
                 {form.error ? <InlineError message={form.error} /> : null}
               </>
-            )}
           </Stack>
         </Drawer>
       ) : null}
@@ -1337,18 +1030,64 @@ export default function CertificatesPage({
           context={fmt(zh.certs.detailContext, { name: detailCert.name })}
           onClose={closeDetail}
           footer={
-            <Row gap={2}>
-              <Button
-                label={actionLabel(action('cert.export'))}
-                icon="download"
-                onClick={() => setConfirm({ kind: 'export', cert: detailCert })}
-              />
-              <Button
-                label={actionLabel(action('cert.delete'))}
-                variant="danger-text"
-                onClick={() => setConfirm({ kind: 'delete', cert: detailCert })}
-              />
-            </Row>
+            detailDeleteArmed ? (
+              <Stack gap={2}>
+                <span className="ui-text-caption">
+                  {fmt(zh.certs.deleteTitle, { name: detailCert.name })}（
+                  {(certUsage.get(detailCert.id)?.length ?? 0) > 0
+                    ? fmt(zh.certs.deleteReferencedBody, {
+                        count: certUsage.get(detailCert.id)?.length ?? 0,
+                      })
+                    : zh.certs.deleteBody}
+                  ）
+                </span>
+                {detailDeleteError ? <InlineError message={detailDeleteError} /> : null}
+                <Row gap={2}>
+                  <Button
+                    label={zh.common.cancel}
+                    disabled={detailDeleteBusy}
+                    onClick={() => {
+                      setDetailDeleteArmed(false);
+                      setDetailDeleteError(null);
+                    }}
+                  />
+                  <Button
+                    label={zh.certs.deleteConfirm}
+                    variant="danger"
+                    loading={detailDeleteBusy}
+                    onClick={() => {
+                      setDetailDeleteBusy(true);
+                      setDetailDeleteError(null);
+                      void removeCert(detailCert)
+                        .catch((err) => {
+                          setDetailDeleteError(message(err, zh.certs.actionFailed));
+                        })
+                        .finally(() => setDetailDeleteBusy(false));
+                    }}
+                  />
+                </Row>
+              </Stack>
+            ) : (
+              <Row gap={2}>
+                <Button
+                  label={actionLabel(action('cert.export'))}
+                  icon="download"
+                  onClick={() => {
+                    const target = detailCert;
+                    closeDetail();
+                    setConfirm({ kind: 'export', cert: target });
+                  }}
+                />
+                <Button
+                  label={actionLabel(action('cert.delete'))}
+                  variant="danger-text"
+                  onClick={() => {
+                    setDetailDeleteArmed(true);
+                    setDetailDeleteError(null);
+                  }}
+                />
+              </Row>
+            )
           }
         >
           <Stack gap={4}>
@@ -1359,7 +1098,6 @@ export default function CertificatesPage({
                   key: zh.certs.colDomains,
                   value: detailCert.domains.join(', '),
                   mono: true,
-                  mode: 'middle',
                 },
                 {
                   key: zh.certs.colIssuer,
@@ -1403,12 +1141,15 @@ export default function CertificatesPage({
                   help={zh.certs.autoSyncHelp}
                   variant="row"
                 >
-                  <Toggle
-                    checked={Boolean(detailCert.autoSync)}
-                    disabled={autoSyncBusy}
-                    label={zh.certs.autoSyncLabel}
-                    onChange={(checked) => void toggleAutoSync(detailCert, checked)}
-                  />
+                  <Row gap={2} align="center">
+                    {autoSyncBusy ? <span className="ui-text-caption">保存中…</span> : null}
+                    <Toggle
+                      checked={Boolean(detailCert.autoSync)}
+                      disabled={autoSyncBusy}
+                      label={zh.certs.autoSyncLabel}
+                      onChange={(checked) => void toggleAutoSync(detailCert, checked)}
+                    />
+                  </Row>
                 </Field>
                 {usagesQuery.isLoading ? (
                   <Skeleton height={36} />
@@ -1533,24 +1274,6 @@ export default function CertificatesPage({
                 {bindMessage ? <Banner tone="info" title={bindMessage} /> : null}
                 {bindError ? <InlineError message={bindError} /> : null}
                 {renewError ? <InlineError message={renewError} /> : null}
-                {renewTask ? (
-                  <Stack gap={2}>
-                    <Banner tone="info" title={zh.certs.taskRunningHint} />
-                    {renewTaskQuery.data?.task ? (
-                      <TaskView task={renewTaskQuery.data.task} />
-                    ) : (
-                      <Skeleton height={80} />
-                    )}
-                    <Row gap={2}>
-                      <Button
-                        label={zh.common.refresh}
-                        size="sm"
-                        loading={renewTaskQuery.isFetching}
-                        onClick={() => void renewTaskQuery.refetch()}
-                      />
-                    </Row>
-                  </Stack>
-                ) : null}
               </Stack>
             </Card>
             {(certUsage.get(detailCert.id)?.length ?? 0) > 0 ? (
@@ -1614,18 +1337,6 @@ export default function CertificatesPage({
         />
       ) : null}
     </Stack>
-  );
-}
-
-function LinkToSettings() {
-  const navigate = useNavigate();
-  return (
-    <Button
-      label={zh.certs.manageCredentials}
-      size="sm"
-      // 直接落到「系统变量」分段，避免跳到证书库自身形成死路。
-      onClick={() => void navigate({ href: `${paths.settings}?tab=system` })}
-    />
   );
 }
 

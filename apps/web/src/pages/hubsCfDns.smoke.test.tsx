@@ -397,7 +397,7 @@ describe('添加节点：统一接入表单', () => {
     });
   });
 
-  it('域名模式：有账户但没启用域名时就地「添加域名」，建完自动选中', async () => {
+  it('域名模式：有账户但没启用域名时跳转「设置 → 账号」并支持刷新选中，切换来源清理旧域名', async () => {
     accounts = [
       {
         id: 'acc-1',
@@ -426,22 +426,25 @@ describe('添加节点：统一接入表单', () => {
     await userEvent.type(screen.getByLabelText('节点名称'), 'node-9');
     await userEvent.click(screen.getByRole('button', { name: '域名（HTTPS）' }));
 
-    // 状态二：有账户、没有启用域名 —— 就地建，不跳出抽屉
     expect(await screen.findByText('已有 DNS 账户，但还没有启用的域名')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: '添加域名' }));
+    const accountsLink = screen.getByRole('link', { name: /前往设置 → 账号/ });
+    expect(accountsLink.getAttribute('href')).toBe('/settings?tab=accounts');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
 
-    const addDialog = await screen.findByRole('dialog', { name: '添加域名' });
-    // 只有一个账户时自动选中，直接选域名
-    await userEvent.selectOptions(
-      within(addDialog).getByLabelText('域名（主账号）'),
-      'z1',
-    );
-    await userEvent.click(within(addDialog).getByRole('button', { name: '添加' }));
+    // 模拟在设置启用域名后点「刷新域名」
+    accounts[0]!.enabledZoneIds = ['z1'];
+    zones = [{ id: 'z1', name: 'example.com', accountId: 'acc-1', accountName: '主账号' }];
+    await userEvent.click(screen.getByRole('button', { name: '刷新域名' }));
 
-    // 加完自动选中该 Zone，回到「选已有记录」状态
-    await waitFor(() => {
-      expect((screen.getByLabelText('Zone') as HTMLSelectElement).value).toBe('z1');
-    });
+    await userEvent.selectOptions(await screen.findByLabelText('Zone'), 'z1');
+    expect((screen.getByLabelText('Zone') as HTMLSelectElement).value).toBe('z1');
+    // 从手动域名切回「已有解析记录」应清掉手填域名，不串台
+    await userEvent.click(screen.getByRole('button', { name: '手动输入域名' }));
+    await userEvent.type(await screen.findByLabelText('域名'), 'stale.other.net');
+    const sourceGroup = screen.getByRole('group', { name: '域名来源' });
+    await userEvent.click(within(sourceGroup).getByRole('button', { name: '已有解析记录' }));
+    expect(screen.queryByDisplayValue('stale.other.net')).toBeNull();
+
     await userEvent.selectOptions(await screen.findByLabelText('已有解析记录'), 'rec-1');
     expect((screen.getByLabelText('Agent 接入地址（自动生成）') as HTMLInputElement).value).toBe(
       'https://app.example.com:2053',

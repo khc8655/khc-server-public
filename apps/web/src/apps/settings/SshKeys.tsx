@@ -43,7 +43,13 @@ function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export function SshKeys({ createSignal = 0 }: { createSignal?: number }) {
+export function SshKeys({
+  createSignal = 0,
+  hideEmptyAction = false,
+}: {
+  createSignal?: number;
+  hideEmptyAction?: boolean;
+}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const query = useQuery(sshKeysQueryOptions());
@@ -173,14 +179,18 @@ export function SshKeys({ createSignal = 0 }: { createSignal?: number }) {
           icon: 'key',
           title: zh.sshKeys.emptyTitle,
           description: zh.sshKeys.emptyHint,
-          action: (
-            <Button
-              label={actionLabel(action('sshKey.create'))}
-              variant="primary"
-              icon="plus"
-              onClick={openCreate}
-            />
-          ),
+          ...(hideEmptyAction
+            ? {}
+            : {
+                action: (
+                  <Button
+                    label={actionLabel(action('sshKey.create'))}
+                    variant="primary"
+                    icon="plus"
+                    onClick={openCreate}
+                  />
+                ),
+              }),
         }}
       />
 

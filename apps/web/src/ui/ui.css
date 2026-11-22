@@ -4743,6 +4743,11 @@ button.ui-statusbar-tile:hover {
   color: var(--text);
 }
 
+.ui-drawer .ui-record-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .ui-record-content {
   margin-top: var(--s05);
   overflow-wrap: anywhere;

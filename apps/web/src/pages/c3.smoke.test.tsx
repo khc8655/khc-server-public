@@ -327,15 +327,32 @@ describe('C3 页面', () => {
     expect(screen.getAllByText('域名').length).toBeGreaterThan(0);
   });
 
-  it('设置页展示凭据列表并可打开新增抽屉', async () => {
-    await renderRoute('/settings');
+  it('设置页旧 tab 重定向与主动作统一', async () => {
+    await renderRoute('/settings?tab=system');
     expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: '系统变量' }));
-    expect((await screen.findAllByText('dns.cloudflare')).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('button', { name: '签发证书' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '系统变量' })).toBeNull();
 
-    await userEvent.click(screen.getByRole('button', { name: '添加凭据' }));
-    expect((await screen.findAllByText('凭据键')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('凭据值').length).toBeGreaterThan(0);
+    cleanup();
+    await renderRoute('/settings?tab=domains');
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '域名管理' }).getAttribute('aria-pressed')).toBe('true');
+    });
+
+    cleanup();
+    await renderRoute('/settings?tab=cloudflare');
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '账号' }).getAttribute('aria-pressed')).toBe('true');
+    });
+
+    cleanup();
+    await renderRoute('/settings?tab=catalog');
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '应用管理' }).getAttribute('aria-pressed')).toBe('true');
+    });
   });
 
   it('应用页展示站点、证书引用与运行状态', async () => {

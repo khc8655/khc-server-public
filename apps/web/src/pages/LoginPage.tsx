@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from '@tanstack/react-router';
+import { useRouter, useSearch } from '@tanstack/react-router';
 import { ApiError } from '../data/client';
 import { login } from '../data/auth';
 import { LoginShell } from '../ui';
@@ -9,14 +9,23 @@ import { LoginForm } from './login/LoginForm';
 
 export default function LoginPage() {
   const router = useRouter();
+  const search = useSearch({ strict: false }) as { redirect?: string };
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+
+  const safeRedirect =
+    typeof search.redirect === 'string' &&
+    search.redirect.startsWith('/') &&
+    !search.redirect.startsWith('//') &&
+    !search.redirect.startsWith('/login')
+      ? search.redirect
+      : '/';
 
   const mutation = useMutation({
     mutationFn: login,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
-      await router.navigate({ href: '/' });
+      await router.navigate({ href: safeRedirect });
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : zh.login.failed);

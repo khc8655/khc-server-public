@@ -2,6 +2,13 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.30.0] - 2026-11-22
+### Changed
+- 精简全局「设置」与「证书库」：移除「系统变量」与「节点 ACME」分段及冗余「查看域名」「添加域名」弹窗，统一页头主动作，支持 `?tab=domains` / `?tab=system` 重定向与 `/login?redirect=` 登录后回跳。
+- 改进账号 Token 密码显隐、单 Zone 创建自动关闭、域名管理抽屉行内确认删除与单 Zone 刷新、DoH 检测语义状态徽标及全局证书自动同步乐观切换与加载状态。
+- 清理「添加节点」域名来源切换残留，补充手动纯域名格式与自动发布端口冲突（`upstreamPort === publishPort / domainPort`）内联校验。
+- 消除证书详情与添加节点处的抽屉内叠加 Dialog 行为，并修复抽屉内长域名文本溢出。
+
 ## [0.29.0] - 2026-11-22
 ### Fixed
 - 修复通过应用清单向导安装应用后，Agent（`0.6.5`）的 `recipe_installed` 与 `status` 未读取 `app-manifests` 记录导致界面不显示已安装应用及卸载按钮的缺陷，并允许 `nologin` 应用账号免传密码创建。
