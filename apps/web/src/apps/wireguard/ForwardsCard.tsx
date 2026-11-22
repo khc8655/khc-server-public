@@ -54,6 +54,42 @@ import {
 
 type ApplyConfirm = { kind: 'forward'; config: ForwardConfig; name: string } | { kind: 'page' };
 
+function parseIpv4(ip: string): number | null {
+  const parts = ip.trim().split('.');
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet < 0 || octet > 255) return null;
+    value = ((value << 8) | octet) >>> 0;
+  }
+  return value;
+}
+
+/**
+ * 判断转发目标是否落在当前节点 WireGuard 网段内但没有对应的已配置 Peer（孤儿目标）。
+ * 跳过 Hub 自身接口 IP、合法已接入 Peer 及网段外目标。
+ */
+export function isOrphanPeerTarget(
+  targetHost: string,
+  peers: readonly { host: string }[],
+  wgSubnet?: string,
+): boolean {
+  if (!wgSubnet) return false;
+  const [hubIpRaw, prefixRaw] = wgSubnet.trim().split('/');
+  if (!hubIpRaw || prefixRaw === undefined || !/^\d{1,2}$/.test(prefixRaw)) return false;
+  const prefix = Number(prefixRaw);
+  if (prefix < 0 || prefix > 32) return false;
+  const hubIpInt = parseIpv4(hubIpRaw);
+  const targetInt = parseIpv4(targetHost);
+  if (hubIpInt === null || targetInt === null) return false;
+  if (targetHost.trim() === hubIpRaw.trim()) return false;
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  if (((targetInt & mask) >>> 0) !== ((hubIpInt & mask) >>> 0)) return false;
+  return !peers.some((peer) => peer.host.trim() === targetHost.trim());
+}
+
 /**
  * 内网穿透页的「端口转发」卡（ui-redesign §2.4）：
  * 原 /hubs/:id/forwards 整页（apps/forward/page.tsx）原样收敛为页内卡。
@@ -63,6 +99,7 @@ export function ForwardsCard({
   hubId,
   hubName,
   peers,
+  wgSubnet,
   peerDrawerActive,
   onOpen,
 }: {
@@ -70,6 +107,8 @@ export function ForwardsCard({
   hubName: string;
   /** 当前节点的 Peer 列表，供「目标来源」下拉选择 */
   peers: { name: string; host: string }[];
+  /** 当前节点 WireGuard 接口地址/CIDR（如 10.99.0.1/24），用于识别孤儿转发目标 */
+  wgSubnet?: string;
   /** Peer 抽屉打开时关闭转发抽屉，保证全页同一时刻只有一个抽屉 */
   peerDrawerActive: boolean;
   /** 打开转发抽屉前回调（页面侧关闭 Peer 抽屉） */
@@ -111,6 +150,9 @@ export function ForwardsCard({
     forward,
     status: findForwardStatus(status, forward),
   }));
+  const orphanForwards = config.forwards.filter(
+    (rule) => rule.enabled && isOrphanPeerTarget(rule.targetHost, peers, wgSubnet),
+  );
 
   const [form, setForm] = useState<ForwardFormState | null>(null);
   const [errors, setErrors] = useState<ForwardErrors>({});
@@ -456,6 +498,26 @@ export function ForwardsCard({
               <CodeBlock code={applyError.details} label={zh.forwards.detailsTitle} />
             ) : null}
           </Stack>
+        ) : null}
+        {orphanForwards.length > 0 ? (
+          <Banner
+            tone="warn"
+            title={fmt(zh.forwards.orphanPeerTitle, { count: String(orphanForwards.length) })}
+            description={fmt(zh.forwards.orphanPeerDesc, {
+              list: orphanForwards.map((rule) => `${rule.name} (${forwardTarget(rule)})`).join('、'),
+            })}
+            action={
+              orphanForwards.length === 1 ? (
+                <Button
+                  label={zh.forwards.orphanDisableAction}
+                  size="sm"
+                  disabled={nodeOffline}
+                  disabledReason={writeDisabledReason}
+                  onClick={() => void toggle(orphanForwards[0]!)}
+                />
+              ) : undefined
+            }
+          />
         ) : null}
 
         {configQuery.isLoading ? (

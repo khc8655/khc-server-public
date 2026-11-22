@@ -309,11 +309,18 @@ async function renderRoute(path: string) {
 }
 
 describe('C3 页面', () => {
-  it('全局 /certs 暗路由 302 到设置页证书 Tab', async () => {
+  it('全局 /certs 暗路由 302 到设置页证书 Tab；裸 /settings 默认落在域名管理（P3）', async () => {
     const router = await renderRoute('/certs');
     expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
     expect((await screen.findAllByText('blog-cert')).length).toBeGreaterThan(0);
     expect(router.state.location.pathname).toBe('/settings');
+
+    cleanup();
+    await renderRoute('/settings');
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '域名管理' }).getAttribute('aria-pressed')).toBe('true');
+    });
   });
 
   it('证书库展示列表与到期状态，并可打开签发抽屉', async () => {

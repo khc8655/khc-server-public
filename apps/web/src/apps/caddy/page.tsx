@@ -83,6 +83,7 @@ import { zh, fmt } from '../../i18n/zh';
 import { daysUntil, formatAbsoluteTime, formatExpiry } from '../../i18n/format';
 import { SiteDrawer } from './SiteDrawer';
 import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
+import { diagnoseSiteIssues } from './siteDiagnostics';
 import { InstalledAppsCard } from '../hosted-apps/InstalledAppsCard';
 import { installTaskText } from '../installTaskText';
 import {
@@ -350,6 +351,15 @@ export default function SitesPage() {
   );
   const proxyRows = useMemo(() => rows.filter((row) => row.site.kind === 'proxy'), [rows]);
   const otherRows = useMemo(() => rows.filter((row) => row.site.kind !== 'proxy'), [rows]);
+  const siteIssues = useMemo(
+    () =>
+      diagnoseSiteIssues({
+        rows: proxyRows,
+        ops: stateQuery.data?.state?.ops,
+        backendContext,
+      }),
+    [proxyRows, stateQuery.data?.state?.ops, liveState?.adapters],
+  );
 
   // 证书分段（只读摘要）：本节点签发，或被本节点站点的 TLS 引用
   const hubCerts = useMemo(
@@ -1591,6 +1601,62 @@ export default function SitesPage() {
 
       {segment === 'apps' ? (
         <>
+          {siteIssues.length > 0 ? (
+            <Card
+              title={zh.sites.diagTitle}
+              action={
+                <Badge
+                  tone="danger"
+                  label={fmt(zh.sites.diagCountBadge, { count: String(siteIssues.length) })}
+                  dot
+                />
+              }
+            >
+              <Stack gap={3}>
+                {siteIssues.map((issue) => (
+                  <Stack gap={1} key={issue.site.name}>
+                    <Row justify="between" gap={2} align="center" wrap>
+                      <Row gap={2} align="center" wrap>
+                        <strong>{issue.site.name}</strong>
+                        <Badge tone="danger" label={issue.statusLabel} />
+                        {issue.site.upstreams[0] ? (
+                          <span className="mono ui-muted">{issue.site.upstreams[0]}</span>
+                        ) : null}
+                      </Row>
+                      <Row gap={2} wrap>
+                        <Button
+                          label={zh.sites.diagEditAction}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openEdit(issue.site)}
+                        />
+                        <Button
+                          label={zh.sites.diagDisableAction}
+                          size="sm"
+                          variant="ghost"
+                          disabled={unreachable}
+                          disabledReason={writeDisabledReason}
+                          onClick={() => void toggle(issue.site)}
+                        />
+                        {issue.linkTarget === 'ops' ? (
+                          <Link
+                            to={paths.hubSection(hubId, 'ops')}
+                            label={zh.sites.diagGoOps}
+                          />
+                        ) : issue.linkTarget === 'wireguard' ? (
+                          <Link
+                            to={paths.hubSection(hubId, 'wireguard')}
+                            label={zh.sites.diagGoNetwork}
+                          />
+                        ) : null}
+                      </Row>
+                    </Row>
+                    <span className="ui-field-help">{issue.summary}</span>
+                  </Stack>
+                ))}
+              </Stack>
+            </Card>
+          ) : null}
           <Table
             rows={caddyQuery.isLoading ? undefined : proxyRows}
             columns={columns}

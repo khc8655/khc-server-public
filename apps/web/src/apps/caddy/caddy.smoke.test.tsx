@@ -622,4 +622,93 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(await within(drawer).findByText('主机防火墙已放行 TCP 8443')).toBeTruthy();
     expect(fwRules.some((rule) => rule.port === '8443' && rule.action === 'allow')).toBe(true);
   });
+
+  it('502/不可达站点在列表上方渲染「异常应用排查」病因并支持编辑/跳转运维（P3）', async () => {
+    mockApi({
+      withCerts: false,
+      sites: [
+        {
+          name: 'llproxy',
+          domains: ['test.example.com'],
+          listenPort: 8779,
+          kind: 'proxy',
+          upstreams: ['127.0.0.1:8787'],
+          enabled: true,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
+        if (url === '/api/v1/nodes') return json({ nodes: [currentNode] });
+        if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
+        if (url === '/api/v1/certs') return json({ certificates: [] });
+        if (url === '/api/v1/settings') return json({ settings: [] });
+        if (url === '/api/v1/nodes/tyo-1/apps') {
+          return json({
+            apps: [appConfig()],
+            adapters: [{ name: 'caddy-site', version: '1.0.0', api: 1 }],
+            adaptersError: null,
+          });
+        }
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site') return json({ app: appConfig() });
+        if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/caddy_import_scan') {
+          return json({ ok: true, result: { exists: true, caddyfilePath: '/etc/caddy/Caddyfile', blocks: [], imports: [], backups: [] } });
+        }
+        if (url === '/api/v1/nodes/tyo-1/state') {
+          return json({
+            reachable: true,
+            route: 'direct',
+            via: 'fetch',
+            error: null,
+            state: {
+              host: { hostname: 'tyo-1' },
+              ops: {
+                network: {
+                  listening: {
+                    count: 1,
+                    items: [{ proto: 'tcp', address: '0.0.0.0', port: 9099, process: 'python3' }],
+                  },
+                },
+              },
+              adapters: [
+                {
+                  name: 'caddy-site',
+                  version: '1.0.0',
+                  status: {
+                    installed: true,
+                    running: true,
+                    sites: [],
+                    siteHealth: [
+                      {
+                        name: 'llproxy',
+                        domain: 'test.example.com',
+                        state: 'down',
+                        status: null,
+                        latencyMs: null,
+                        error: 'connection refused',
+                        upstreams: ['127.0.0.1:8787'],
+                      },
+                    ],
+                  },
+                },
+              ],
+              ports: [],
+            },
+          });
+        }
+        return json({});
+      }),
+    );
+
+    await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByText('异常应用排查')).toBeTruthy();
+    expect(screen.getByText('本机目标 127.0.0.1:8787 未监听，对应进程可能未启动或监听端口已变化。')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '主机运维' }).getAttribute('href')).toBe('/hubs/tyo-1/ops');
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(await screen.findByRole('heading', { name: '编辑站点' })).toBeTruthy();
+  });
 });
