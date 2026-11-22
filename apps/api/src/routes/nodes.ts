@@ -33,7 +33,14 @@ import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError, formatRouteErrors } from '../lib/node-client';
 import { classifyTlsProbe } from '../lib/tls-probe';
-import { nodeToken, requireNode, toPublicNode } from './helpers';
+import {
+  forgetNode,
+  getNodeCached,
+  nodeToken,
+  requireNode,
+  toPublicNode,
+  touchNodeLastSeen,
+} from './helpers';
 
 /**
  * §3.2 控制通道强制 TLS：production 下新建/编辑节点时，请求显式写入的
@@ -260,6 +267,7 @@ async function fetchNodeState(
       node.lastSeenAt === null || seenAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
     if (shouldUpdateSeen) {
       await deps.nodes.update(node.id, { lastSeenAt: seenAt });
+      node.lastSeenAt = seenAt;
     }
     const effectiveLastSeenAt = shouldUpdateSeen ? seenAt : node.lastSeenAt;
     // D-2/T2.2：Agent 回传的 epoch 与节点当前 rev_epoch 不一致 = "旧纪元"
@@ -488,6 +496,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       ...(tokenEnc !== undefined ? { tokenEnc } : {}),
     });
     if (!node) throw notFound('节点不存在');
+    forgetNode(deps, node.id);
     await deps.audit.log({
       actor: c.get('user').name,
       nodeId: node.id,
@@ -505,6 +514,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     const nodeId = c.req.param('id');
     const removed = await deps.nodes.remove(nodeId);
     if (!removed) throw notFound('节点不存在');
+    forgetNode(deps, nodeId);
     await deps.audit.log({
       actor: c.get('user').name,
       nodeId,
@@ -539,119 +549,25 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     }
 
     const probedAt = nowSec();
-    const results: NodeProbeItem[] = [];
-
-    // Cloudflare Workers 单次调用子请求数有限（6），分批并发避免节点多时触顶。
-    const concurrency = 4;
-    for (let offset = 0; offset < nodes.length; offset += concurrency) {
-      const batch = nodes.slice(offset, offset + concurrency);
-      const settled = await Promise.all(
-        batch.map(async (node): Promise<NodeProbeItem> => {
-          const nodeConfigs = configsByNode.get(node.id) ?? [];
-          const probeEndpoint =
-            node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
-          try {
-            const token = await nodeToken(c.env, node);
-            const response = await deps.agent.call(
-              node,
-              token,
-              'GET',
-              '/state',
-              undefined,
-              // /state 比 /health 重（ops 要跑 systemctl/ps/df），沿用状态页的 10s 预算；
-              // 超时只丢 apps，不会把整次探测打成 5xx。
-              { timeoutMs: 10_000, bypassCooldown: true },
-            );
-            const reachable = response.status >= 200 && response.status < 300;
-            if (!reachable) {
-              const error = `Agent /state 返回 HTTP ${response.status}`;
-              const tls = classifyTlsProbe({
-                endpoint: probeEndpoint,
-                reachable: false,
-                error,
-                now: probedAt,
-              });
-              return {
-                id: node.id,
-                reachable: false,
-                route: response.route,
-                via: response.via,
-                error,
-                lastSeenAt: node.lastSeenAt,
-                projection: projectNodeProbe({
-                  node,
-                  configs: nodeConfigs,
-                  certs,
-                  state: null,
-                  tls,
-                  now: probedAt,
-                }),
-              };
-            }
-            const shouldUpdateSeen =
-              node.lastSeenAt === null || probedAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
-            if (shouldUpdateSeen) {
-              await deps.nodes.update(node.id, { lastSeenAt: probedAt });
-            }
-            const effectiveLastSeenAt = shouldUpdateSeen ? probedAt : node.lastSeenAt;
-            const parsed = agentStateSchema.safeParse(response.body);
-            const parsedState = parsed.success ? parsed.data : null;
-            const tls = classifyTlsProbe({
-              endpoint: probeEndpoint,
-              reachable: true,
-              now: probedAt,
-            });
-            return {
-              id: node.id,
-              reachable: true,
-              route: response.route,
-              via: response.via,
-              error: null,
-              lastSeenAt: effectiveLastSeenAt,
-              apps: probeApps(response.body),
-              projection: projectNodeProbe({
-                node,
-                configs: nodeConfigs,
-                certs,
-                state: parsedState,
-                tls,
-                now: probedAt,
-              }),
-            };
-          } catch (error) {
-            const message =
-              error instanceof HubUnreachableError
-                ? formatRouteErrors(error)
-                : error instanceof Error
-                  ? error.message
-                  : String(error);
-            const tls = classifyTlsProbe({
-              endpoint: probeEndpoint,
-              reachable: false,
-              error: message,
-              now: probedAt,
-            });
-            return {
-              id: node.id,
-              reachable: false,
-              route: null,
-              via: null,
-              error: message,
-              lastSeenAt: node.lastSeenAt,
-              projection: projectNodeProbe({
-                node,
-                configs: nodeConfigs,
-                certs,
-                state: null,
-                tls,
-                now: probedAt,
-              }),
-            };
-          }
-        }),
-      );
-      results.push(...settled);
-    }
+    // Cloudflare Workers 单次调用「等待响应头」阶段并发子请求上限为 6（2026-04 口径，
+    // cloudflare:sockets 同样计入）；用补位并发池替代固定分批，避免单台慢节点卡住整批。
+    const concurrency = Math.min(6, nodes.length);
+    const results = new Array<NodeProbeItem>(nodes.length);
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < nodes.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const node = nodes[index];
+        if (!node) continue;
+        results[index] = await probeSingleNode(c.env, deps, node, {
+          configs: configsByNode.get(node.id) ?? [],
+          certs,
+          probedAt,
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
 
     const expiringCerts = collectExpiringCerts(certs, probedAt);
     return c.json(nodeProbeResponseSchema.parse({ probedAt, nodes: results, expiringCerts }));
@@ -664,7 +580,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
   router.get('/nodes/:id/state', async (c) => {
     // 运行状态是瞬时的：不进入共享缓存（也不进入 D1）。
     c.header('Cache-Control', 'no-store');
-    const node = await requireNode(deps, c.req.param('id'));
+    const node = await getNodeCached(deps, c.req.param('id'));
     const force = c.req.query('force');
     const result = await fetchNodeState(c.env, deps, node, {
       force: force === '1' || force === 'true',
@@ -688,7 +604,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
    */
   router.get('/nodes/:id/overview', async (c) => {
     c.header('Cache-Control', 'no-store');
-    const node = await requireNode(deps, c.req.param('id'));
+    const node = await getNodeCached(deps, c.req.param('id'));
     const force = c.req.query('force');
     const [configs, certs, stateResult] = await Promise.all([
       deps.apps.listByNode(node.id),
@@ -729,6 +645,120 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
   });
 
   return router;
+}
+
+/** 单节点轻量探活（供 /nodes/probe 滑动并发池调用）。 */
+async function probeSingleNode(
+  env: Env,
+  deps: AppDeps,
+  node: StoredNode,
+  opts: {
+    configs: AppConfigSummaryRow[];
+    certs: Awaited<ReturnType<AppDeps['certs']['list']>>;
+    probedAt: number;
+  },
+): Promise<NodeProbeItem> {
+  const { configs: nodeConfigs, certs, probedAt } = opts;
+  const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
+  try {
+    const token = await nodeToken(env, node);
+    const response = await deps.agent.call(
+      node,
+      token,
+      'GET',
+      '/state',
+      undefined,
+      // /state 比 /health 重（ops 要跑 systemctl/ps/df），沿用状态页的 10s 预算；
+      // 超时只丢 apps，不会把整次探测打成 5xx。
+      { timeoutMs: 10_000, bypassCooldown: true },
+    );
+    const reachable = response.status >= 200 && response.status < 300;
+    if (!reachable) {
+      const error = `Agent /state 返回 HTTP ${response.status}`;
+      const tls = classifyTlsProbe({
+        endpoint: probeEndpoint,
+        reachable: false,
+        error,
+        now: probedAt,
+      });
+      return {
+        id: node.id,
+        reachable: false,
+        route: response.route,
+        via: response.via,
+        error,
+        lastSeenAt: node.lastSeenAt,
+        projection: projectNodeProbe({
+          node,
+          configs: nodeConfigs,
+          certs,
+          state: null,
+          tls,
+          now: probedAt,
+        }),
+      };
+    }
+    const shouldUpdateSeen =
+      node.lastSeenAt === null || probedAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
+    if (shouldUpdateSeen) {
+      await deps.nodes.update(node.id, { lastSeenAt: probedAt });
+      touchNodeLastSeen(deps, node.id, probedAt);
+    }
+    const effectiveLastSeenAt = shouldUpdateSeen ? probedAt : node.lastSeenAt;
+    const parsed = agentStateSchema.safeParse(response.body);
+    const parsedState = parsed.success ? parsed.data : null;
+    const tls = classifyTlsProbe({
+      endpoint: probeEndpoint,
+      reachable: true,
+      now: probedAt,
+    });
+    return {
+      id: node.id,
+      reachable: true,
+      route: response.route,
+      via: response.via,
+      error: null,
+      lastSeenAt: effectiveLastSeenAt,
+      apps: probeApps(response.body),
+      projection: projectNodeProbe({
+        node,
+        configs: nodeConfigs,
+        certs,
+        state: parsedState,
+        tls,
+        now: probedAt,
+      }),
+    };
+  } catch (error) {
+    const message =
+      error instanceof HubUnreachableError
+        ? formatRouteErrors(error)
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    const tls = classifyTlsProbe({
+      endpoint: probeEndpoint,
+      reachable: false,
+      error: message,
+      now: probedAt,
+    });
+    return {
+      id: node.id,
+      reachable: false,
+      route: null,
+      via: null,
+      error: message,
+      lastSeenAt: node.lastSeenAt,
+      projection: projectNodeProbe({
+        node,
+        configs: nodeConfigs,
+        certs,
+        state: null,
+        tls,
+        now: probedAt,
+      }),
+    };
+  }
 }
 
 /** 供 apps 路由复用：把 Agent 的错误映射成 Worker 错误信封 */

@@ -27,7 +27,7 @@ import { AppError, badRequest, misconfigured, notFound } from '../lib/errors';
 import { encryptSecret, decryptSecret } from '../lib/crypto';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
-import { requireNode } from './helpers';
+import { forgetNode, requireNode } from './helpers';
 import { newId, nowSec } from '../lib/ids';
 import { resolveDnsName } from '../lib/doh';
 import {
@@ -690,7 +690,10 @@ export function cfDnsRoutes(deps: AppDeps): Hono<AppBindings> {
     const first = existingManaged?.records[0];
     if (first) {
       // 幂等重入：面板已托管该节点的记录，直接返回，不重复创建。
-      if (!node.domain) await deps.nodes.update(node.id, { domain: first.name });
+      if (!node.domain) {
+        await deps.nodes.update(node.id, { domain: first.name });
+        forgetNode(deps, node.id);
+      }
       return c.json(
         cfDnsRecordResponseSchema.parse({
           created: false,
@@ -761,6 +764,7 @@ export function cfDnsRoutes(deps: AppDeps): Hono<AppBindings> {
         records: [{ ...record, accountId, zoneId }],
       });
       await deps.nodes.update(node.id, { domain: record.name });
+      forgetNode(deps, node.id);
     } catch (error) {
       await deleteRecord(fetcher_, token, zoneId, record.id).catch(() => {});
       throw new AppError(500, 'internal_error', `记录已创建但登记失败，已回滚：${String(error)}`);

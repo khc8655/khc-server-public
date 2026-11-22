@@ -1,11 +1,11 @@
 import { Hono } from 'hono';
 import { agentSnapshotSchema, type NodeSnapshotResponse } from '@khc/contracts';
-import type { NodeRepo, StoredNode } from '../domain/repos';
+import type { StoredNode } from '../domain/repos';
 import type { AppBindings, AppDeps } from '../types';
 import { nowSec } from '../lib/ids';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError, formatRouteErrors } from '../lib/node-client';
-import { nodeToken, requireNode } from './helpers';
+import { getNodeCached, nodeToken } from './helpers';
 
 /**
  * 无域名节点的快照转发：浏览器 → Worker → Agent `/snapshot`。
@@ -16,34 +16,10 @@ import { nodeToken, requireNode } from './helpers';
  */
 const SNAPSHOT_TIMEOUT_MS = 8_000;
 const DEDUPE_MS = 2_000;
-const NODE_CACHE_TTL_MS = 15_000;
 
 interface DedupeEntry {
   at: number;
   promise: Promise<NodeSnapshotResponse>;
-}
-
-interface NodeCacheEntry {
-  node: StoredNode;
-  at: number;
-}
-
-const nodeReadCache = new WeakMap<NodeRepo, Map<string, NodeCacheEntry>>();
-
-async function getSnapshotNode(deps: AppDeps, id: string): Promise<StoredNode> {
-  const now = Date.now();
-  let map = nodeReadCache.get(deps.nodes);
-  if (!map) {
-    map = new Map();
-    nodeReadCache.set(deps.nodes, map);
-  }
-  const cached = map.get(id);
-  if (cached && now - cached.at < NODE_CACHE_TTL_MS) {
-    return cached.node;
-  }
-  const node = await requireNode(deps, id);
-  map.set(id, { node, at: now });
-  return node;
 }
 
 export function snapshotRoutes(deps: AppDeps): Hono<AppBindings> {
@@ -53,7 +29,7 @@ export function snapshotRoutes(deps: AppDeps): Hono<AppBindings> {
 
   router.get('/nodes/:id/snapshot', async (c) => {
     c.header('Cache-Control', 'no-store');
-    const node = await getSnapshotNode(deps, c.req.param('id'));
+    const node = await getNodeCached(deps, c.req.param('id'));
     const token = await nodeToken(c.env, node);
 
     const now = Date.now();
@@ -81,7 +57,7 @@ export function snapshotRoutes(deps: AppDeps): Hono<AppBindings> {
 
 async function callSnapshot(
   deps: AppDeps,
-  node: Awaited<ReturnType<typeof requireNode>>,
+  node: StoredNode,
   token: string,
 ): Promise<NodeSnapshotResponse> {
   try {
