@@ -5026,3 +5026,81 @@ button.ui-statusbar-tile:hover {
   background: color-mix(in srgb, var(--danger-soft) 50%, var(--surface));
   color: var(--danger);
 }
+
+.ui-route-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s25) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.ui-route-preview-label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.ui-route-preview-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s15);
+  font-size: var(--fs-mono);
+  overflow-wrap: anywhere;
+}
+
+.ui-route-preview-url {
+  color: var(--text);
+  font-weight: var(--fw-semibold);
+}
+
+.ui-route-preview-arrow {
+  color: var(--text-3);
+}
+
+.ui-route-preview-target {
+  color: var(--text-2);
+}
+
+.ui-site-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s15);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ui-site-url-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ui-site-url-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ui-site-url-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.ui-site-url-link:hover {
+  text-decoration: underline;
+}
+
+.ui-site-url-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}

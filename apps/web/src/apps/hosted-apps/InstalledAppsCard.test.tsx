@@ -100,7 +100,8 @@ describe('InstalledAppsCard 已安装的托管应用', () => {
     await userEvent.click(within(confirmDialog).getByRole('button', { name: '卸载' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(await screen.findByText('这台机器还没装托管应用')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('已安装的托管应用')).toBeNull());
+    expect(screen.queryByText('magpie')).toBeNull();
     expect(taskPolls).toBeGreaterThanOrEqual(2);
   });
 });

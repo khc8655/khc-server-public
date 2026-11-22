@@ -358,11 +358,11 @@ describe('C3 页面', () => {
   it('应用页展示站点、证书引用与运行状态', async () => {
     await renderRoute('/hubs/tyo-1/sites');
     expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
-    // 健康状态并入名称左侧圆点；表格保留同步状态列。
+    expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('blog').length).toBeGreaterThan(0);
+    // 健康状态并入名称左侧圆点；表格保留同步状态列与访问地址下的 TLS 简标。
     expect((await screen.findAllByText('已同步')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('反代').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('全局证书库').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('全局证书').length).toBeGreaterThan(0);
     // 即使节点带 liveEndpoint，也统一经 Worker /snapshot，不再发 /live-ticket 或 /_live/。
     await waitFor(() => {
       expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/snapshot')).toBe(true);

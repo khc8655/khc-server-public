@@ -127,6 +127,6 @@ describe('旧 /services 暗路由重定向（U3）', () => {
     );
     expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/hubs/tyo-1/sites');
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
   });
 });

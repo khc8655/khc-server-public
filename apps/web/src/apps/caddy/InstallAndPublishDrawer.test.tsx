@@ -10,6 +10,7 @@ import {
   createRouter,
 } from '@tanstack/react-router';
 import type { Certificate, Node } from '@khc/contracts';
+import { normalizeCaddyConfig, type CaddySite } from '../../data/sites';
 import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
 
 function json(body: unknown, status = 200): Response {
@@ -78,6 +79,7 @@ const wildcardCert: Certificate = {
 function renderWizard(
   props: {
     certificates?: Certificate[];
+    existingSites?: CaddySite[];
     onPublished?: () => Promise<void> | void;
     onClose?: () => void;
   } = {},
@@ -90,7 +92,7 @@ function renderWizard(
         hubName="hk-1"
         node={node}
         certificates={props.certificates ?? []}
-        existingSites={[]}
+        existingSites={props.existingSites ?? []}
         pollIntervalMs={5}
         onClose={props.onClose ?? vi.fn()}
         onPublished={props.onPublished ?? vi.fn()}
@@ -189,15 +191,16 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(await screen.findByText('magpie')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
 
-    // 不再要求输入密码或冗余的 public_url；默认对外端口 2083（避开 443 与 Agent 2053）且不预填 Agent 域名
+    // 默认预填 VM 绑定域名，默认对外端口 443（因 Agent 在 2053 且尚无其他站点占 443）
     expect(screen.queryByLabelText('密码')).toBeNull();
     expect(screen.queryByLabelText('Caddy 发布后的对外地址（可选）')).toBeNull();
     const domainInput = screen.getByLabelText('发布域名') as HTMLInputElement;
-    expect(domainInput.value).toBe('');
+    expect(domainInput.value).toBe('hk.example.com');
     const portInput = screen.getByLabelText('对外端口') as HTMLInputElement;
-    expect(portInput.value).toBe('2083');
+    expect(portInput.value).toBe('443');
 
     // 对外端口与 Agent 2053 撞端口时内联报错且禁用提交
+    await userEvent.clear(domainInput);
     await userEvent.type(domainInput, 'app.example.com');
     await userEvent.clear(portInput);
     await userEvent.type(portInput, '2053');
@@ -230,7 +233,7 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(onPublished).toHaveBeenCalledTimes(1);
     expect(savedSites).toHaveLength(1);
     expect(savedSites[0]).toMatchObject({
-      name: 'app.example.com',
+      name: 'magpie',
       domains: ['app.example.com'],
       listenPort: 8443,
       upstreams: ['127.0.0.1:4430'],
@@ -324,7 +327,7 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(await screen.findByText('magpie 已安装并发布')).toBeTruthy();
     await waitFor(() => {
       expect(savedSites[0]).toMatchObject({
-        name: 'drive.example.com',
+        name: 'magpie',
         tls: { mode: 'manual', cert: { $cert: 'cert_wild' } },
       });
     });
@@ -366,7 +369,9 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(await screen.findByText('magpie')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
 
-    await userEvent.type(screen.getByLabelText('发布域名'), 'plain.example.com');
+    const domainInput = screen.getByLabelText('发布域名') as HTMLInputElement;
+    await userEvent.clear(domainInput);
+    await userEvent.type(domainInput, 'plain.example.com');
     const portInput = screen.getByLabelText('对外端口') as HTMLInputElement;
     await userEvent.clear(portInput);
     await userEvent.type(portInput, '3430');
@@ -382,5 +387,76 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       listenPort: 8088,
       tls: { mode: 'off', cert: null },
     });
+  });
+
+  it('复用已有 VM 域名并在不同端口发布第二个应用，不覆盖先前的同域名站点', async () => {
+    window.scrollTo = vi.fn();
+    const existing = normalizeCaddyConfig({
+      sites: [
+        {
+          name: 'llmproxy',
+          domains: ['hk.example.com'],
+          listenPort: 443,
+          kind: 'proxy',
+          upstreams: ['127.0.0.1:8787'],
+          enabled: true,
+        },
+      ],
+    }).sites;
+    let savedSites: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
+          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
+          return json({ ok: true, accepted: true, taskId: 'task-second', result: { taskId: 'task-second' } });
+        }
+        if (url === '/api/v1/nodes/hub-1/tasks/task-second') {
+          return json({
+            task: { id: 'task-second', state: 'done', progress: 100, logs: [], result: {}, error: null },
+          });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site') {
+          if (init?.method === 'PUT') {
+            const body = JSON.parse(String(init.body)) as { config: { sites: Record<string, unknown>[] } };
+            savedSites = body.config.sites;
+            return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: savedSites }, rev: 2, appliedRev: 1, updatedAt: NOW } });
+          }
+          return json({
+            app: {
+              app: 'caddy-site',
+              schemaVersion: 1,
+              config: { sites: existing },
+              rev: 1,
+              appliedRev: 1,
+              updatedAt: NOW,
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site/apply') return json({ ok: true });
+        return json({});
+      }),
+    );
+
+    renderWizard({ existingSites: existing });
+    expect(await screen.findByText('magpie')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+
+    const domainInput = screen.getByLabelText('发布域名') as HTMLInputElement;
+    const portInput = screen.getByLabelText('对外端口') as HTMLInputElement;
+    expect(domainInput.value).toBe('hk.example.com');
+    expect(portInput.value).toBe('8443');
+
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+    expect(await screen.findByText('magpie 已安装并发布')).toBeTruthy();
+    expect(savedSites).toHaveLength(2);
+    expect(savedSites.map((s) => ({ name: s.name, listenPort: s.listenPort }))).toEqual([
+      { name: 'llmproxy', listenPort: 443 },
+      { name: 'magpie', listenPort: 8443 },
+    ]);
   });
 });

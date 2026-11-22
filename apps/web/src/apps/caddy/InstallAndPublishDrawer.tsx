@@ -48,7 +48,7 @@ import {
   type CatalogRecipe,
   type InstalledEntry,
 } from '../hosted-apps/recipes';
-import { DOMAIN_RE } from './siteForm';
+import { DOMAIN_RE, parseEndpointPort, pickRecommendedListenPort } from './siteForm';
 
 export interface InstallAndPublishDrawerProps {
   hubId: string;
@@ -65,25 +65,6 @@ export interface InstallAndPublishDrawerProps {
 
 type WizardStep = 1 | 2 | 3;
 type WizardTlsMode = 'auto' | 'manual' | 'off';
-
-function parseEndpointPort(endpoint: string | undefined): number | null {
-  if (!endpoint) return null;
-  try {
-    const url = new URL(endpoint);
-    if (url.port) {
-      const port = Number(url.port);
-      return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
-    }
-    return url.protocol === 'https:' ? 443 : url.protocol === 'http:' ? 80 : null;
-  } catch {
-    return null;
-  }
-}
-
-function defaultWizardListenPort(agentPort: number | null): number {
-  if (agentPort === 2083) return 8443;
-  return 2083;
-}
 
 function buildPublishUrl(domain: string, port: number, tlsMode: WizardTlsMode): string {
   if (tlsMode === 'off') {
@@ -148,9 +129,13 @@ export function InstallAndPublishDrawer({
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [runtimeMode, setRuntimeMode] = useState<AppRuntimeMode>('create');
   const [runtimeUser, setRuntimeUser] = useState('');
-  const [domain, setDomain] = useState('');
+  const [domain, setDomain] = useState(() => node?.domain?.trim() ?? '');
   const [listenPort, setListenPort] = useState<number | null>(() =>
-    defaultWizardListenPort(parseEndpointPort(node?.endpoint)),
+    pickRecommendedListenPort({
+      agentPort: parseEndpointPort(node?.endpoint),
+      domain: node?.domain?.trim() ?? '',
+      existingSites,
+    }),
   );
   const [tlsMode, setTlsMode] = useState<WizardTlsMode>('auto');
   const [certId, setCertId] = useState('');
@@ -169,18 +154,31 @@ export function InstallAndPublishDrawer({
   }, []);
 
   const normalizedDomain = normalizeDomain(domain);
-  const fallbackPort = defaultWizardListenPort(nodeAgentPort);
+  const fallbackPort = pickRecommendedListenPort({
+    agentPort: nodeAgentPort,
+    domain: normalizedDomain || node?.domain?.trim() || '',
+    existingSites,
+  });
   const publicUrlPreview = normalizedDomain
     ? buildPublishUrl(normalizedDomain, listenPort ?? fallbackPort, tlsMode)
     : '';
 
   const pickRecipe = (picked: CatalogRecipe) => {
+    const defaults = defaultValues(picked);
+    const defaultDomain = node?.domain?.trim() ?? '';
     setSelectedId(picked.id);
-    setValues(defaultValues(picked));
+    setValues(defaults);
     setRuntimeMode(picked.runtimeMode);
     setRuntimeUser(picked.runtimeUser ?? '');
-    setDomain('');
-    setListenPort(defaultWizardListenPort(nodeAgentPort));
+    setDomain(defaultDomain);
+    setListenPort(
+      pickRecommendedListenPort({
+        agentPort: nodeAgentPort,
+        localPort: declaredPort(picked, defaults),
+        domain: defaultDomain,
+        existingSites,
+      }),
+    );
     setTlsMode('auto');
     setCertId('');
     setTask(null);
@@ -226,19 +224,22 @@ export function InstallAndPublishDrawer({
   const portInvalid =
     listenPort === null || !Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535;
   const portConflict =
-    !portInvalid && normalizedDomain
+    !portInvalid && normalizedDomain && listenPort !== null
       ? existingSites.some(
           (site) =>
-            site.name !== normalizedDomain &&
             site.listenPort === listenPort &&
             site.domains.includes(normalizedDomain),
         )
       : false;
   const portAgentConflict =
     !portInvalid && nodeAgentPort !== null && listenPort === nodeAgentPort;
-  const existingSameSite = normalizedDomain
-    ? existingSites.some((site) => site.name === normalizedDomain)
-    : false;
+  const existingSameSite =
+    !portInvalid && normalizedDomain && listenPort !== null
+      ? existingSites.some(
+          (site) =>
+            site.listenPort === listenPort && site.domains.includes(normalizedDomain),
+        )
+      : false;
   const certError =
     tlsMode === 'manual' && !certId ? zh.hosted.wizardTlsCertRequired : undefined;
   const localPort = recipe ? declaredPort(recipe, values) : null;
@@ -273,6 +274,7 @@ export function InstallAndPublishDrawer({
     setError(null);
     const upstream = `127.0.0.1:${port}`;
     await publishProxySite(hubId, {
+      name: targetRecipe.id,
       domain: targetDomain,
       listenPort: targetListenPort,
       upstream,
