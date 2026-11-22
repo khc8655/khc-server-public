@@ -1,5 +1,7 @@
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
+import { agentReleasesQueryOptions, latestNewerAgentRelease } from '../data/agent';
 import { ApiError } from '../data/client';
 import { pickFailedUnits } from '../data/failedUnits';
 import { splitFailedUnits } from '../data/managedUnits';
@@ -48,6 +50,7 @@ export default function HubOverviewPage() {
   const navigate = useNavigate();
   const goTo = (href: string) => void navigate({ href });
   const { overviewQuery, live } = useHubChannelsContext();
+  const releasesQuery = useQuery(agentReleasesQueryOptions());
 
   if (overviewQuery.isLoading && !overviewQuery.data) {
     return (
@@ -98,6 +101,7 @@ export default function HubOverviewPage() {
   const hostMetrics = snapshot?.host ?? state?.host ?? null;
   const hostStatic = snapshot?.host ?? state?.host ?? overview.host;
   const agentVersion = snapshot?.agent?.version ?? overview.host?.agentVersion ?? null;
+  const newerAgent = latestNewerAgentRelease(releasesQuery.data, agentVersion);
 
   const authError = Boolean(
     data.error && /鉴权失败|HTTP 40[13]|unauthorized|invalid token/i.test(data.error),
@@ -177,6 +181,19 @@ export default function HubOverviewPage() {
           : expiryDaysLeft === 0
             ? zh.overview.todoNodeToday
             : fmt(zh.overview.todoNodeExpiring, { days: expiryDaysLeft }),
+      to: paths.hubSection(hubId, 'settings'),
+    });
+  }
+  if (newerAgent && agentVersion) {
+    todos.push({
+      id: `agent-upgrade:${hubId}`,
+      tone: 'warn',
+      badge: zh.agent.todoUpgradeBadge,
+      name: `Agent v${newerAgent.version}`,
+      desc: fmt(zh.agent.todoUpgradeDesc, {
+        current: agentVersion,
+        latest: newerAgent.version,
+      }),
       to: paths.hubSection(hubId, 'settings'),
     });
   }

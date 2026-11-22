@@ -1,13 +1,21 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_DOMAIN_PORT } from '@khc/contracts';
 import type {
+  CfDnsZoneRecordsResponse,
   CreateNodeRequest,
   Node,
   NodeAccessMode,
   Tunnel,
   UpdateNodeRequest,
 } from '@khc/contracts';
-import { fetchCfDnsAccounts, fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
+import {
+  checkCfDnsResolve,
+  createCfDnsRecord,
+  fetchCfDnsAccounts,
+  fetchCfDnsRecords,
+  fetchCfDnsZones,
+} from '../../data/cfDns';
 import { listTunnels } from '../../data/tunnels';
 import {
   HTTPS_PORT_OPTIONS,
@@ -20,8 +28,10 @@ import {
 } from '../../data/endpoint';
 import { classifyCfDnsRecords } from '../../pages/cfDnsRecords';
 import {
+  Badge,
   Banner,
   Button,
+  Card,
   Checkbox,
   Field,
   InlineError,
@@ -71,6 +81,17 @@ const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 export const TUNNELS_SETTINGS_HREF = '/settings?tab=tunnels';
 export const DOMAIN_SETTINGS_HREF = '/settings?tab=domain';
 export const ACCOUNTS_SETTINGS_HREF = '/settings?tab=accounts';
+
+/** 就地新建解析时允许只填子域（自动补当前 Zone），或 @ 表示根域名。 */
+function resolveQuickRecordName(input: string, zoneName: string): string | null {
+  const name = input.trim().toLowerCase().replace(/\.+$/, '');
+  const zone = zoneName.trim().toLowerCase();
+  if (!name || !zone) return null;
+  if (name === '@' || name === zone) return zone;
+  if (name.endsWith(`.${zone}`)) return name;
+  if (!name.includes('.')) return `${name}.${zone}`;
+  return null;
+}
 
 const MANUAL_DOMAIN_DISALLOWED_RE = /^[a-z][a-z0-9+.-]*:\/\/|[:/?#]/i;
 
@@ -388,12 +409,32 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
     enabled: draft.accessMode === 'domain',
   });
 
+  const queryClient = useQueryClient();
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [quickType, setQuickType] = useState<'A' | 'AAAA'>('A');
+  const [quickName, setQuickName] = useState('');
+  const [quickContent, setQuickContent] = useState('');
+  const [quickProxied, setQuickProxied] = useState(false);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const [resolveState, setResolveState] = useState<{
+    domain: string;
+    status: 'checking' | 'done' | 'error';
+    resolved?: boolean;
+    answers?: string[];
+    dnsStatus?: number;
+    error?: string;
+  } | null>(null);
+
   const update = (patch: Partial<NodeAccessDraft>) => onChange({ ...draft, ...patch });
 
   const zones = zonesQuery.data ?? [];
   const accounts = accountsQuery.data ?? [];
   const records = recordsQuery.data?.records ?? [];
   const candidates = classifyCfDnsRecords(records, nodes);
+  const selectedZone = zones.find((zone) => zone.id === draft.zoneId) ?? null;
+  const selectedCandidate =
+    candidates.find((candidate) => candidate.record.id === draft.recordId) ?? null;
   const selectedTunnel: Tunnel | undefined = (tunnelsQuery.data ?? []).find(
     (tunnel) => tunnel.id === draft.tunnelId,
   );
@@ -402,6 +443,91 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const normalizedDomain = normalizeDomain(draft.domain);
   const domainReady =
     normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain) && !manualDomainError;
+  const activeResolve = resolveState?.domain === normalizedDomain ? resolveState : null;
+
+  const openQuickCreate = () => {
+    setQuickCreateOpen(true);
+    setQuickError(null);
+  };
+
+  const closeQuickCreate = () => {
+    setQuickCreateOpen(false);
+    setQuickError(null);
+  };
+
+  const handleQuickCreate = async () => {
+    if (!selectedZone) return;
+    const name = resolveQuickRecordName(quickName, selectedZone.name);
+    if (!name) {
+      setQuickError(fmt(zh.cfDns.recordNameZoneInvalid, { zone: selectedZone.name }));
+      return;
+    }
+    const content = quickContent.trim();
+    if (!content) {
+      setQuickError(zh.cfDns.recordContentInvalid);
+      return;
+    }
+    setQuickBusy(true);
+    setQuickError(null);
+    try {
+      const created = await createCfDnsRecord(selectedZone.id, {
+        type: quickType,
+        name,
+        content,
+        proxied: quickProxied,
+      });
+      queryClient.setQueryData<CfDnsZoneRecordsResponse>(
+        ['cfDns', 'records', selectedZone.id],
+        (prev) => ({
+          zoneId: prev?.zoneId ?? selectedZone.id,
+          zoneName: prev?.zoneName ?? selectedZone.name,
+          records: [created, ...(prev?.records ?? []).filter((item) => item.id !== created.id)],
+        }),
+      );
+      void queryClient.invalidateQueries({ queryKey: ['cfDns', 'records', selectedZone.id] });
+      update({
+        zoneId: selectedZone.id,
+        recordId: created.id,
+        domain: created.name,
+      });
+      setQuickCreateOpen(false);
+      setQuickName('');
+      setQuickContent('');
+      setQuickProxied(false);
+    } catch (error) {
+      setQuickError(
+        error instanceof Error && error.message ? error.message : zh.cfDns.recordCreateError,
+      );
+    } finally {
+      setQuickBusy(false);
+    }
+  };
+
+  const handleResolveCheck = async () => {
+    if (!domainReady) return;
+    const targetDomain = normalizedDomain;
+    setResolveState({ domain: targetDomain, status: 'checking' });
+    try {
+      const res = await checkCfDnsResolve({
+        name: targetDomain,
+        type: selectedCandidate?.record.type,
+      });
+      setResolveState({
+        domain: targetDomain,
+        status: 'done',
+        resolved: res.resolved,
+        answers: res.answers,
+        dnsStatus: res.status,
+      });
+    } catch (error) {
+      setResolveState({
+        domain: targetDomain,
+        status: 'error',
+        error:
+          error instanceof Error && error.message ? error.message : zh.access.resolveCheckError,
+      });
+    }
+  };
   const upstreamPortError = !draft.autoPublish
     ? undefined
     : !portValid(draft.upstreamPort)
@@ -563,25 +689,105 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     value: zone.id,
                     label: `${zone.name} · ${zone.accountName}`,
                   }))}
-                  onChange={(zoneId) => update({ zoneId, recordId: '', domain: '' })}
+                  onChange={(zoneId) => {
+                    closeQuickCreate();
+                    update({ zoneId, recordId: '', domain: '' });
+                  }}
                 />
               </Field>
 
-              <Row justify="between" gap={2} align="center">
+              <Row justify="between" gap={2} align="center" wrap>
                 <Link to={DOMAIN_SETTINGS_HREF} label="管理域名记录" />
-                <Button
-                  label="刷新记录"
-                  size="sm"
-                  variant="ghost"
-                  icon="refresh"
-                  loading={zonesQuery.isFetching || recordsQuery.isFetching}
-                  onClick={() =>
-                    void (draft.zoneId
-                      ? Promise.all([zonesQuery.refetch(), recordsQuery.refetch()])
-                      : zonesQuery.refetch())
-                  }
-                />
+                <Row gap={2} wrap>
+                  {selectedZone && candidates.length > 0 && !quickCreateOpen ? (
+                    <Button
+                      label={zh.access.dnsQuickCreateOpen}
+                      size="sm"
+                      variant="ghost"
+                      icon="plus"
+                      onClick={openQuickCreate}
+                    />
+                  ) : null}
+                  <Button
+                    label="刷新记录"
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh"
+                    loading={zonesQuery.isFetching || recordsQuery.isFetching}
+                    onClick={() =>
+                      void (draft.zoneId
+                        ? Promise.all([zonesQuery.refetch(), recordsQuery.refetch()])
+                        : zonesQuery.refetch())
+                    }
+                  />
+                </Row>
               </Row>
+
+              {quickCreateOpen && selectedZone ? (
+                <Card title={fmt(zh.access.dnsQuickCreateTitle, { zone: selectedZone.name })}>
+                  <Stack gap={3}>
+                    <Field id="access-dns-create-type" label={zh.cfDns.recordTypeLabel} required>
+                      <Select
+                        id="access-dns-create-type"
+                        value={quickType}
+                        options={[
+                          { value: 'A', label: 'A (IPv4)' },
+                          { value: 'AAAA', label: 'AAAA (IPv6)' },
+                        ]}
+                        onChange={(value) => setQuickType(value === 'AAAA' ? 'AAAA' : 'A')}
+                      />
+                    </Field>
+                    <Field
+                      id="access-dns-create-name"
+                      label={zh.cfDns.recordNameLabel}
+                      help={fmt(zh.cfDns.recordNameHelp, { zone: selectedZone.name })}
+                      required
+                    >
+                      <TextInput
+                        id="access-dns-create-name"
+                        value={quickName}
+                        mono
+                        placeholder={zh.access.dnsQuickCreateNamePlaceholder}
+                        onChange={setQuickName}
+                      />
+                    </Field>
+                    <Field
+                      id="access-dns-create-content"
+                      label={zh.cfDns.recordContentLabel}
+                      required
+                    >
+                      <TextInput
+                        id="access-dns-create-content"
+                        value={quickContent}
+                        mono
+                        placeholder={zh.access.dnsQuickCreateContentPlaceholder}
+                        onChange={setQuickContent}
+                      />
+                    </Field>
+                    <Checkbox
+                      checked={quickProxied}
+                      label={zh.cfDns.recordProxiedLabel}
+                      onChange={setQuickProxied}
+                    />
+                    {quickError ? <InlineError message={quickError} /> : null}
+                    <Row justify="end" gap={2} wrap>
+                      <Button
+                        label={zh.access.dnsQuickCreateCancel}
+                        size="sm"
+                        disabled={quickBusy}
+                        onClick={closeQuickCreate}
+                      />
+                      <Button
+                        label={zh.access.dnsQuickCreateSubmit}
+                        size="sm"
+                        variant="primary"
+                        loading={quickBusy}
+                        onClick={() => void handleQuickCreate()}
+                      />
+                    </Row>
+                  </Stack>
+                </Card>
+              ) : null}
 
               {draft.zoneId ? (
                 recordsQuery.isLoading ? (
@@ -604,7 +810,14 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                 ) : candidates.length === 0 ? (
                   <Stack gap={2}>
                     <span className="ui-muted">{zh.access.recordsEmpty}</span>
-                    <Row justify="end">
+                    <Row justify="end" gap={2} wrap>
+                      {!quickCreateOpen ? (
+                        <Button
+                          label={zh.access.dnsQuickCreateOpen}
+                          size="sm"
+                          onClick={openQuickCreate}
+                        />
+                      ) : null}
                       <Button
                         label={zh.access.switchManual}
                         size="sm"
@@ -704,15 +917,55 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
           </Field>
 
           {domainReady ? (
-            <Field id="access-domain-preview" label={zh.access.endpointPreviewLabel}>
-              <TextInput
-                id="access-domain-preview"
-                value={buildDomainEndpoint(normalizedDomain, draft.domainPort)}
-                mono
-                readOnly
-                onChange={() => {}}
-              />
-            </Field>
+            <>
+              <Field id="access-domain-preview" label={zh.access.endpointPreviewLabel}>
+                <TextInput
+                  id="access-domain-preview"
+                  value={buildDomainEndpoint(normalizedDomain, draft.domainPort)}
+                  mono
+                  readOnly
+                  onChange={() => {}}
+                />
+              </Field>
+              <Stack gap={2}>
+                <Row gap={2} align="center" wrap>
+                  <Button
+                    label={zh.access.resolveCheckAction}
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh"
+                    loading={activeResolve?.status === 'checking'}
+                    onClick={() => void handleResolveCheck()}
+                  />
+                  {activeResolve?.status === 'done' ? (
+                    activeResolve.resolved ? (
+                      <Badge
+                        tone="ok"
+                        label={
+                          activeResolve.answers && activeResolve.answers.length > 0
+                            ? fmt(zh.access.resolveOkWithAnswers, {
+                                answers: activeResolve.answers.join(', '),
+                              })
+                            : zh.cfDns.resolveOk
+                        }
+                        dot
+                      />
+                    ) : (
+                      <Badge
+                        tone="warn"
+                        label={fmt(zh.access.resolveNotReady, {
+                          status: activeResolve.dnsStatus ?? 0,
+                        })}
+                        dot
+                      />
+                    )
+                  ) : null}
+                </Row>
+                {activeResolve?.status === 'error' ? (
+                  <InlineError message={activeResolve.error ?? zh.access.resolveCheckError} />
+                ) : null}
+              </Stack>
+            </>
           ) : (
             <span className="ui-muted">
               {domainSource === 'record' ? zh.access.domainSelectHint : zh.access.domainInputHint}

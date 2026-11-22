@@ -19,6 +19,8 @@ function json(body: unknown, status = 200): Response {
 
 let nodeStatus: 'online' | 'offline' = 'online';
 let commandFails = false;
+let reportedAgentVersion = '1.2.3';
+let releasesMock = [{ version: '0.2.0', url: URL, sha256: SHA }];
 let requests: { url: string; init?: RequestInit }[] = [];
 
 const node = {
@@ -75,7 +77,7 @@ function mockApi() {
             host: { hostname: 'hub-tyo' },
             adapters: [],
             ports: [],
-            agent: { version: '1.2.3', serverTime: NOW, mode: 'wg' },
+            agent: { version: reportedAgentVersion, serverTime: NOW, mode: 'wg' },
           },
         });
       }
@@ -83,7 +85,7 @@ function mockApi() {
         return json({ apps: [], adapters: [], adaptersError: null });
       }
       if (url === '/api/v1/agent/releases') {
-        return json({ releases: [{ version: '0.2.0', url: URL, sha256: SHA }] });
+        return json({ releases: releasesMock });
       }
       if (url.endsWith('/agent/upgrade')) {
         return json({ ok: true, accepted: true, fromVersion: '0.1.4', targetVersion: '0.2.0' }, 202);
@@ -106,6 +108,8 @@ function mockApi() {
 
 beforeEach(() => {
   window.scrollTo = vi.fn();
+  reportedAgentVersion = '1.2.3';
+  releasesMock = [{ version: '0.2.0', url: URL, sha256: SHA }];
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText: vi.fn(async () => undefined) },
@@ -255,5 +259,13 @@ describe('Agent 命令 UI', () => {
     } finally {
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: original });
     }
+  });
+
+  it('节点版本落后发布清单时在 Agent 卡展示可升级徽标', async () => {
+    reportedAgentVersion = '0.6.0';
+    releasesMock = [{ version: '0.6.5', url: URL, sha256: SHA }];
+    await renderRoute('/hubs/tyo-1/settings');
+    expect(await screen.findByText('v0.6.0')).toBeTruthy();
+    expect(await screen.findByText('可升级到 v0.6.5')).toBeTruthy();
   });
 });

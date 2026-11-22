@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgentCommandError,
+  compareSemver,
   fetchAgentReleases,
   generateAgentCommand,
+  hasNewerAgentRelease,
+  latestNewerAgentRelease,
   rollbackTarget,
   validatePackageUrl,
   validateRunMode,
@@ -156,5 +159,28 @@ describe('回滚目标（ADR-0019）', () => {
 
   it('版本号未知 → 不可回滚', () => {
     expect(rollbackTarget([latest, previous], null)).toBeNull();
+  });
+});
+
+describe('Agent 版本比较与升级发现', () => {
+  const rel065 = { version: '0.6.5', url: 'https://x/khc-agent-0.6.5.tar.gz', sha256: SHA };
+  const rel060 = { version: '0.6.0', url: 'https://x/khc-agent-0.6.0.tar.gz', sha256: 'b'.repeat(64) };
+
+  it('正确比较语义化版本（含前导 v 与多位数、预发布）', () => {
+    expect(compareSemver('0.6.5', '0.6.0')).toBeGreaterThan(0);
+    expect(compareSemver('0.6.10', '0.6.5')).toBeGreaterThan(0);
+    expect(compareSemver('v0.6.5', '0.6.5')).toBe(0);
+    expect(compareSemver('0.2.0', '1.2.3')).toBeLessThan(0);
+    expect(compareSemver('1.0.0', '1.0.0-rc.1')).toBeGreaterThan(0);
+    expect(compareSemver('invalid', '0.6.5')).toBe(0);
+  });
+
+  it('仅当清单最新版严格新于当前节点版本时报告可升级', () => {
+    expect(hasNewerAgentRelease([rel065, rel060], '0.6.0')).toBe(true);
+    expect(latestNewerAgentRelease([rel065, rel060], 'v0.6.0')).toEqual(rel065);
+    expect(hasNewerAgentRelease([rel065, rel060], '0.6.5')).toBe(false);
+    expect(hasNewerAgentRelease([rel065, rel060], '0.7.0')).toBe(false);
+    expect(hasNewerAgentRelease([rel065], null)).toBe(false);
+    expect(hasNewerAgentRelease([], '0.6.0')).toBe(false);
   });
 });
