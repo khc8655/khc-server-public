@@ -1,6 +1,6 @@
 # Caddy 管理面（站点/服务）完整 schema
 
-> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：agent/adapters/caddy_site.py
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：agent/adapters/caddy_site.py
 > 范围：Caddy 站点与服务管理
 
 > 目标：把旧系统 Caddy 管理能力全部迁到 `caddy-site` 适配器 + 站点页；Worker 仍不解析 config。
@@ -87,7 +87,7 @@
 }
 ```
 
-- 探测方式：对站点 `healthUri`（未配置时 `https://domain/`，或 http/端口）发起 HEAD/GET，3 秒超时；TLS 校验失败仅记为 warn（自签/internal）。
+- 探测方式：对站点 `healthUri`（未配置时 `https://domain/`，或 http/端口）发起 HEAD/GET，3 秒超时；TLS 校验失败仅记为 warn（自签/internal）。前端匹配 `siteHealth` 时优先按 `site.name` 精确命中、未命中再回退 `site.domain`（与概览口径一致），避免同域名多端口站点互相遮蔽健康状态。
 - 站点端口（`listenPort`，默认 443）以 `release=True` 声明，apply 后由 Agent 内核自动放行主机 iptables 入站；无需手工规则。
 - 只读，不写配置；不做高频探测（随 `/state` 调用）。
 
@@ -139,16 +139,12 @@
 - **备份路径校验**：只接受与 Caddyfile 同目录、且命名匹配 `*.khc-backup-<UTC>.bak`
   的文件；拒绝越权路径与符号链接逃逸。
 
-## 4. UI（变更单 #006）
+## 4. UI（详见 `docs/ui-redesign/page-specs.md` §2.2）
 
-- 站点抽屉分组：基础（类型/域名/端口/启用）、上游（多上游/负载均衡/健康检查/路径路由）、静态/跳转、TLS/证书、认证与安全（BasicAuth/headers/HSTS/安全头/压缩/限流/IP）、日志。
-- 站点表格：域名/类型/端口/上游或根目录/TLS/健康状态/同步状态/操作。
-- 页头操作：添加站点、清空站点（L2，apply 空列表）、Caddy 服务（状态/校验/重载/导出配置）。
-- 站点表下方「外部 Caddy 配置」卡片：只读扫描主 Caddyfile 里已存在但未托管的站点块，
-  展示域名/类型/目标/TLS/行号/状态；行内仅「接管为面板站点」（L2 确认），行点击打开
-  只读抽屉（原文、不可接管原因、影子预览：将摘除行区间 / 是否追加 import / 整树校验 /
-  将写入的托管片段）。冲突、不可接管或预览校验未通过不给接管按钮，悬停说明原因。
-- 接管失败时卡片顶部出现警示 Banner + [重试应用] / [恢复 Caddyfile]；恢复走 L2 确认。
+- 页头操作：「安装并发布应用」（三步向导）、「Caddy 服务」（状态/校验/重载/导出配置）、「添加站点」；「清空站点」（L2）收进页底「高级」折叠区。
+- 站点表格上方：存在 5xx / `down` 异常反代时渲染「异常应用排查」卡（区分本机端口未监听 / Peer 离线 / Peer 未接入 / 上游报错），提供 [编辑] [停用] 与直达链接；表格列与三段切换见 `page-specs.md` §2.2。
+- 站点抽屉与防火墙联动：`SiteDrawer` / `InstallAndPublishDrawer` 支持按「基本 / 类型 / TLS + 高级」配置并在顶部预览对外访问地址；对启用 `host-ops` 且非 Tunnel 的节点内联核对 `fw.show`，未放行目标对外 TCP 端口时提示并支持 [一键放行 TCP `<port>`]（`fw.apply` + `fw.confirm`）。
+- 站点表下方「本机监听端口」自动过滤 `caddy` / `socat` 与面板及转发占用端口；「外部配置（未托管）」在无未托管站点块且无告警时默认收进页底「高级」折叠区，发现外部块时自动顶升，行内「接管为面板站点」（L2）与影子预览规则不变；接管失败保留 [重试应用] / [恢复 Caddyfile]。
 - 表单沿用现有 Field/Select/Toggle/TextInput/Textarea 组件；不新增依赖。
 
 ## 5. 验收

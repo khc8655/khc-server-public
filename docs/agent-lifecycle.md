@@ -1,6 +1,6 @@
 # C5 Agent 生命周期（命令生成，阶段一）
 
-> 状态：现行 ｜ 最后核验：2026-11-02 ｜ 关联：docs/agent-releases.md、docs/install.md
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：docs/agent-releases.md、docs/install.md
 > 范围：Agent 安装/升级/卸载命令生命周期
 
 ## 1. 原则
@@ -65,7 +65,7 @@ sudo ./install.sh --system --host 0.0.0.0 --port 8880
 ## 6. 实现/验收（2026-10-26）
 
 - Worker：`apps/api/src/lib/agent-commands.ts` + `routes/agent_lifecycle.ts`；三个 POST；审计 `agent.command`（不记 token/命令）；34 项测试。
-- UI：节点设置「Agent 与接入」分区 + 命令抽屉；版本/模式/最后在线；system/user、URL/sha、purge；CodeBlock/复制。交互与区块归属以 `docs/ui-redesign/page-specs.md` 为准。
+- UI：节点设置「Agent 与接入」分区 + 命令抽屉；版本/模式/最后在线；system/user、URL/sha、purge；CodeBlock/复制。当节点 Agent 低于线上发布清单最新版时，节点概况「需要处理」与 `AgentCard` 会展示「可升级到 v...」徽标并突出 [远程升级] 入口；交互与区块归属以 `docs/ui-redesign/page-specs.md` 为准。
 - staging：install-command 200、command 524B 且 `bash -n` 通过；非法 http URL 400；upgrade user 命令 563B。
 - 未执行真实安装/升级（需要发布包 URL 与目标机）；阶段二再做 Agent 自升级。
 

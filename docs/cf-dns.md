@@ -5,7 +5,7 @@
 
 ## 1. 是什么（第一期受限版，不做完整 DNS 管理面板）
 
-域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录，只读选用已有记录，或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。没有 Cloudflare 账户、或域名托管在别家服务商的用户，可以在域名模式里**直接手动输入域名**建节点——面板不代管其解析，也不要求先配凭据（见 §3）。
+域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录（只读选用）、在抽屉内就地「+ 新建解析记录」（A/AAAA 并自动选中），或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除；域名/主机预览下同时提供行内 [检测解析]（DoH）。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。没有 Cloudflare 账户、或域名托管在别家服务商的用户，可以在域名模式里**直接手动输入域名**建节点——面板不代管其解析，也不要求先配凭据（见 §3）。
 
 
 选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，安装命令里自动带上的只有 **`--with-caddy`**（仅安装系统包 caddy，**不创建站点、不签发证书**）。域名 HTTPS 证书支持两条路径：一是站点 Caddy `tls=auto` 在首次访问时自动申请（Let's Encrypt）或 VM 本地 `acme.sh` / IP 自签证书；二是在「设置 → 证书库」通过已配置的 Cloudflare 账户执行控制面 ACME v2 DNS-01 签发与续期（`POST /api/v1/certs/issue-dns01`、`POST /api/v1/certs/:id/renew`），支持配置 `auto_sync` 将续期后的证书自动同步到关联在线 Hub（使用面板托管证书的 VM 无需安装 `acme.sh`）。`--tls-cn` **只对自签证书生效**（`--tls` / `--tls-self-signed` 分支），生产环境的域名模式**不下发**该参数——自签证书不被控制面 Worker 接受。
@@ -25,7 +25,7 @@
 ## 2. 配置步骤（设置页「账号」与「域名管理」分段）
 
 1. 在 Cloudflare 控制台创建 **API Token**，权限：**`Zone → DNS → Edit` + `Zone → Zone → Read`**——这是面板能工作的最小权限（**不需要 record tags 权限**），绝不用 Account 级 Token。只读取已有记录时，`Zone → DNS → Read` 即可；要代建记录才需要 Edit（Edit 含读取）。一个 Token 可覆盖同账号下多个 Zone；不同账号分开添加凭据。
-2. 面板「设置 → 账号」（`?tab=accounts`，旧 `?tab=cloudflare` 兼容映射至此）→ 页头「添加凭据」：填凭据名称 + 掩码版 API Token（`POST /api/v1/cf-dns/accounts`）。保存时面板实际调 CF API 拉取该 Token 可见的 Zone，**默认全选**；仅有 1 个 Zone 时自动关闭抽屉，多 Zone 时在抽屉内取消不需要的 Zone 再保存（`PUT /api/v1/cf-dns/accounts/:id`）。Token 经 `MASTER_ENC_KEY` AES-GCM 加密存 `settings` 表（key `cf_dns_accounts`），**只写不回显**；已启用的 Zone、解析记录 CRUD（行内确认删除，保留抽屉并仅刷新当前 Zone）与 DoH 生效检测展示在「设置 → 域名管理」（`?tab=domain`，兼容 `?tab=domains`）。添加节点如需启用未勾选域名，可跳转「设置 → 账号」勾选后就地「刷新域名」，不在抽屉内叠弹确认窗。
+2. 面板 `/settings` 默认落在「域名管理」（紧邻「账号」）。进入「设置 → 账号」（`?tab=accounts`，旧 `?tab=cloudflare` 兼容映射至此）→ 页头「添加凭据」：填凭据名称 + 掩码版 API Token（`POST /api/v1/cf-dns/accounts`）。保存时面板实际调 CF API 拉取该 Token 可见的 Zone，**默认全选**；仅有 1 个 Zone 时自动关闭抽屉，多 Zone 时在抽屉内取消不需要的 Zone 再保存（`PUT /api/v1/cf-dns/accounts/:id`）。Token 经 `MASTER_ENC_KEY` AES-GCM 加密存 `settings` 表（key `cf_dns_accounts`），**只写不回显**；已启用的 Zone、解析记录 CRUD（行内确认删除，保留抽屉并仅刷新当前 Zone）与 DoH 生效检测展示在「设置 → 域名管理」（`?tab=domain`，兼容 `?tab=domains`）。添加节点如需启用未勾选域名，可跳转「设置 → 账号」勾选后就地「刷新域名」，不在抽屉内叠弹确认窗。
 3. 每条凭据可在抽屉里「重新拉取 Zone」（`POST /api/v1/cf-dns/accounts/:id/refresh`）验证 Token 与刷新 Zone 列表；停用后该凭据的 Zone 不再出现在添加节点的候选里。注意：**`DNS → Edit` 权限在首次代建记录时才实际验证**——拉取 Zone 通过但漏配 Edit 的话，会在第一次代建记录时收到权限错误。
 4. 旧版单 Token + 单 Zone 配置（`settings` key `cf_dns`）继续兼容：首次在多凭据界面新增/编辑/刷新时自动投影为一条 `legacy` 凭据并迁移到 `cf_dns_accounts`，旧键删除，不保留双份真相。旧端点 `GET/PUT /api/v1/cf-dns` 与 `POST /api/v1/cf-dns/test` 保留。
 
@@ -39,7 +39,7 @@
 | 添加节点时未选 Zone（仅一个启用 Zone） | 按节点名在该唯一 Zone 自动代建，安装命令自动带 `--with-caddy`；前端也可显式选择 Zone/子域 |
 | 添加节点时未选 Zone（多个启用 Zone） | 返回 `cf_dns_zone_required`，抽屉显式提示选择 Zone 与子域；**不猜 Zone** |
 | 添加节点时选用 Zone/子域 | 显式传给 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`），子域留空则用节点名 |
-| 添加节点时选了 Zone（有已有记录） | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取 A/AAAA/CNAME；选中 A/AAAA 后域名与主机只读带入（端口可改），**不建、不改 DNS 记录**，仅把记录名写进 `nodes.domain`；安装命令自动带 `--with-caddy`（证书由后续 Caddy 站点自动签发） |
+| 添加节点时选了 Zone（已有记录 / 就地建记录） | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取 A/AAAA/CNAME，也可在下拉区就地「+ 新建解析记录」（`POST /api/v1/cf-dns/records/:zoneId` 建 A/AAAA 并自动选中），并在地址预览下点击 [检测解析]（DoH）；选中后域名与主机只读带入（端口可改），**不写托管标记、删除节点也不联动删除自建记录**（仅把记录名写进 `nodes.domain`），安装命令自动带 `--with-caddy`（证书由后续 Caddy 站点自动签发） |
 | 已有记录同名多条 / 同名 CNAME | 标注冲突并置灰不可选；已绑定其他节点的记录同样置灰，避免静默共用域名 |
 | 读取已有记录失败（权限/网络） | 抽屉内提示具体原因（权限不足 / Token 失效 / 网络），并提供「手动输入域名」路径兜底 |
 | 添加节点时选了 Zone（无已有记录或未选） | 调 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`）代建记录，写 `nodes.domain`，安装命令自动带 `--with-caddy`；代建失败**不阻断**节点创建，抽屉内用 danger Banner 写明具体原因 |
