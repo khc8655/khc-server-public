@@ -419,8 +419,13 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect((await screen.findAllByText('9000 · python3')).length).toBeGreaterThan(0);
     expect(screen.queryByText('22')).toBeNull();
     const publishButtons = screen.getAllByRole('button', { name: '发布' });
-    expect(publishButtons.length).toBe(2);
-    await userEvent.click(publishButtons[1]!);
+    // 桌面表格 + 移动端 .ui-list-side 均渲染「发布」按钮（2 条监听 * 2 = 4 个）
+    expect(publishButtons.length).toBe(4);
+    const mobileSidePublish = [...document.querySelectorAll('.ui-list .ui-list-side button')].filter(
+      (btn) => btn.textContent?.trim() === '发布',
+    );
+    expect(mobileSidePublish.length).toBe(2);
+    await userEvent.click(mobileSidePublish[1] as HTMLButtonElement);
     expect(await screen.findByRole('heading', { name: '添加站点' })).toBeTruthy();
     expect((document.getElementById('site-name') as HTMLInputElement).value).toBe('node');
     expect((document.getElementById('site-domains') as HTMLInputElement).value).toBe('vm.example.com');
