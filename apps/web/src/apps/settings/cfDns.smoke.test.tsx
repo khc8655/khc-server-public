@@ -66,6 +66,14 @@ function mockApi() {
       if (url === '/api/v1/cf-dns/records?zoneId=z1') {
         return json({ zoneId: 'z1', zoneName: 'example.com', records });
       }
+      if (url === '/api/v1/cf-dns/records?zoneId=z2') {
+        return json({ zoneId: 'z2', zoneName: 'second.example.com', records: [] });
+      }
+      if (url.startsWith('/api/v1/cf-dns/records/z1/') && init?.method === 'DELETE') {
+        const id = url.split('/').pop();
+        records = records.filter((item) => item.id !== id);
+        return json({ ok: true });
+      }
       if (url === '/api/v1/cf-dns/records/z1' && init?.method === 'POST') {
         const payload = JSON.parse(String(init.body)) as Record<string, unknown>;
         const record = { id: 'r2', ...payload, comment: null, managed: false };
@@ -188,7 +196,7 @@ describe('设置页：账号与域名管理分离（S1）', () => {
     });
   });
 
-  it('账号与域名管理职责分离：账号卡仅展示服务商/状态/启用数，点「查看域名」进入域名管理', async () => {
+  it('账号与域名管理职责分离：账号卡无「查看域名」假跳转，切换到域名管理仅列已启用域名', async () => {
     accounts = [
       {
         id: 'acc-1',
@@ -204,10 +212,11 @@ describe('设置页：账号与域名管理分离（S1）', () => {
     expect((await screen.findAllByText('主账号')).length).toBeGreaterThan(0);
     expect(screen.getByText('Cloudflare')).toBeTruthy();
     expect(screen.getByText('已启用 1 个域名')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '查看域名' })).toBeNull();
     expect(screen.queryByText('example.com')).toBeNull();
     expect(document.body.textContent).not.toContain('cf-api-token');
 
-    await userEvent.click(screen.getByRole('button', { name: '查看域名' }));
+    await userEvent.click(screen.getByRole('button', { name: '域名管理' }));
     expect(await screen.findByText('example.com')).toBeTruthy();
     expect(screen.queryByText('second.example.com')).toBeNull();
   });
@@ -298,7 +307,8 @@ describe('设置页：账号与域名管理分离（S1）', () => {
     await within(dialog).findByText('manual.example.com');
 
     await userEvent.click(within(dialog).getByRole('button', { name: '检测解析' }));
-    expect(await within(dialog).findByText('解析已生效')).toBeTruthy();
+    expect(await within(dialog).findByText(/解析已生效/)).toBeTruthy();
+    expect(within(dialog).getByText(/检测时间 .* · 基于公共 DoH 递归解析/)).toBeTruthy();
     const post = requests.find((item) => item.url === '/api/v1/cf-dns/resolve-check');
     expect(JSON.parse(String(post?.init?.body))).toEqual({
       name: 'manual.example.com',
@@ -332,7 +342,7 @@ describe('设置页：账号与域名管理分离（S1）', () => {
     expect(requests.some((item) => item.init?.method === 'DELETE')).toBe(false);
   });
 
-  it('「添加域名」弹窗：只列未启用域名，写入 enabledZoneIds（与添加节点共用同一实现）', async () => {
+  it('Token 默认掩码支持显隐切换；抽屉内行内删记录不叠 Dialog 且只重拉当前 Zone', async () => {
     accounts = [
       {
         id: 'acc-1',
@@ -341,28 +351,37 @@ describe('设置页：账号与域名管理分离（S1）', () => {
         hasToken: true,
         enabled: true,
         zones,
-        enabledZoneIds: ['z1'],
+        enabledZoneIds: ['z1', 'z2'],
       },
     ];
-    await renderSettings('/settings?tab=domain');
-    await screen.findByText('example.com');
-    await userEvent.click(await screen.findByRole('button', { name: '添加域名' }));
+    await renderSettings('/settings?tab=accounts');
+    await userEvent.click(screen.getAllByRole('button', { name: '添加凭据' })[0]!);
+    const createDrawer = await screen.findByRole('dialog');
+    const tokenInput = within(createDrawer).getByLabelText('API Token') as HTMLInputElement;
+    expect(tokenInput.type).toBe('password');
+    await userEvent.click(within(createDrawer).getByRole('button', { name: '显示' }));
+    expect(tokenInput.type).toBe('text');
+    await userEvent.click(within(createDrawer).getByRole('button', { name: '隐藏' }));
+    expect(tokenInput.type).toBe('password');
+    await userEvent.click(within(createDrawer).getByRole('button', { name: '关闭' }));
 
-    const dialog = await screen.findByRole('dialog', { name: '添加域名' });
-    const added = within(dialog).getByRole('option', { name: 'example.com' }) as HTMLOptionElement;
-    expect(added.disabled).toBe(true);
-    await userEvent.selectOptions(
-      within(dialog).getByLabelText('域名（主账号）'),
-      'z2',
-    );
-    await userEvent.click(within(dialog).getByRole('button', { name: '添加' }));
+    await userEvent.click(screen.getByRole('button', { name: '域名管理' }));
+    const manageBtns = await screen.findAllByRole('button', { name: '管理记录' });
+    await userEvent.click(manageBtns[0]!);
+    const drawer = await screen.findByRole('dialog');
+    await within(drawer).findByText('manual.example.com');
+    const beforeCount = requests.length;
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '删除' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await userEvent.click(within(drawer).getByRole('button', { name: '删除记录' }));
 
     await waitFor(() => {
-      const put = requests.find(
-        (item) => item.url === '/api/v1/cf-dns/accounts/acc-1' && item.init?.method === 'PUT',
-      );
-      expect(JSON.parse(String(put?.init?.body))).toEqual({ enabledZoneIds: ['z1', 'z2'] });
+      expect(within(drawer).queryByText('manual.example.com')).toBeNull();
     });
-    expect(await screen.findByText('已添加域名：second.example.com')).toBeTruthy();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    const followUps = requests.slice(beforeCount).map((item) => item.url);
+    expect(followUps).toContain('/api/v1/cf-dns/records?zoneId=z1');
+    expect(followUps).not.toContain('/api/v1/cf-dns/records?zoneId=z2');
   });
 });

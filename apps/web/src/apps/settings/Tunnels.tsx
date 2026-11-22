@@ -46,7 +46,13 @@ function portValid(value: string): boolean {
  * 设置页「隧道」分段（B 列表对象）：一行一条全局隧道配置，
  * 单抽屉新增/编辑，删除走 L2 确认；Token 只写不读。
  */
-export function Tunnels({ createSignal }: { createSignal: number }) {
+export function Tunnels({
+  createSignal,
+  hideEmptyAction = false,
+}: {
+  createSignal: number;
+  hideEmptyAction?: boolean;
+}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const tunnelsQuery = useQuery({ queryKey: ['tunnels'], queryFn: listTunnels });
@@ -220,14 +226,18 @@ export function Tunnels({ createSignal }: { createSignal: number }) {
           icon: 'globe',
           title: zh.tunnels.emptyTitle,
           description: zh.tunnels.emptyHint,
-          action: (
-            <Button
-              label={actionLabel(action('tunnel.create'))}
-              variant="primary"
-              icon="plus"
-              onClick={openCreate}
-            />
-          ),
+          ...(hideEmptyAction
+            ? {}
+            : {
+                action: (
+                  <Button
+                    label={actionLabel(action('tunnel.create'))}
+                    variant="primary"
+                    icon="plus"
+                    onClick={openCreate}
+                  />
+                ),
+              }),
         }}
         rowActions={() => [action('tunnel.update'), action('tunnel.delete')]}
         onRowAction={(ref, tunnel) => handleAction(ref, tunnel)}

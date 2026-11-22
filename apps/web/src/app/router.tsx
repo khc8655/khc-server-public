@@ -47,13 +47,37 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   component: LoginPage,
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
+    redirect:
+      typeof search.redirect === 'string' &&
+      search.redirect.startsWith('/') &&
+      !search.redirect.startsWith('//')
+        ? search.redirect
+        : undefined,
+  }),
 });
 
-async function requireSession({ context }: { context: RouterContext }) {
+async function requireSession({
+  context,
+  location,
+}: {
+  context: RouterContext;
+  location: { href: string };
+}) {
   try {
     await context.queryClient.ensureQueryData(meQueryOptions());
   } catch {
-    throw redirect({ to: '/login' });
+    const target =
+      typeof location?.href === 'string' &&
+      location.href.startsWith('/') &&
+      !location.href.startsWith('//') &&
+      !location.href.startsWith('/login')
+        ? location.href
+        : undefined;
+    throw redirect({
+      to: '/login',
+      ...(target ? { search: { redirect: target } } : {}),
+    });
   }
 }
 

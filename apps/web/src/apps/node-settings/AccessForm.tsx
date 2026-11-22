@@ -1,5 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { DEFAULT_DOMAIN_PORT } from '@khc/contracts';
 import type {
   CreateNodeRequest,
@@ -10,7 +9,6 @@ import type {
 } from '@khc/contracts';
 import { fetchCfDnsAccounts, fetchCfDnsRecords, fetchCfDnsZones } from '../../data/cfDns';
 import { listTunnels } from '../../data/tunnels';
-import { AddDomainDialog, type AddedDomain } from '../settings/AddDomainDialog';
 import {
   HTTPS_PORT_OPTIONS,
   buildDomainEndpoint,
@@ -33,7 +31,6 @@ import {
   Select,
   Stack,
   TextInput,
-  useToast,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 
@@ -73,6 +70,21 @@ const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 export const TUNNELS_SETTINGS_HREF = '/settings?tab=tunnels';
 export const DOMAIN_SETTINGS_HREF = '/settings?tab=domain';
+export const ACCOUNTS_SETTINGS_HREF = '/settings?tab=accounts';
+
+const MANUAL_DOMAIN_DISALLOWED_RE = /^[a-z][a-z0-9+.-]*:\/\/|[:/?#]/i;
+
+/** 仅允许纯域名（不允许协议、端口、路径或空格）。 */
+export function manualDomainInputIssue(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (MANUAL_DOMAIN_DISALLOWED_RE.test(trimmed)) {
+    return '请只填写纯域名（例如 app.example.com），不要包含 http/https:// 或 :端口号';
+  }
+  const normalized = normalizeDomain(trimmed);
+  if (!DOMAIN_RE.test(normalized)) return zh.access.domainInvalid;
+  return null;
+}
 
 export function accessModeLabel(mode: NodeAccessMode): string {
   if (mode === 'tunnel') return zh.access.modeTunnel;
@@ -232,15 +244,27 @@ export function accessDraftIssue(
   if (options?.requireName && !draft.name.trim()) return zh.access.nameRequired;
 
   if (draft.accessMode === 'domain') {
-    const domain = normalizeDomain(draft.domain);
-    if (!domain) return zh.access.domainRequired;
-    if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
+    if (draft.domainSource === 'manual') {
+      if (!draft.domain.trim()) return zh.access.domainRequired;
+      const rawIssue = manualDomainInputIssue(draft.domain);
+      if (rawIssue) return rawIssue;
+    } else {
+      const domain = normalizeDomain(draft.domain);
+      if (!domain) return zh.access.domainRequired;
+      if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
+    }
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
     if (draft.autoPublish) {
       if (!portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
       if (!portValid(draft.publishPort)) return zh.access.publishPortInvalid;
       // 一条端口只能一个进程：Agent 与 Caddy 撞端口注定在 apply 时失败，表单里直接挡住。
       if (draft.publishPort === draft.domainPort) return zh.access.publishPortConflictIssue;
+      if (draft.upstreamPort.trim() === draft.publishPort.trim()) {
+        return '上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）';
+      }
+      if (draft.upstreamPort.trim() === draft.domainPort.trim()) {
+        return '上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）';
+      }
     }
     return null;
   }
@@ -338,9 +362,6 @@ export interface AccessFormProps {
  * 本表单不在建节点的同时新建 DNS 记录或隧道，DNS 记录的集中管理在「设置 · 域名」。
  */
 export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProps) {
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const [addDomainOpen, setAddDomainOpen] = useState(false);
   const zonesQuery = useQuery({
     queryKey: ['cfDns', 'zones'],
     queryFn: fetchCfDnsZones,
@@ -360,7 +381,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
     retry: false,
     enabled: draft.accessMode === 'tunnel',
   });
-  // 有没有 DNS 凭据决定域名模式走哪条路：选记录 / 就地添加域名 / 手填域名。
   const accountsQuery = useQuery({
     queryKey: ['cfDns', 'accounts'],
     queryFn: fetchCfDnsAccounts,
@@ -377,13 +397,38 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const selectedTunnel: Tunnel | undefined = (tunnelsQuery.data ?? []).find(
     (tunnel) => tunnel.id === draft.tunnelId,
   );
+  const manualDomainError =
+    draft.accessMode === 'domain' ? manualDomainInputIssue(draft.domain) : null;
   const normalizedDomain = normalizeDomain(draft.domain);
-  const domainReady = normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain);
+  const domainReady =
+    normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain) && !manualDomainError;
+  const upstreamPortError = !draft.autoPublish
+    ? undefined
+    : !portValid(draft.upstreamPort)
+      ? zh.access.upstreamPortInvalid
+      : draft.upstreamPort.trim() === draft.publishPort.trim()
+        ? '上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）'
+        : draft.upstreamPort.trim() === draft.domainPort.trim()
+          ? '上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）'
+          : undefined;
+  const publishPortError =
+    draft.autoPublish && draft.publishPort === draft.domainPort
+      ? zh.access.publishPortConflictIssue
+      : undefined;
+  const ipHostError =
+    draft.accessMode === 'ip' && draft.ipHost.trim() && !hostValid(draft.ipHost)
+      ? zh.access.ipHostInvalid
+      : undefined;
+  const ipPortError =
+    draft.accessMode === 'ip' && draft.ipPort.trim() && !portValid(draft.ipPort)
+      ? zh.access.ipPortInvalid
+      : undefined;
+
   /**
-   * 域名模式的三种状态（`docs/plans/domain-cert-ia-2026-11-21.md` §4）：
+   * 域名模式的三种状态：
    * - select：有可用域名 → 选已有记录，也可切到手填；
-   * - enable：有账户但一条域名都没启用 → 就地「添加域名」，不跳出抽屉；
-   * - no-account：连账户都没有 → 引导去设置页，同时允许直接手填域名建节点（不死路）。
+   * - enable：有账户但未启用域名 → 引导前往「设置 → 账号」勾选后就地刷新（不在抽屉内弹 Dialog），也可直接手填；
+   * - no-account：连账户都没有 → 引导去设置页，同时允许直接手填域名建节点。
    */
   const domainState: 'loading' | 'select' | 'enable' | 'no-account' | 'unavailable' =
     zonesQuery.isLoading || accountsQuery.isLoading
@@ -400,12 +445,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const domainSource: DomainSource = manualOnly ? 'manual' : draft.domainSource;
   // 同一域名已绑到别的节点时提示占用；新建场景才有全量列表可比。
   const occupiedNode = mode === 'create' ? nodeByDomain(nodes, normalizedDomain) : null;
-
-  const handleDomainAdded = (added: AddedDomain) => {
-    // 就地建完立刻选中：表单与设置页写的是同一份 cf_dns_accounts，不存在第二套真相。
-    update({ domainSource: 'record', zoneId: added.zoneId, recordId: '' });
-    toast.show({ message: fmt(zh.cfDns.addDomainDone, { name: added.zoneName }) });
-  };
 
   return (
     <Stack gap={4}>
@@ -452,13 +491,21 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             <Banner
               tone="info"
               title={zh.access.enableZoneTitle}
-              description={zh.access.enableZoneHint}
+              description="请到「设置 → 账号」勾选需要启用的域名，或直接在下方手动输入域名。"
               action={
-                <Button
-                  label={zh.cfDns.addDomainTitle}
-                  size="sm"
-                  onClick={() => setAddDomainOpen(true)}
-                />
+                <Row gap={2}>
+                  <Link to={ACCOUNTS_SETTINGS_HREF} label="前往设置 → 账号" />
+                  <Button
+                    label="刷新域名"
+                    size="sm"
+                    variant="ghost"
+                    icon="refresh"
+                    loading={accountsQuery.isFetching || zonesQuery.isFetching}
+                    onClick={() =>
+                      void Promise.all([accountsQuery.refetch(), zonesQuery.refetch()])
+                    }
+                  />
+                </Row>
               }
             />
           ) : domainState === 'unavailable' ? (
@@ -472,7 +519,7 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
               tone="info"
               title={zh.access.noZoneTitle}
               description={zh.access.noZoneHint}
-              action={<Link to={DOMAIN_SETTINGS_HREF} label={zh.access.goDomainSettings} />}
+              action={<Link to={ACCOUNTS_SETTINGS_HREF} label={zh.access.goDomainSettings} />}
             />
           ) : domainState === 'select' ? (
             <Field
@@ -487,7 +534,17 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                   { value: 'record', label: zh.access.domainSourceRecord },
                   { value: 'manual', label: zh.access.domainSourceManual },
                 ]}
-                onChange={(value) => update({ domainSource: value as DomainSource })}
+                onChange={(value) => {
+                  const next = value as DomainSource;
+                  if (next === 'record') {
+                    const hit = candidates.find(
+                      (candidate) => candidate.record.id === draft.recordId,
+                    );
+                    update({ domainSource: next, domain: hit?.record.name ?? '' });
+                  } else {
+                    update({ domainSource: next });
+                  }
+                }}
               />
             </Field>
           ) : null}
@@ -506,16 +563,23 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     value: zone.id,
                     label: `${zone.name} · ${zone.accountName}`,
                   }))}
-                  onChange={(zoneId) => update({ zoneId, recordId: '' })}
+                  onChange={(zoneId) => update({ zoneId, recordId: '', domain: '' })}
                 />
               </Field>
 
-              <Row justify="end" gap={2}>
+              <Row justify="between" gap={2} align="center">
+                <Link to={DOMAIN_SETTINGS_HREF} label="管理域名记录" />
                 <Button
-                  label={zh.access.addDomain}
+                  label="刷新记录"
                   size="sm"
                   variant="ghost"
-                  onClick={() => setAddDomainOpen(true)}
+                  icon="refresh"
+                  loading={zonesQuery.isFetching || recordsQuery.isFetching}
+                  onClick={() =>
+                    void (draft.zoneId
+                      ? Promise.all([zonesQuery.refetch(), recordsQuery.refetch()])
+                      : zonesQuery.refetch())
+                  }
                 />
               </Row>
 
@@ -560,24 +624,31 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                       id="access-record"
                       value={draft.recordId}
                       placeholder={zh.access.recordPlaceholder}
-                      options={candidates.map((candidate) => ({
-                        value: candidate.record.id,
-                        label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}`,
-                        description: candidate.selectable
-                          ? undefined
+                      options={candidates.map((candidate) => {
+                        const statusSuffix = candidate.boundNodeName
+                          ? `（已绑定 ${candidate.boundNodeName}）`
                           : candidate.conflict
-                            ? zh.access.recordConflict
-                            : candidate.boundNodeName
-                              ? zh.access.recordBound
-                              : undefined,
-                        disabled: !candidate.selectable,
-                      }))}
+                            ? `（${zh.access.recordConflict}）`
+                            : '';
+                        return {
+                          value: candidate.record.id,
+                          label: `${candidate.record.name} · ${candidate.record.type} → ${candidate.record.content}${statusSuffix}`,
+                          description: candidate.selectable
+                            ? undefined
+                            : candidate.conflict
+                              ? zh.access.recordConflict
+                              : candidate.boundNodeName
+                                ? fmt(zh.cfDns.recordBound, { name: candidate.boundNodeName })
+                                : undefined,
+                          disabled: !candidate.selectable,
+                        };
+                      })}
                       onChange={(recordId) => {
                         const hit = candidates.find((candidate) => candidate.record.id === recordId);
                         // 换记录只决定域名；端口保持用户所选，只有非法值才落回默认。
                         update({
                           recordId,
-                          domain: hit?.record.name ?? draft.domain,
+                          domain: hit?.record.name ?? '',
                           ...(isHttpsPort(draft.domainPort)
                             ? {}
                             : { domainPort: DEFAULT_AGENT_PORT }),
@@ -601,11 +672,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                 id="access-domain-input"
                 label={zh.access.domainInputLabel}
                 help={zh.access.domainInputHelp}
+                error={manualDomainError ?? undefined}
                 required
               >
                 <TextInput
                   id="access-domain-input"
                   value={draft.domain}
+                  invalid={Boolean(manualDomainError)}
                   mono
                   placeholder={zh.access.domainInputPlaceholder}
                   onChange={(value) => update({ domain: value })}
@@ -680,11 +753,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     id="access-publish-port"
                     label={zh.access.publishPortLabel}
                     help={zh.access.publishPortHelp}
+                    error={publishPortError}
                     required
                   >
                     <Select
                       id="access-publish-port"
                       value={draft.publishPort}
+                      invalid={Boolean(publishPortError)}
                       options={HTTPS_PORT_OPTIONS.map((port) => ({ value: port, label: port }))}
                       onChange={(publishPort) => update({ publishPort })}
                     />
@@ -693,11 +768,13 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     id="access-upstream-port"
                     label={zh.access.upstreamPortLabel}
                     help={zh.access.upstreamPortHelp}
+                    error={upstreamPortError}
                     required
                   >
                     <TextInput
                       id="access-upstream-port"
                       value={draft.upstreamPort}
+                      invalid={Boolean(upstreamPortError)}
                       mono
                       inputMode="numeric"
                       placeholder="8080"
@@ -799,19 +876,21 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
 
       {draft.accessMode === 'ip' ? (
         <Stack gap={3}>
-          <Field id="access-ip-host" label={zh.access.ipHostLabel} required>
+          <Field id="access-ip-host" label={zh.access.ipHostLabel} error={ipHostError} required>
             <TextInput
               id="access-ip-host"
               value={draft.ipHost}
+              invalid={Boolean(ipHostError)}
               mono
               placeholder={zh.access.ipHostPlaceholder}
               onChange={(value) => update({ ipHost: value })}
             />
           </Field>
-          <Field id="access-ip-port" label={zh.access.ipPortLabel} required>
+          <Field id="access-ip-port" label={zh.access.ipPortLabel} error={ipPortError} required>
             <TextInput
               id="access-ip-port"
               value={draft.ipPort}
+              invalid={Boolean(ipPortError)}
               mono
               inputMode="numeric"
               placeholder="8880"
@@ -883,12 +962,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
         </Stack>
       ) : null}
 
-      {/* 入口 B 的就地「添加域名」：与设置页共用同一个弹窗组件，不复制管理 UI。 */}
-      <AddDomainDialog
-        open={addDomainOpen}
-        onClose={() => setAddDomainOpen(false)}
-        onAdded={handleDomainAdded}
-      />
     </Stack>
   );
 }

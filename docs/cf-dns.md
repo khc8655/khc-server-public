@@ -1,6 +1,6 @@
 # Cloudflare DNS 集成（cf-dns）
 
-> 状态：现行 ｜ 最后核验：2026-11-21 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`apps/web/src/apps/node-settings/AccessForm.tsx`、`docs/security-boundaries.md` §10
+> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`apps/web/src/apps/node-settings/AccessForm.tsx`、`docs/security-boundaries.md` §10
 > 范围：面板托管 Cloudflare DNS A/AAAA 记录（多凭据设置、读取已有记录、代建与联动删除、节点域名与证书状态）的使用说明——Token 权限、配置入口、失败处理
 
 ## 1. 是什么（第一期受限版，不做完整 DNS 管理面板）
@@ -25,7 +25,7 @@
 ## 2. 配置步骤（设置页「账号」与「域名管理」分段）
 
 1. 在 Cloudflare 控制台创建 **API Token**，权限：**`Zone → DNS → Edit` + `Zone → Zone → Read`**——这是面板能工作的最小权限（**不需要 record tags 权限**），绝不用 Account 级 Token。只读取已有记录时，`Zone → DNS → Read` 即可；要代建记录才需要 Edit（Edit 含读取）。一个 Token 可覆盖同账号下多个 Zone；不同账号分开添加凭据。
-2. 面板「设置 → 账号」（`?tab=accounts`，旧 `?tab=cloudflare` 兼容映射至此）→ 页头「添加凭据」：填凭据名称 + Token（`POST /api/v1/cf-dns/accounts`）。保存时面板实际调 CF API 拉取该 Token 可见的 Zone，**默认全选**；在抽屉内取消不需要的 Zone 再保存（`PUT /api/v1/cf-dns/accounts/:id`）。Token 经 `MASTER_ENC_KEY` AES-GCM 加密存 `settings` 表（key `cf_dns_accounts`），**只写不回显**；已启用的 Zone、解析记录 CRUD 与 DoH 生效检测展示在「设置 → 域名管理」（`?tab=domain`）。
+2. 面板「设置 → 账号」（`?tab=accounts`，旧 `?tab=cloudflare` 兼容映射至此）→ 页头「添加凭据」：填凭据名称 + 掩码版 API Token（`POST /api/v1/cf-dns/accounts`）。保存时面板实际调 CF API 拉取该 Token 可见的 Zone，**默认全选**；仅有 1 个 Zone 时自动关闭抽屉，多 Zone 时在抽屉内取消不需要的 Zone 再保存（`PUT /api/v1/cf-dns/accounts/:id`）。Token 经 `MASTER_ENC_KEY` AES-GCM 加密存 `settings` 表（key `cf_dns_accounts`），**只写不回显**；已启用的 Zone、解析记录 CRUD（行内确认删除，保留抽屉并仅刷新当前 Zone）与 DoH 生效检测展示在「设置 → 域名管理」（`?tab=domain`，兼容 `?tab=domains`）。添加节点如需启用未勾选域名，可跳转「设置 → 账号」勾选后就地「刷新域名」，不在抽屉内叠弹确认窗。
 3. 每条凭据可在抽屉里「重新拉取 Zone」（`POST /api/v1/cf-dns/accounts/:id/refresh`）验证 Token 与刷新 Zone 列表；停用后该凭据的 Zone 不再出现在添加节点的候选里。注意：**`DNS → Edit` 权限在首次代建记录时才实际验证**——拉取 Zone 通过但漏配 Edit 的话，会在第一次代建记录时收到权限错误。
 4. 旧版单 Token + 单 Zone 配置（`settings` key `cf_dns`）继续兼容：首次在多凭据界面新增/编辑/刷新时自动投影为一条 `legacy` 凭据并迁移到 `cf_dns_accounts`，旧键删除，不保留双份真相。旧端点 `GET/PUT /api/v1/cf-dns` 与 `POST /api/v1/cf-dns/test` 保留。
 
