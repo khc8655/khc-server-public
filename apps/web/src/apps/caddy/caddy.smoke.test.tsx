@@ -42,6 +42,7 @@ const certificate = {
 let caddySites: Record<string, unknown>[] = [];
 let caddyRev = 1;
 let caddyAppliedRev = 1;
+let currentNode: Record<string, unknown> = node;
 let listeningItems: { proto: string; address: string; port: number; process?: string }[] = [];
 let scanBlocks: Record<string, unknown>[] = [];
 let applyError: string | null = null;
@@ -60,6 +61,7 @@ function appConfig() {
 
 function mockApi(
   options: {
+    nodeOverride?: Record<string, unknown>;
     caddyInstalled?: boolean;
     pkgInstall?: boolean;
     taskId?: string;
@@ -68,6 +70,7 @@ function mockApi(
     listening?: { proto: string; address: string; port: number; process?: string }[];
   } = {},
 ) {
+  currentNode = options.nodeOverride ?? node;
   const caddyInstalled = options.caddyInstalled ?? true;
   const pkgInstall = options.pkgInstall ?? false;
   const taskId = options.taskId ?? 'task-install';
@@ -94,8 +97,8 @@ function mockApi(
       const url = String(input);
       requests.push({ url, init });
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
-      if (url === '/api/v1/nodes') return json({ nodes: [node] });
-      if (url === '/api/v1/nodes/tyo-1') return json({ node });
+      if (url === '/api/v1/nodes') return json({ nodes: [currentNode] });
+      if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
       if (url === '/api/v1/certs') return json({ certificates: withCerts ? [certificate] : [] });
       if (url === '/api/v1/settings') return json({ settings: [] });
       if (url === '/api/v1/nodes/tyo-1/apps') {
@@ -253,13 +256,13 @@ describe('站点抽屉与列表交互规范（T3）', () => {
       },
     ];
     await renderRoute('/hubs/tyo-1/sites');
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
     await expandAdvanced();
     expect(screen.queryByRole('button', { name: '导出 JSON' })).toBeNull();
     expect(screen.queryByRole('button', { name: '导入 JSON' })).toBeNull();
     expect(screen.getByRole('button', { name: '清空站点' })).toBeTruthy();
 
-    // 过滤 Caddyfill 默认空占位块与 caddy 进程端口
+    // 过滤 Caddyfile 默认空占位块与 caddy 进程端口
     expect(await screen.findByText('没有发现未托管的外部站点块')).toBeTruthy();
     expect(screen.queryByText('需手工处理')).toBeNull();
     expect(screen.queryByText('2083 · caddy')).toBeNull();
@@ -268,7 +271,7 @@ describe('站点抽屉与列表交互规范（T3）', () => {
 
   it('抽屉内「保存并生效」不叠弹 Dialog；apply 失败时回滚 D1 并在抽屉内直接报错', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findAllByText('blog.example.dev');
+    await screen.findAllByText(/https:\/\/blog\.example\.dev/);
     applyError = 'caddy validate failed: bad upstream';
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
@@ -290,7 +293,7 @@ describe('站点抽屉与列表交互规范（T3）', () => {
 
   it('仅保存草稿时新增行标「待应用」、未改动运行行保持「已同步」，顶部横幅按钮为「应用到节点」', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    await screen.findAllByText('blog.example.dev');
+    await screen.findAllByText(/https:\/\/blog\.example\.dev/);
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     const drawer = await screen.findByRole('dialog');
@@ -347,7 +350,11 @@ describe('应用页分段与本机监听端口（U3）', () => {
     mockApi({ withCerts: false });
     await renderRoute('/hubs/tyo-1/sites');
     expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('columnheader', { name: '应用' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: '访问地址' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: '指向目标' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: '状态' })).toBeTruthy();
     expect(screen.queryByRole('group', { name: '应用' })).toBeNull();
     expect(screen.queryByRole('button', { name: '静态与跳转' })).toBeNull();
     expect(screen.queryByRole('button', { name: '证书' })).toBeNull();
@@ -376,10 +383,10 @@ describe('应用页分段与本机监听端口（U3）', () => {
       ],
     });
     await renderRoute('/hubs/tyo-1/sites');
-    expect((await screen.findAllByText('blog.example.dev')).length).toBeGreaterThan(0);
-    expect(screen.queryByText('landing.example.dev')).toBeNull();
+    expect((await screen.findAllByText(/https:\/\/blog\.example\.dev/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/https:\/\/landing\.example\.dev/)).toBeNull();
     await userEvent.click(await screen.findByRole('button', { name: '静态与跳转' }));
-    expect((await screen.findAllByText('landing.example.dev')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/https:\/\/landing\.example\.dev/)).length).toBeGreaterThan(0);
   });
 
   it('证书分段展示本节点关联证书、管理链接与 R6 统计说明', async () => {
@@ -397,9 +404,10 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(screen.getByRole('button', { name: '添加第一个应用' })).toBeTruthy();
   });
 
-  it('有未发布本机监听端口时渲染卡片，点击预填站点抽屉（IPv4/IPv6）', async () => {
+  it('有未发布本机监听端口时渲染卡片，支持行点击与「发布」按钮预填站点抽屉（IPv4/IPv6）', async () => {
     mockApi({
       withCerts: false,
+      nodeOverride: { ...node, domain: 'vm.example.com', endpoint: 'https://vm.example.com' },
       listening: [
         { proto: 'tcp', address: '0.0.0.0', port: 9000, process: 'python3' },
         { proto: 'tcp6', address: '::1', port: 9500, process: 'node' },
@@ -410,15 +418,22 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(await screen.findByText('本机监听端口')).toBeTruthy();
     expect((await screen.findAllByText('9000 · python3')).length).toBeGreaterThan(0);
     expect(screen.queryByText('22')).toBeNull();
-    const rows = await screen.findAllByText('9500 · node');
-    await userEvent.click(rows[0]!);
+    const publishButtons = screen.getAllByRole('button', { name: '发布' });
+    expect(publishButtons.length).toBe(2);
+    await userEvent.click(publishButtons[1]!);
     expect(await screen.findByRole('heading', { name: '添加站点' })).toBeTruthy();
+    expect((document.getElementById('site-name') as HTMLInputElement).value).toBe('node');
+    expect((document.getElementById('site-domains') as HTMLInputElement).value).toBe('vm.example.com');
+    expect((document.getElementById('site-port') as HTMLInputElement).value).toBe('8443');
     expect((document.getElementById('site-upstreams') as HTMLInputElement).value).toBe('[::1]:9500');
   });
 
-  it('站点表后端列：宽屏独立列，窄屏并入名称列第二段（390 不丢项）', async () => {
+  it('站点表指向目标与访问链接：宽屏独立列，窄屏并入应用列第二段（390 不丢项）', async () => {
     await renderRoute('/hubs/tyo-1/sites');
-    expect(await screen.findByText('后端')).toBeTruthy();
+    const link = await screen.findByRole('link', { name: /https:\/\/blog\.example\.dev/ });
+    expect(link.getAttribute('href')).toBe('https://blog.example.dev');
+    expect(screen.getByRole('columnheader', { name: '指向目标' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制访问地址' })).toBeTruthy();
     const matches = await screen.findAllByText(/内网（未登记）\s*10\.99\.0\.2:8080/);
     expect(matches.length).toBeGreaterThanOrEqual(1);
 
@@ -429,6 +444,42 @@ describe('应用页分段与本机监听端口（U3）', () => {
     window.innerWidth = 390;
     window.dispatchEvent(new Event('resize'));
     expect(document.querySelector('.ui-cell-narrow')?.textContent).toContain('内网（未登记）');
+  });
+
+  it('已绑定 VM 域名的节点支持同一域名多端口添加第二个应用，不覆盖已有应用', async () => {
+    mockApi({
+      withCerts: false,
+      nodeOverride: { ...node, domain: 'vm.example.com', endpoint: 'https://vm.example.com' },
+      sites: [
+        {
+          name: 'llmproxy',
+          domains: ['vm.example.com'],
+          listenPort: 8443,
+          kind: 'proxy',
+          upstreams: ['127.0.0.1:8787'],
+          enabled: true,
+        },
+      ],
+    });
+    await renderRoute('/hubs/tyo-1/sites');
+    expect((await screen.findAllByText(/https:\/\/vm\.example\.com:8443/)).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
+    const drawer = await screen.findByRole('dialog');
+    expect((within(drawer).getByLabelText(/^域名/) as HTMLInputElement).value).toBe('vm.example.com');
+    expect((within(drawer).getByLabelText('对外端口') as HTMLInputElement).value).toBe('2083');
+
+    await userEvent.type(within(drawer).getByLabelText(/^应用名称/), 'magpie');
+    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    await userEvent.clear(targetPort);
+    await userEvent.type(targetPort, '3430');
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存并生效' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(caddySites.map((item) => ({ name: item.name, listenPort: item.listenPort }))).toEqual([
+      { name: 'llmproxy', listenPort: 8443 },
+      { name: 'magpie', listenPort: 2083 },
+    ]);
   });
 
   it('旧 /apps 暗路由 302 到设置页组件分段', async () => {

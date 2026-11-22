@@ -88,9 +88,13 @@ import {
   createForm,
   editForm,
   healthBadge,
+  parseEndpointPort,
+  pickRecommendedListenPort,
+  siteAccessUrl,
   siteBackendText,
   siteSignature,
   siteTarget,
+  uniqueSiteName,
   validateSite,
   type SiteErrors,
   type SiteFormState,
@@ -168,26 +172,26 @@ const certColumns: ColumnDef<Certificate>[] = [
   },
 ];
 
-const listeningColumns: ColumnDef<ListeningPort>[] = [
+const listeningColumnsBase: ColumnDef<ListeningPort>[] = [
   {
     key: 'port',
     type: 'name',
     header: zh.services.listeningColPort,
-    width: '28%',
+    width: '30%',
     value: (row) => (row.process ? `${row.port} · ${row.process}` : String(row.port)),
   },
   {
     key: 'address',
     type: 'mono',
     header: zh.services.listeningColAddress,
-    width: '40%',
+    width: '38%',
     value: (row) => row.address,
   },
   {
     key: 'proto',
     type: 'text',
     header: zh.services.listeningColProto,
-    width: '18%',
+    width: '14%',
     value: (row) => row.proto,
   },
 ];
@@ -498,17 +502,38 @@ export default function SitesPage() {
     });
   };
 
-  const openCreate = (upstreams?: string) => {
+  const openCreate = (preset?: { upstreams?: string; process?: string; port?: number }) => {
     const next = createForm();
-    if (upstreams) {
-      next.upstreams = upstreams;
-      next.sourcePort = splitUpstreamHostPort(upstreams).port;
-      next.initial = siteSignature(next);
+    const vmDomain = hubQuery.data?.domain?.trim() ?? '';
+    const agentPort = parseEndpointPort(hubQuery.data?.endpoint);
+    if (vmDomain) next.domains = vmDomain;
+    if (preset?.upstreams) {
+      next.upstreams = preset.upstreams;
+      const upstreamPort = preset.port ?? splitUpstreamHostPort(preset.upstreams).port;
+      next.sourcePort = upstreamPort;
+      next.name = uniqueSiteName(
+        preset.process || (upstreamPort ? `app-${upstreamPort}` : 'app'),
+        config.sites,
+        upstreamPort,
+      );
+      next.listenPort = pickRecommendedListenPort({
+        agentPort,
+        localPort: upstreamPort,
+        domain: vmDomain,
+        existingSites: config.sites,
+      });
+    } else {
+      next.listenPort = pickRecommendedListenPort({
+        agentPort,
+        domain: vmDomain,
+        existingSites: config.sites,
+      });
     }
+    next.initial = siteSignature(next);
     setForm(next);
     setErrors({});
     setSaveError(null);
-    setDrawerSearch('site:new', false, upstreams);
+    setDrawerSearch('site:new', false, preset?.upstreams);
   };
 
   const openEdit = (site: CaddySite) => {
@@ -533,6 +558,9 @@ export default function SitesPage() {
     if (drawer === 'site:new') {
       if (form) return;
       const initialForm = createForm();
+      const vmDomain = hubQuery.data?.domain?.trim() ?? '';
+      const agentPort = parseEndpointPort(hubQuery.data?.endpoint);
+      if (vmDomain) initialForm.domains = vmDomain;
       if (search.upstream) {
         initialForm.upstreams = search.upstream;
         // D-09：记录发布时端口，后续改 Peer 地址时据此提示「端口被手工改过」。
@@ -542,6 +570,12 @@ export default function SitesPage() {
         initialForm.name = `${search.peer}-app`;
         initialForm.sourcePeer = search.peer;
       }
+      initialForm.listenPort = pickRecommendedListenPort({
+        agentPort,
+        localPort: initialForm.sourcePort,
+        domain: vmDomain,
+        existingSites: config.sites,
+      });
       // 预填后重算基线，避免一打开就处于 dirty 状态。
       initialForm.initial = siteSignature(initialForm);
       setForm(initialForm);
@@ -776,6 +810,7 @@ export default function SitesPage() {
       sites: config.sites,
       certIds: certs.map((cert) => cert.id),
       certsLoaded: certsQuery.isSuccess,
+      nodeAgentPort: parseEndpointPort(hubQuery.data?.endpoint),
     });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -1045,52 +1080,100 @@ export default function SitesPage() {
     }
   };
 
+  const targetColText = (site: CaddySite): string =>
+    site.kind === 'proxy' ? backendText(site) : siteTarget(site);
+
+  const tlsShortLabel = (mode: CaddySite['tls']['mode']): string => {
+    if (mode === 'off') return zh.sites.tlsShortOff;
+    if (mode === 'manual') return zh.sites.tlsShortManual;
+    if (mode === 'internal') return zh.sites.tlsShortInternal;
+    return zh.sites.tlsShortAuto;
+  };
+
+  const copyAccessUrl = (url: string) => {
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) return;
+    void clipboard.writeText(url).then(
+      () => toast.show({ message: zh.sites.urlCopied }),
+      () => undefined,
+    );
+  };
+
   const columns: ColumnDef<SiteRow>[] = [
     {
-      key: 'domain',
+      key: 'name',
       type: 'name',
-      header: zh.sites.colDomain,
-      value: (row) => row.site.domains.join(', '),
+      header: zh.sites.colApp,
+      width: '22%',
+      value: (row) =>
+        row.site.kind === 'proxy'
+          ? row.site.name
+          : `${row.site.name}（${zh.sites[kindLabelKey(row.site.kind)]}）`,
       dot: (row) => healthBadge(row).tone,
-      // <1024 时后端列（low）隐藏，信息并入名称列第二段，避免窄屏丢项。
-      narrow: (row) => backendText(row.site),
+      // <1024 时指向目标列（low）隐藏，并入名称列第二段，保证窄屏不丢目标地址。
+      narrow: (row) => targetColText(row.site),
     },
     {
-      key: 'kind',
-      type: 'text',
-      header: zh.sites.colKind,
-      value: (row) => zh.sites[kindLabelKey(row.site.kind)],
-    },
-    {
-      key: 'port',
-      type: 'text',
-      header: zh.sites.colPort,
-      value: (row) => String(row.site.listenPort),
+      key: 'url',
+      type: 'mono',
+      header: zh.sites.colAccessUrl,
+      width: '36%',
+      value: (row) => siteAccessUrl(row.site) || row.site.domains.join(', '),
+      render: (row) => {
+        const url = siteAccessUrl(row.site);
+        const tlsLabel = tlsShortLabel(row.site.tls.mode);
+        const extraDomains = row.site.domains.length > 1 ? ` · +${row.site.domains.length - 1}` : '';
+        return (
+          <div className="ui-site-url-cell">
+            <div className="ui-site-url-row">
+              {url ? (
+                <a
+                  className="ui-site-url-link"
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={url}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {url} ↗
+                </a>
+              ) : (
+                <span>—</span>
+              )}
+              {url ? (
+                <span onClick={(event) => event.stopPropagation()}>
+                  <Button
+                    label={zh.sites.copyUrl}
+                    icon="copy"
+                    iconOnly
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => copyAccessUrl(url)}
+                  />
+                </span>
+              ) : null}
+            </div>
+            <span className="ui-site-url-sub">
+              {tlsLabel}
+              {extraDomains}
+            </span>
+          </div>
+        );
+      },
     },
     {
       key: 'target',
       type: 'mono',
-      header: zh.sites.colTarget,
-      value: (row) => siteTarget(row.site),
-    },
-    {
-      key: 'backend',
-      type: 'mono',
-      header: zh.sites.colBackend,
-      value: (row) => backendText(row.site),
-      priority: 'low',
-    },
-    {
-      key: 'tls',
-      type: 'text',
-      header: zh.sites.colTls,
-      value: (row) => zh.sites[tlsModeLabelKey(row.site.tls.mode)],
+      header: zh.sites.colTargetSummary,
+      width: '26%',
+      value: (row) => targetColText(row.site),
       priority: 'low',
     },
     {
       key: 'sync',
       type: 'sync',
-      header: zh.sites.colSync,
+      header: zh.sites.colStatus,
+      width: '12%',
       sync: (row): SyncStatusProps => {
         if (!unapplied) return { state: 'synced' };
         const rowChanged =
@@ -1102,6 +1185,33 @@ export default function SitesPage() {
       },
     },
     { key: 'actions', type: 'actions', header: '' },
+  ];
+
+  const listeningColumns: ColumnDef<ListeningPort>[] = [
+    ...listeningColumnsBase,
+    {
+      key: 'publish',
+      type: 'text',
+      header: '',
+      width: '18%',
+      render: (row) => (
+        <span onClick={(event) => event.stopPropagation()}>
+          <Button
+            label={zh.services.listeningPublish}
+            size="sm"
+            disabled={unreachable}
+            disabledReason={writeDisabledReason}
+            onClick={() =>
+              openCreate({
+                upstreams: listeningUpstream(row),
+                process: row.process ?? undefined,
+                port: row.port,
+              })
+            }
+          />
+        </span>
+      ),
+    },
   ];
 
   const rowActions = (row: SiteRow): ActionRef[] => [
@@ -1361,7 +1471,7 @@ export default function SitesPage() {
             columns={columns}
             rowKey={(row) => row.site.name}
             objectLabel={zh.nav.sites}
-            search={{ value: searchText, onChange: setSearchText, placeholder: zh.sites.colDomain }}
+            search={{ value: searchText, onChange: setSearchText, placeholder: zh.sites.searchPlaceholder }}
             empty={{
               icon: 'globe',
               title: zh.sites.appsEmptyTitle,
@@ -1399,7 +1509,13 @@ export default function SitesPage() {
                     title: zh.services.listeningEmpty,
                     description: zh.services.listeningHint,
                   }}
-                  onRowOpen={(row) => openCreate(listeningUpstream(row))}
+                  onRowOpen={(row) =>
+                    openCreate({
+                      upstreams: listeningUpstream(row),
+                      process: row.process ?? undefined,
+                      port: row.port,
+                    })
+                  }
                 />
               </Stack>
             </Card>
@@ -1576,9 +1692,13 @@ export default function SitesPage() {
           offlineReason={writeDisabledReason}
           certificates={certs}
           peers={peerTargets}
-          existingDomains={config.sites
-            .filter((site) => site.tls.mode !== 'off')
-            .flatMap((site) => site.domains)}
+          existingSites={config.sites}
+          existingDomains={[
+            ...(hubQuery.data?.domain ? [hubQuery.data.domain] : []),
+            ...config.sites
+              .filter((site) => site.tls.mode !== 'off')
+              .flatMap((site) => site.domains),
+          ]}
           onChange={(patch) => setForm((prev) => (prev ? { ...prev, ...patch } : prev))}
           onClose={closeDrawer}
           onSave={(apply) => void save(apply)}

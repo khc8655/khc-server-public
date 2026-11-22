@@ -52,6 +52,17 @@ export function InstalledAppsCard({
   const recipes = (manifestsQuery.data ?? []).filter((item) => item.enabled).map(toCatalogRecipe);
   const installed = Object.entries(installedQuery.data ?? {});
 
+  // 没有已安装托管应用时隐藏占位卡，避免把「应用表」和「本机监听端口」隔开。
+  if (
+    !installedQuery.isLoading &&
+    !installedQuery.error &&
+    !error &&
+    uninstallingId === null &&
+    installed.length === 0
+  ) {
+    return null;
+  }
+
   const uninstall = async () => {
     if (!target) return;
     const recipeToRemove = target;

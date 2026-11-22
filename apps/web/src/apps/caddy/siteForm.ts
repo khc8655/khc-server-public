@@ -14,7 +14,7 @@ import type {
 import { DEFAULT_REDIRECT_CODE, DEFAULT_TLS_PORT, formatList, parseList } from '../../data/sites';
 import { classifyBackend, type BackendContext } from '../../data/services';
 import type { Tone } from '../../ui';
-import { zh } from '../../i18n/zh';
+import { fmt, zh } from '../../i18n/zh';
 
 export const DOMAIN_RE = /^[A-Za-z0-9*_.-]+(\.[A-Za-z0-9*_.-]+)*$/;
 export const NAME_RE = /^[A-Za-z0-9_.@*-]{1,64}$/;
@@ -22,6 +22,108 @@ export const UPSTREAM_RE = /^(https?:\/\/[^\s]+|[A-Za-z0-9_.:[\]-]+:\d{1,5})$/;
 export const IP_RE = /^[0-9A-Fa-f:.]+(\/\d{1,3})?$/;
 export const PATH_RE = /^\/[^\s]*$/;
 export const REDIRECT_CODES = [301, 302, 307, 308];
+
+const RECOMMENDED_PUBLISH_PORTS = [443, 8443, 2083, 2053, 2087, 2096];
+
+export function parseEndpointPort(endpoint?: string): number | null {
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    if (url.port) {
+      const port = Number(url.port);
+      return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+    }
+    return url.protocol === 'https:' ? 443 : url.protocol === 'http:' ? 80 : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isLocalUpstreamHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return (
+    normalized === '127.0.0.1' ||
+    normalized === 'localhost' ||
+    normalized === '::1' ||
+    normalized === '0.0.0.0'
+  );
+}
+
+export function isNonPublicDomain(domain: string): boolean {
+  const host = domain.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return false;
+  return (
+    host === 'localhost' ||
+    ['.test', '.local', '.localhost', '.internal', '.lan'].some((suffix) =>
+      host.endsWith(suffix),
+    ) ||
+    IP_RE.test(host)
+  );
+}
+
+export function siteAccessUrl(site: {
+  domains: readonly string[];
+  domain?: string;
+  listenPort: number;
+  tls: { mode: TlsMode };
+}): string {
+  const host = (site.domains[0] || site.domain || '').trim();
+  if (!host) return '';
+  const scheme = site.tls.mode === 'off' ? 'http' : 'https';
+  const defaultPort = scheme === 'http' ? 80 : 443;
+  return site.listenPort === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${site.listenPort}`;
+}
+
+export function pickRecommendedListenPort(opts: {
+  agentPort?: number | null;
+  localPort?: number | null;
+  domain?: string;
+  existingSites: readonly CaddySite[];
+  excludeSiteName?: string;
+}): number {
+  const normalizedDomain = opts.domain?.trim().toLowerCase() ?? '';
+  const isBusy = (candidate: number): boolean => {
+    if (opts.agentPort != null && candidate === opts.agentPort) return true;
+    if (opts.localPort != null && candidate === opts.localPort) return true;
+    return opts.existingSites.some((site) => {
+      if (opts.excludeSiteName && site.name === opts.excludeSiteName) return false;
+      if (site.listenPort !== candidate) return false;
+      if (!normalizedDomain) return true;
+      return site.domains.some((domain) => domain.toLowerCase() === normalizedDomain);
+    });
+  };
+  for (const port of RECOMMENDED_PUBLISH_PORTS) {
+    if (!isBusy(port)) return port;
+  }
+  for (let port = 8444; port <= 8550; port += 1) {
+    if (!isBusy(port)) return port;
+  }
+  return 8443;
+}
+
+export function uniqueSiteName(
+  base: string,
+  existingSites: readonly CaddySite[],
+  listenPort?: number | null,
+): string {
+  const clean =
+    base
+      .trim()
+      .replace(/[^A-Za-z0-9_.@*-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 56) || 'app';
+  const taken = new Set(existingSites.map((site) => site.name));
+  if (!taken.has(clean)) return clean;
+  if (listenPort != null) {
+    const withPort = `${clean}-${listenPort}`.slice(0, 64);
+    if (!taken.has(withPort)) return withPort;
+  }
+  for (let i = 2; i < 100; i += 1) {
+    const candidate = `${clean}-${i}`.slice(0, 64);
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${clean}-${Date.now()}`.slice(0, 64);
+}
 
 export function splitUpstream(value: string): { host: string; port: number | null } {
   const item = parseList(value)[0] ?? '';
@@ -288,6 +390,8 @@ export interface SiteValidationContext {
   /** 已加载的证书 id 列表 */
   certIds: string[];
   certsLoaded: boolean;
+  /** 节点 Agent 入口端口（Caddy 不可重复绑定该端口） */
+  nodeAgentPort?: number | null;
 }
 
 export function validateSite(form: SiteFormState, ctx: SiteValidationContext): SiteErrors {
@@ -323,6 +427,16 @@ export function validateSite(form: SiteFormState, ctx: SiteValidationContext): S
   }
 
   const upstreams = parseList(form.upstreams);
+  if (!next.listenPort && form.kind === 'proxy' && form.listenPort !== null) {
+    if (ctx.nodeAgentPort != null && form.listenPort === ctx.nodeAgentPort) {
+      next.listenPort = fmt(zh.sites.portSameAsAgent, { port: String(ctx.nodeAgentPort) });
+    } else if (upstreams.length > 0) {
+      const first = splitUpstream(upstreams[0] ?? '');
+      if (first.port !== null && isLocalUpstreamHost(first.host) && form.listenPort === first.port) {
+        next.listenPort = fmt(zh.sites.portSameAsUpstream, { port: String(first.port) });
+      }
+    }
+  }
   const pathErrors =
     form.pathRoutes.length > 0 &&
     form.pathRoutes.some((route) => {

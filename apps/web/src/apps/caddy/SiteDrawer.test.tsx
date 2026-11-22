@@ -98,9 +98,13 @@ function stubApi() {
 
 function Harness({
   initial,
+  nodeOverride,
+  existingSites,
   onOpenInstallWizard,
 }: {
   initial?: Partial<SiteFormState>;
+  nodeOverride?: Node;
+  existingSites?: import('../../data/sites').CaddySite[];
   onOpenInstallWizard?: () => void;
 }) {
   const [form, setForm] = useState<SiteFormState>(() => ({ ...createForm(), ...initial }));
@@ -112,10 +116,11 @@ function Harness({
       saving={false}
       hubId="hub-1"
       hubName="app-1"
-      node={node}
+      node={nodeOverride ?? node}
       certificates={[]}
       peers={[{ name: 'peer-a', host: '10.20.30.40' }]}
       existingDomains={[]}
+      existingSites={existingSites}
       onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
       onClose={() => {}}
       onSave={() => {}}
@@ -125,11 +130,20 @@ function Harness({
   );
 }
 
-function renderDrawer(initial?: Partial<SiteFormState>, onOpenInstallWizard?: () => void) {
+function renderDrawer(
+  initial?: Partial<SiteFormState>,
+  onOpenInstallWizard?: () => void,
+  options?: { nodeOverride?: Node; existingSites?: import('../../data/sites').CaddySite[] },
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Harness initial={initial} onOpenInstallWizard={onOpenInstallWizard} />
+      <Harness
+        initial={initial}
+        nodeOverride={options?.nodeOverride}
+        existingSites={options?.existingSites}
+        onOpenInstallWizard={onOpenInstallWizard}
+      />
     </QueryClientProvider>,
   );
 }
@@ -151,7 +165,7 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     const portInput = screen.getByLabelText('目标端口') as HTMLInputElement;
     await userEvent.clear(portInput);
     await userEvent.type(portInput, '3430');
-    expect(screen.getByText('127.0.0.1:3430')).toBeTruthy();
+    expect(screen.getAllByText('127.0.0.1:3430').length).toBeGreaterThanOrEqual(2);
 
     await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
     expect(onOpenInstallWizard).toHaveBeenCalledTimes(1);
@@ -163,12 +177,13 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     await userEvent.selectOptions(screen.getByLabelText('目标来源'), '10.20.30.40');
 
     expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
-    expect(screen.getByText(/10\.20\.30\.40:/)).toBeTruthy();
+    expect(screen.getAllByText(/10\.20\.30\.40:/).length).toBeGreaterThanOrEqual(2);
   });
 
   it('新建站点默认选中本机（127.0.0.1）；已有自定义上游保持 custom', async () => {
     renderDrawer({ domains: 'new.example.com', listenPort: 2083 });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
+    expect(screen.getByLabelText('应用名称')).toBeTruthy();
 
     cleanup();
 
@@ -182,6 +197,7 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     expect(screen.queryByLabelText('目标端口')).toBeNull();
     expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
     // 瘦身：精简掉低频企业反代细项与抽屉内重复删除
+    expect(screen.getByLabelText('应用名称')).toBeTruthy();
     expect(screen.queryByLabelText('站点名称')).toBeNull();
     expect(screen.queryByLabelText('负载均衡')).toBeNull();
     expect(screen.queryByLabelText('健康检查路径')).toBeNull();
@@ -191,5 +207,62 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     expect(screen.queryByRole('button', { name: '删除此站点' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: '高级' }));
     expect(screen.getByText('响应头')).toBeTruthy();
+  });
+
+  it('顶部实时路由预览完整显示访问地址与转发目标', () => {
+    renderDrawer({
+      name: 'llmproxy',
+      domains: 'app.example.com',
+      listenPort: 8443,
+      upstreams: '127.0.0.1:8787',
+    });
+    expect(screen.getByText('对外访问预览')).toBeTruthy();
+    expect(screen.getByText('https://app.example.com:8443')).toBeTruthy();
+    expect(screen.getAllByText('127.0.0.1:8787').length).toBeGreaterThanOrEqual(2);
+    expect((screen.getByLabelText('应用名称') as HTMLInputElement).value).toBe('llmproxy');
+  });
+
+  it('对外端口与本机应用端口或 Agent 端口冲突时内联报错，点「改用推荐端口」一键修复', async () => {
+    renderDrawer({
+      name: 'llmproxy',
+      domains: 'app.example.com',
+      listenPort: 8787,
+      upstreams: '127.0.0.1:8787',
+    });
+    expect(screen.getByText(/对外端口不能与本机应用端口（8787）相同/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '改用推荐端口 443' }));
+    expect((screen.getByLabelText('对外端口') as HTMLInputElement).value).toBe('443');
+    expect(screen.queryByText(/对外端口不能与本机应用端口/)).toBeNull();
+
+    cleanup();
+
+    renderDrawer(
+      {
+        name: 'llmproxy',
+        domains: 'app.example.com',
+        listenPort: 443,
+        upstreams: '127.0.0.1:8787',
+      },
+      undefined,
+      { nodeOverride: { ...node, endpoint: 'https://app.example.com:443' } },
+    );
+    expect(screen.getByText('端口 443 已被本节点 Agent 占用，请改用其他对外端口。')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '改用推荐端口 8443' }));
+    expect((screen.getByLabelText('对外端口') as HTMLInputElement).value).toBe('8443');
+    expect(screen.queryByText(/已被本节点 Agent 占用/)).toBeNull();
+  });
+
+  it('.test 非公网域名搭配自动签发时提示警告并支持一键切换为节点域名', async () => {
+    renderDrawer({
+      name: 'llmproxy',
+      domains: 'khc9099.test',
+      listenPort: 8443,
+      upstreams: '127.0.0.1:8787',
+      tlsMode: 'auto',
+    });
+    expect(screen.getByText('当前域名无法自动签发公网证书')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '改用节点域名 app.example.com' }));
+    expect((screen.getByLabelText(/^域名/) as HTMLInputElement).value).toBe('app.example.com');
+    expect(screen.queryByText('当前域名无法自动签发公网证书')).toBeNull();
   });
 });

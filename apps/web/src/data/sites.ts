@@ -970,7 +970,9 @@ export function upsertSite(config: CaddyConfig, site: CaddySite, previousName?: 
 }
 
 export interface PublishSitePlan {
-  /** 站点域名，同时作为站点名（同名站点视为「重新指向」，覆盖而不是再建一个） */
+  /** 可选站点名称（如 magpie / llmproxy）；留空默认取域名，同域名不同端口会自动消歧后缀。 */
+  name?: string;
+  /** 站点域名 */
   domain: string;
   /** Caddy 对外监听的端口（发布端口），必须与 Agent 监听端口不同 */
   listenPort: number;
@@ -986,6 +988,30 @@ export interface PublishSiteOutcome {
   replaced: boolean;
 }
 
+function resolvePublishedSiteName(
+  plan: PublishSitePlan,
+  existingSites: readonly CaddySite[],
+): { siteName: string; replaced: boolean } {
+  const normalizedDomain = plan.domain.trim();
+  const sameAddress = existingSites.find(
+    (item) => item.listenPort === plan.listenPort && item.domains.includes(normalizedDomain),
+  );
+  if (sameAddress) return { siteName: sameAddress.name, replaced: true };
+  const rawBase = (plan.name?.trim() || normalizedDomain)
+    .replace(/[^A-Za-z0-9_.@*-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56) || 'app';
+  const taken = new Set(existingSites.map((item) => item.name));
+  if (!taken.has(rawBase)) return { siteName: rawBase, replaced: false };
+  const withPort = `${rawBase}-${plan.listenPort}`.slice(0, 64);
+  if (!taken.has(withPort)) return { siteName: withPort, replaced: false };
+  for (let i = 2; i < 100; i += 1) {
+    const candidate = `${rawBase}-${i}`.slice(0, 64);
+    if (!taken.has(candidate)) return { siteName: candidate, replaced: false };
+  }
+  return { siteName: `${rawBase}-${Date.now()}`.slice(0, 64), replaced: false };
+}
+
 /**
  * 写站点 → apply 一步到位，失败把配置回滚成发布前的样子。
  *
@@ -996,8 +1022,12 @@ export async function publishProxySite(
   hubId: string,
   plan: PublishSitePlan,
 ): Promise<PublishSiteOutcome> {
+  const current = await fetchAppConfig(hubId, CADDY_SITE_APP);
+  const config = normalizeCaddyConfig(current?.config ?? null);
+  const previous = config.sites;
+  const { siteName, replaced } = resolvePublishedSiteName(plan, previous);
   const site = normalizeCaddySite({
-    name: plan.domain,
+    name: siteName,
     kind: 'proxy',
     domains: [plan.domain],
     listenPort: plan.listenPort,
@@ -1006,10 +1036,6 @@ export async function publishProxySite(
     tls: plan.tls ?? { mode: 'auto', cert: null },
   });
   if (!site) throw new Error('域名不合法，未写入站点');
-  const current = await fetchAppConfig(hubId, CADDY_SITE_APP);
-  const config = normalizeCaddyConfig(current?.config ?? null);
-  const previous = config.sites;
-  const replaced = previous.some((item) => item.name === site.name);
   try {
     await saveCaddyConfig(hubId, upsertSite(config, site));
     const applied = await runCaddyAction(hubId, 'apply');

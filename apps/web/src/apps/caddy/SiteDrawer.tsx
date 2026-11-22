@@ -4,7 +4,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import type { Node } from '@khc/contracts';
-import { DEFAULT_REDIRECT_CODE, parseList } from '../../data/sites';
+import { DEFAULT_REDIRECT_CODE, parseList, type CaddySite } from '../../data/sites';
 import { paths } from '../../registry/routes';
 import { AdvancedSection } from '../../patterns';
 import {
@@ -25,7 +25,12 @@ import {
 import { zh, fmt } from '../../i18n/zh';
 import { formatExpiry } from '../../i18n/format';
 import {
+  isLocalUpstreamHost,
+  isNonPublicDomain,
   joinUpstream,
+  parseEndpointPort,
+  pickRecommendedListenPort,
+  siteAccessUrl,
   siteSignature,
   splitUpstream,
   REDIRECT_CODES,
@@ -155,14 +160,16 @@ export function SiteDrawer({
   saveError,
   saving,
   hubName,
+  node,
   offlineReason,
   certificates,
   peers,
   existingDomains,
+  existingSites = [],
   onChange,
   onClose,
   onSave,
-  onDelete,
+  onDelete: _onDelete,
   onOpenInstallWizard,
 }: {
   form: SiteFormState;
@@ -177,6 +184,7 @@ export function SiteDrawer({
   certificates: { id: string; name: string; domains: string[]; notAfter: number | null }[];
   peers: { name: string; host: string }[];
   existingDomains: string[];
+  existingSites?: CaddySite[];
   onChange: (patch: Partial<SiteFormState>) => void;
   onClose: () => void;
   onSave: (apply: boolean) => void;
@@ -230,11 +238,49 @@ export function SiteDrawer({
     );
   const domainOptions = [
     ...new Set(
-      [...certificates.flatMap((cert) => cert.domains), ...existingDomains].filter(
-        (domain) => domain.trim().length > 0,
-      ),
+      [
+        ...(node?.domain ? [node.domain] : []),
+        ...certificates.flatMap((cert) => cert.domains),
+        ...existingDomains,
+      ].filter((domain) => domain.trim().length > 0),
     ),
   ];
+  const nodeAgentPort = parseEndpointPort(node?.endpoint);
+  const recommendedPort = pickRecommendedListenPort({
+    agentPort: nodeAgentPort,
+    localPort: isLocalUpstreamHost(upstreamHost) ? upstreamPort : null,
+    domain: siteDomains[0] || node?.domain || undefined,
+    existingSites,
+    excludeSiteName: form.originalName,
+  });
+  const livePortConflict =
+    form.kind === 'proxy' && form.listenPort !== null
+      ? nodeAgentPort !== null && form.listenPort === nodeAgentPort
+        ? fmt(zh.sites.portSameAsAgent, { port: String(nodeAgentPort) })
+        : upstreamPort !== null &&
+            isLocalUpstreamHost(upstreamHost) &&
+            form.listenPort === upstreamPort
+          ? fmt(zh.sites.portSameAsUpstream, { port: String(upstreamPort) })
+          : undefined
+      : undefined;
+  const portFieldError = errors.listenPort ?? livePortConflict;
+  const previewDomain = siteDomains[0] || '';
+  const previewUrl =
+    previewDomain && form.listenPort !== null
+      ? siteAccessUrl({
+          domains: [previewDomain],
+          listenPort: form.listenPort,
+          tls: { mode: form.tlsMode },
+        })
+      : '';
+  const previewTarget =
+    form.kind === 'proxy'
+      ? form.upstreams.trim() || zh.sites.previewNoTarget
+      : form.kind === 'static'
+        ? form.root.trim() || zh.sites.previewNoTarget
+        : form.redirectTo.trim() || zh.sites.previewNoTarget;
+  const nonPublicDomains = siteDomains.filter(isNonPublicDomain);
+  const nodeDomainIsPublic = Boolean(node?.domain && !isNonPublicDomain(node.domain));
   const applyTarget = (target: string) => {
     if (target === 'custom') {
       setCustomTarget(true);
@@ -277,7 +323,34 @@ export function SiteDrawer({
       }
     >
       <Stack gap={4}>
+        <div className="ui-route-preview">
+          <span className="ui-route-preview-label">{zh.sites.previewLabel}</span>
+          <div className="ui-route-preview-flow mono">
+            <span className={previewUrl ? 'ui-route-preview-url' : 'ui-text-caption'}>
+              {previewUrl || zh.sites.previewEmptyUrl}
+            </span>
+            <span className="ui-route-preview-arrow" aria-hidden="true">
+              {zh.sites.previewArrow}
+            </span>
+            <span className="ui-route-preview-target">{previewTarget}</span>
+          </div>
+        </div>
+
         <GroupCard title={zh.sites.groupBasic}>
+          <Field
+            id="site-name"
+            label={zh.sites.appName}
+            help={zh.sites.appNameHelp}
+            error={errors.name}
+            required
+          >
+            <TextInput
+              id="site-name"
+              value={form.name}
+              placeholder={zh.sites.appNamePlaceholder}
+              onChange={(value) => onChange({ name: value })}
+            />
+          </Field>
           <Field id="site-kind" label={zh.sites.kind} help={zh.sites.kindHelp}>
             <Select
               id="site-kind"
@@ -319,7 +392,7 @@ export function SiteDrawer({
             id="site-port"
             label={zh.sites.listenPort}
             help={zh.sites.listenPortHelp}
-            error={errors.listenPort}
+            error={portFieldError}
             required
           >
             <NumberInput
@@ -327,9 +400,19 @@ export function SiteDrawer({
               value={form.listenPort}
               min={1}
               max={65535}
+              invalid={Boolean(portFieldError)}
               onChange={(value) => onChange({ listenPort: value })}
             />
           </Field>
+          {portFieldError ? (
+            <Row gap={2}>
+              <Button
+                label={fmt(zh.sites.useRecommendedPort, { port: String(recommendedPort) })}
+                size="sm"
+                onClick={() => onChange({ listenPort: recommendedPort })}
+              />
+            </Row>
+          ) : null}
           <Field id="site-enabled" label={zh.sites.enabled} variant="row">
             <Toggle
               checked={form.enabled}
@@ -553,6 +636,24 @@ export function SiteDrawer({
                 <Banner tone="warn" title={zh.sites.certMismatch} />
               ) : null}
             </>
+          ) : null}
+          {form.tlsMode === 'auto' && nonPublicDomains.length > 0 ? (
+            <Banner
+              tone="warn"
+              title={zh.sites.nonPublicDomainAutoTlsTitle}
+              description={fmt(zh.sites.nonPublicDomainAutoTlsDesc, {
+                domain: nonPublicDomains[0]!,
+              })}
+              action={
+                nodeDomainIsPublic && node?.domain ? (
+                  <Button
+                    label={fmt(zh.sites.useNodeDomain, { domain: node.domain })}
+                    size="sm"
+                    onClick={() => onChange({ domains: node.domain! })}
+                  />
+                ) : undefined
+              }
+            />
           ) : null}
         </GroupCard>
 
