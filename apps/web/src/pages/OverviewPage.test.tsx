@@ -160,7 +160,7 @@ describe('OverviewPage（首页概览 · U2）', () => {
 
     const { container, router } = await renderOverview();
     expect(await screen.findByText(`面板 ${PANEL_VERSION_LABEL}`)).toBeTruthy();
-    expect(await screen.findByText('oracle-x86-2 · hermes')).toBeTruthy();
+    expect(await screen.findByText('oracle-x86-2 · hermes.example.dev（hermes）')).toBeTruthy();
 
     // 不请求 /api/v1/certs
     await waitFor(() => expect(calls).toContain('/api/v1/nodes/probe'));
@@ -169,7 +169,7 @@ describe('OverviewPage（首页概览 · U2）', () => {
     const triageText = container.querySelector('.ui-triage-strip')?.textContent ?? '';
     expect(triageText).toContain('down-node');
     expect(triageText).toContain('节点离线');
-    expect(triageText).toContain('oracle-x86-2 · hermes');
+    expect(triageText).toContain('oracle-x86-2 · hermes.example.dev（hermes）');
     expect(triageText).toContain('HTTP 502');
     expect(triageText).toContain('oracle-x86-2 · office-nas');
     expect(triageText).toContain('wild-cert');
@@ -269,7 +269,7 @@ describe('OverviewPage（首页概览 · U2）', () => {
     const { container } = await renderOverview();
     expect(await screen.findByText('还没有节点')).toBeTruthy();
     expect(screen.getByRole('button', { name: '添加第一个节点' })).toBeTruthy();
-    expect(container.querySelector('.ui-kpi-strip')).toBeNull();
+    expect(container.querySelector('.ui-overview-strip')).toBeNull();
   });
 
   it('异常态：GET /nodes 失败显示重试，probe 失败显示状态探测失败横幅', async () => {

@@ -121,6 +121,8 @@ function mockApi(options: {
   rev: number;
   appliedRev: number;
   state?: () => unknown;
+  /** 是否已保存 WireGuard 面板配置（false 时模拟未纳管状态）。 */
+  configExists?: boolean;
   /** 接口公网地址；空串用于验证「没填公网地址时导出只给引导，不打 Agent」。 */
   publicEndpoint?: string;
   mode?: 'wg' | 'caddy';
@@ -239,6 +241,7 @@ function mockApi(options: {
         });
       }
       if (url === '/api/v1/nodes/tyo-1/apps/wireguard') {
+        if (options.configExists === false) return json({ app: null });
         return json({
           app: configRecord(store.rev, store.appliedRev, store.peers, options.publicEndpoint),
         });
@@ -594,5 +597,13 @@ describe('WireGuard 页', () => {
     const content = container.querySelector('.ui-hub-content')?.textContent ?? '';
     expect(content).not.toMatch(/peer/i);
     expect(content).not.toMatch(/wireguard/i);
+  });
+
+  it('节点已有运行中 WireGuard 但面板未配置时：展示未纳管标题，且等待配置加载不闪烁', async () => {
+    mockApi({ peers: [], rev: 1, appliedRev: 1, configExists: false });
+    await renderWireGuard();
+
+    expect(await screen.findByText('面板尚未纳管节点上的 WireGuard')).toBeTruthy();
+    expect(screen.getByText(/节点上已有运行中的 WireGuard 接口/)).toBeTruthy();
   });
 });

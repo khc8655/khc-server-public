@@ -31,6 +31,7 @@ import { FirewallRulesEditor } from '../apps/host-ops/FirewallRulesEditor';
 import {
   DiagnosticsCheckDetail,
   DiagnosticsIssueList,
+  formatCheckTitle,
 } from '../apps/diagnostics/DiagnosticsPanel';
 import { SaveBar } from '../patterns';
 import { action, actionLabel } from '../registry/actions';
@@ -388,7 +389,11 @@ export default function HubOpsPage() {
         return (
           <Drawer
             open
-            title={hint?.title ?? check.title}
+            title={
+              check.code === 'khc.config.pending_apply'
+                ? formatCheckTitle(check)
+                : (hint?.title ?? check.title)
+            }
             context={drawerContext}
             onClose={() => setDrawer({ kind: 'diag' })}
             footer={

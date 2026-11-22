@@ -147,6 +147,8 @@ describe('Agent 命令 UI', () => {
     expect((await screen.findAllByText(/最后在线/)).length).toBeGreaterThan(0);
 
     await openInstall();
+    expect(screen.queryByText(/启用 Agent 自签 HTTPS/)).toBeNull();
+    expect(screen.queryByLabelText('证书域名（CN）')).toBeNull();
     fillPackage();
     await userEvent.click(screen.getByRole('button', { name: '生成命令' }));
     const command = await screen.findByText(/khc-agent-0\.2\.0\.tar\.gz/);
@@ -199,6 +201,8 @@ describe('Agent 命令 UI', () => {
     commandFails = true;
     await renderRoute('/hubs/tyo-1/settings');
     await openInstall();
+    expect(screen.queryByText(/启用 Agent 自签 HTTPS/)).toBeNull();
+    expect(screen.queryByLabelText('证书域名（CN）')).toBeNull();
     fillPackage();
     await userEvent.click(screen.getByRole('button', { name: '生成命令' }));
     expect(await screen.findByText(/无法生成命令/)).toBeTruthy();

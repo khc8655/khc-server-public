@@ -64,6 +64,27 @@ function problemCheck() {
 }
 
 function diagnosticBody(): Record<string, unknown> {
+  if (mode === 'pending_apply') {
+    return {
+      nodeId: 'tyo-1',
+      generatedAt: NOW,
+      durationMs: 250,
+      hintsVersion: '2026-10-29.1',
+      reachable: true,
+      route: 'direct',
+      via: 'tcp',
+      checks: [
+        {
+          id: 'config.sync',
+          code: 'khc.config.pending_apply',
+          severity: 'info',
+          title: '配置待生效',
+          detail: 'caddy-site rev 3 尚未在节点生效，请重新应用。',
+          evidence: { pending: 1, oldestAgeSec: 10, apps: 'caddy-site rev 3' },
+        },
+      ],
+    };
+  }
   if (mode === 'offline') {
     return {
       nodeId: 'tyo-1',
@@ -117,7 +138,7 @@ function diagnosticBody(): Record<string, unknown> {
   };
 }
 
-let mode: 'issue' | 'error' | 'ok' | 'offline' | 'pending' = 'issue';
+let mode: 'issue' | 'error' | 'ok' | 'offline' | 'pending' | 'pending_apply' = 'issue';
 let truncated = false;
 let requests: { url: string; init?: RequestInit }[] = [];
 
@@ -271,5 +292,13 @@ describe('主机运维页诊断入口与唯一抽屉（ui-redesign §4）', () =
     expect(await screen.findByText('根因')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '重新应用' })).toBeNull();
     expect(await screen.findByText('人工处理')).toBeTruthy();
+  });
+
+  it('pending_apply 检查项在前端标明具体待生效模块名称', async () => {
+    mode = 'pending_apply';
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '诊断' }));
+    expect((await screen.findAllByText('应用站点：配置待生效')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/应用站点（caddy-site） rev 3 尚未在节点生效/)).length).toBeGreaterThan(0);
   });
 });
