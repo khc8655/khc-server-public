@@ -28,6 +28,7 @@
 | Hub 自身 `wg1` 接口密钥轮换 | design-v3 §5.4 未实现 | 生产就绪余项 |
 | 证书二维码、面板内自动续期编排 | 续期 timer 已随 Agent 0.1.51 安装，面板只展示 timer 是否就绪，尚无编排入口 | 生产就绪余项 |
 | 多 DNS 服务商驱动（腾讯云 DNSPod / 阿里云 DNS 等） | S1 已拆分「账号」并预留 `provider` 扩展结构，后续按同一驱动接口补齐非 Cloudflare 厂商 | 2026-11-21 settings-ia-and-workflows |
+| 应用发布后 Worker 侧公网可达探活（P4） | 新增只读外网 HTTP/HTTPS 连通性与 TLS 探活端点（涉及 `apps/api/` 与契约评审），P1–P3 已先靠防火墙放行检查、本机监听检测与 DoH 解析覆盖主要排障场景 | 2026-11-22 ui-flow-consolidation |
 
 ## 暂缓（主人决定，重启需重新拍板）
 
