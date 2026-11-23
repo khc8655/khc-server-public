@@ -1,8 +1,10 @@
 {
   "id": "magpie",
+  "enabled": true,
   "manifest": {
+    "schema": 2,
     "name": "magpie",
-    "version": "0.1.4265",
+    "version": "0.1.4265-khc.2",
     "runtime": {
       "mode": "create",
       "user": "khc-app-magpie",
@@ -29,90 +31,86 @@
         "key": "public_url",
         "type": "string",
         "label": "Caddy 发布后的对外地址（可选）",
-        "default": ""
+        "default": "",
+        "derive": "endpoint:web.publicUrl"
       },
       {
         "key": "web_key",
         "type": "string",
         "label": "Web 登录 Key（留空自动生成）",
-        "default": ""
+        "default": "",
+        "secret": true
       }
     ],
+    "requires": {
+      "arch": [
+        "amd64",
+        "arm64"
+      ],
+      "diskMB": 200,
+      "commands": [
+        "python3"
+      ]
+    },
     "scripts": {
-      "install": "#!/usr/bin/env bash\n# magpie 适配脚本（KHC 应用清单 / 第一份适配）。\n#\n# 目标：装完不需要再登录 VM。脚本自己下载校验二进制、生成 web 登录 key、\n# 写 systemd user unit、启动并把「带 key 的登录链接」回传到面板。\n# 只监听 127.0.0.1；Caddy 反代由主人在面板里另行发布。\n#\n# 可用环境变量（由执行器注入）：\n#   KHC_APP_HOME     应用可写根目录（属主 = 运行用户）\n#   KHC_INSTANCE     实例名\n#   KHC_PARAM_*      安装表单里填的参数\n#   KHC_RESULT_FILE  也可把结果写这里\nset -euo pipefail\n\nVER=\"0.1.4265\"\nPORT=\"${KHC_PARAM_PORT:-3425}\"\nWEB_PORT=\"${KHC_PARAM_WEB_PORT:-3430}\"\nPUBLIC_URL=\"${KHC_PARAM_PUBLIC_URL:-}\"\nWEB_KEY=\"${KHC_PARAM_WEB_KEY:-}\"\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-magpie-${INSTANCE}.service\"\n# systemd user manager 只在 $HOME/.config/systemd/user 找 unit（路径由 user@.service\n# 启动时固定），所以 unit 必须写进真实家目录；执行器 create 模式已把家目录\n# 建在 /var/lib/khc-apps/home/<user>。其余文件也统一放家目录下，便于卸载清理。\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nBIN_DIR=\"$USER_HOME/bin\"\nCONF_DIR=\"$USER_HOME/.config\"\nUNIT_DIR=\"$CONF_DIR/systemd/user\"\nSTATE_DIR=\"$USER_HOME/.local\"\nKEY_FILE=\"$CONF_DIR/khc-magpie-${INSTANCE}.web.key\"\nBIN=\"$BIN_DIR/magpie-$VER\"\nUNIT=\"$UNIT_DIR/$UNIT_NAME\"\n\nmkdir -p \"$BIN_DIR\" \"$CONF_DIR\" \"$UNIT_DIR\" \"$STATE_DIR/data\" \"$STATE_DIR/state\" \"$STATE_DIR/cache\"\n# 兼容：若之前装在 KHC_APP_HOME 下，把登录 key 迁过来，保持登录链接不变\nif [ ! -s \"$KEY_FILE\" ] && [ -s \"$APP_HOME/config/web.key\" ]; then\n  cp \"$APP_HOME/config/web.key\" \"$KEY_FILE\"\nfi\n\n# ---- 1. 下载并校验二进制（固定版本 + 固定 sha256，不用官方 install.sh，避免自更新）----\ncase \"$(uname -m)\" in\n  x86_64|amd64)\n    ARCH=amd64\n    SHA=\"21120a89b1683b1c4445856caed7cf2b0c5805cdf0fb7c96b03ee620114cd87e\" ;;\n  aarch64|arm64)\n    ARCH=arm64\n    SHA=\"c855bc06c4bcd97a9a8230f39f9da165f98964d6725a7d08abfc87ea4f677fbb\" ;;\n  *) echo \"不支持的 CPU 架构: $(uname -m)\" >&2; exit 1 ;;\nesac\nURL=\"https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-cli-linux-${ARCH}\"\n\nif [ ! -x \"$BIN\" ]; then\n  TMP=\"$(mktemp \"${TMPDIR:-/tmp}/khc-magpie.XXXXXX\")\"\n  trap 'rm -f -- \"$TMP\"' EXIT\n  # 91MB 的 GitHub release：不限连接/总时长就会一直挂着不出错（国内出站尤其明显），\n  # 面板那边只能看到进度停在 1%。这里给足三道闸：连接超时、总时长、低速率判死。\n  DL_MAX=\"${KHC_DL_MAX_TIME:-600}\"\n  echo \"下载 $URL（约 90MB，最长等 ${DL_MAX}s）\"\n  dl_fail() {\n    local got\n    got=\"$(wc -c < \"$TMP\" 2>/dev/null || echo 0)\"\n    echo \"下载失败：$1；已下载 ${got} 字节（完整文件应为 91MB 级别）\" >&2\n    echo \"排查：在该机器执行 curl -I $URL 看能否出站；拉不动就给节点配代理，\" >&2\n    echo \"      或手工把二进制放到 $BIN（sha256 须为 ${SHA}）\" >&2\n    exit 1\n  }\n  if command -v curl >/dev/null 2>&1; then\n    # --speed-limit 8KB + --speed-time 60：连续 60 秒低于 8KB/s 视为卡死，主动放弃\n    curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time \"$DL_MAX\" \\\n      --speed-limit 8192 --speed-time 60 -o \"$TMP\" \"$URL\" || dl_fail \"curl 失败\"\n  elif command -v wget >/dev/null 2>&1; then\n    wget -q --tries=3 --timeout=30 --read-timeout=60 -O \"$TMP\" \"$URL\" || dl_fail \"wget 失败\"\n  else\n    echo \"需要 curl 或 wget\" >&2; exit 1\n  fi\n  [ -s \"$TMP\" ] || dl_fail \"下载到的是空文件\"\n  ACTUAL=\"$(sha256sum \"$TMP\" | awk '{print $1}')\"\n  if [ \"$ACTUAL\" != \"$SHA\" ]; then\n    echo \"sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装\" >&2\n    exit 1\n  fi\n  install -m 0755 \"$TMP\" \"$BIN\"\n  rm -f -- \"$TMP\"\n  trap - EXIT\n  echo \"二进制已就位：$BIN\"\nfi\n\n# ---- 2. web 登录 key：可指定，未指定则生成一次并复用（重装后登录链接不变）----\n# 16+ 字符，只允许字母数字与 - . _ ~（magpie 的约束）\nif [ -n \"$WEB_KEY\" ]; then\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nelif [ -s \"$KEY_FILE\" ]; then\n  WEB_KEY=\"$(cat \"$KEY_FILE\")\"\nelse\n  WEB_KEY=\"$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)\"\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nfi\nchmod 0600 \"$KEY_FILE\"\nif [ \"${#WEB_KEY}\" -lt 16 ]; then\n  echo \"webKey 至少需要 16 位\" >&2; exit 1\nfi\n\n# ---- 3. 写 systemd user unit（应用用户自己的 unit，不需要 root）----\n# 只绑 127.0.0.1：网关 PORT、web 管理页 WEB_PORT。\n# MAGPIE_WEB_URL 让日志/页面打印通过 Caddy 的对外链接；\n# 主人填了 publicUrl 才设置，未填就是纯本地链接。\nEXTRA_ENV=\"\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  EXTRA_ENV=\"Environment=MAGPIE_WEB_URL=${PUBLIC_URL%/}\"\nfi\ncat > \"$UNIT\" <<EOF\n[Unit]\nDescription=magpie gateway + web UI (${INSTANCE})\nAfter=network.target\n\n[Service]\nType=simple\nEnvironment=HOME=$USER_HOME\nEnvironment=XDG_CONFIG_HOME=$CONF_DIR\nEnvironment=XDG_DATA_HOME=$STATE_DIR/data\nEnvironment=XDG_STATE_HOME=$STATE_DIR/state\nEnvironment=XDG_CACHE_HOME=$STATE_DIR/cache\nEnvironment=MAGPIE_ADDR=127.0.0.1:$PORT\nEnvironment=MAGPIE_WEB_KEY=$WEB_KEY\n$EXTRA_ENV\nExecStart=$BIN serve --web=127.0.0.1:$WEB_PORT\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\nEOF\nchmod 0600 \"$UNIT\"\n\n# ---- 4. 启动（降权用户自己的 user manager；执行器已 enable-linger）----\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\nsystemctl --user daemon-reload\nsystemctl --user enable --now \"$UNIT_NAME\"\n\n# ---- 5. 等待两个端口就绪 ----\nfor _ in $(seq 1 30); do\n  if curl -s -o /dev/null -m 2 \"http://127.0.0.1:$WEB_PORT/\" && \\\n     curl -s -o /dev/null -m 2 \"http://127.0.0.1:$PORT/v1/models\"; then\n    break\n  fi\n  sleep 1\ndone\n\n# ---- 6. 把「点一下就能登录」的链接回传面板 ----\nLOGIN_LOCAL=\"http://127.0.0.1:$WEB_PORT/?k=$WEB_KEY\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  LOGIN_URL=\"${PUBLIC_URL%/}/?k=$WEB_KEY\"\nelse\n  LOGIN_URL=\"$LOGIN_LOCAL\"\nfi\n\npython3 - \"$LOGIN_URL\" \"$PORT\" \"$WEB_PORT\" \"$WEB_KEY\" \"$VER\" \"$PUBLIC_URL\" <<'PY'\nimport json, sys\nlogin, port, web_port, key, version, public = sys.argv[1:7]\naccess = [\n    {\"label\": \"Web 管理页（点击登录）\", \"value\": login, \"kind\": \"url\", \"copy\": True},\n    {\"label\": \"网关地址（供 Agent 使用）\", \"value\": f\"http://127.0.0.1:{port}\", \"kind\": \"url\", \"copy\": True},\n    {\"label\": \"Caddy 反代目标（发布本机端口）\", \"value\": f\"127.0.0.1:{web_port}\", \"kind\": \"text\", \"copy\": True},\n    {\"label\": \"Web 登录 Key\", \"value\": key, \"kind\": \"text\", \"copy\": True},\n]\nif not public:\n    access.append({\n        \"label\": \"说明\",\n        \"value\": \"当前只监听 127.0.0.1。到面板「发布本机端口」把上面端口发布出去，再回来点登录链接。\",\n        \"kind\": \"text\", \"copy\": False,\n    })\nprint(\"KHC_RESULT=\" + json.dumps({\n    \"access\": access,\n    \"cards\": [\n        {\"title\": \"magpie 版本\", \"value\": version, \"copy\": False},\n        {\"title\": \"Web 登录 Key\", \"value\": key, \"copy\": True},\n        {\"title\": \"监听\", \"value\": f\"127.0.0.1:{port} / 127.0.0.1:{web_port}\", \"copy\": True},\n    ],\n}, ensure_ascii=False))\nPY\n",
+      "install": "#!/usr/bin/env bash\n# magpie 适配脚本（KHC 应用清单 / 第一份适配）。\n#\n# 目标：装完不需要再登录 VM。脚本自己下载校验二进制、生成 web 登录 key、\n# 写 systemd user unit、启动并把「带 key 的登录链接」回传到面板。\n# 只监听 127.0.0.1；Caddy 反代由主人在面板里另行发布。\n#\n# 可用环境变量（由执行器注入）：\n#   KHC_APP_HOME     应用可写根目录（属主 = 运行用户）\n#   KHC_INSTANCE     实例名\n#   KHC_PARAM_*      安装表单里填的参数\n#   KHC_RESULT_FILE  也可把结果写这里\nset -euo pipefail\n\nVER=\"0.1.4265\"\nPORT=\"${KHC_PARAM_PORT:-3425}\"\nWEB_PORT=\"${KHC_PARAM_WEB_PORT:-3430}\"\nPUBLIC_URL=\"${KHC_PARAM_PUBLIC_URL:-}\"\nWEB_KEY=\"${KHC_PARAM_WEB_KEY:-}\"\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-magpie-${INSTANCE}.service\"\n# systemd user manager 只在 $HOME/.config/systemd/user 找 unit（路径由 user@.service\n# 启动时固定），所以 unit 必须写进真实家目录；执行器 create 模式已把家目录\n# 建在 /var/lib/khc-apps/home/<user>。其余文件也统一放家目录下，便于卸载清理。\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nBIN_DIR=\"$USER_HOME/bin\"\nCONF_DIR=\"$USER_HOME/.config\"\nUNIT_DIR=\"$CONF_DIR/systemd/user\"\nSTATE_DIR=\"$USER_HOME/.local\"\nKEY_FILE=\"$CONF_DIR/khc-magpie-${INSTANCE}.web.key\"\nBIN=\"$BIN_DIR/magpie-$VER\"\nUNIT=\"$UNIT_DIR/$UNIT_NAME\"\n\nmkdir -p \"$BIN_DIR\" \"$CONF_DIR\" \"$UNIT_DIR\" \"$STATE_DIR/data\" \"$STATE_DIR/state\" \"$STATE_DIR/cache\"\n# 兼容：若之前装在 KHC_APP_HOME 下，把登录 key 迁过来，保持登录链接不变\nif [ ! -s \"$KEY_FILE\" ] && [ -s \"$APP_HOME/config/web.key\" ]; then\n  cp \"$APP_HOME/config/web.key\" \"$KEY_FILE\"\nfi\n\n# ---- 1. 下载并校验二进制（固定版本 + 固定 sha256，不用官方 install.sh，避免自更新）----\ncase \"$(uname -m)\" in\n  x86_64|amd64)\n    ARCH=amd64\n    SHA=\"21120a89b1683b1c4445856caed7cf2b0c5805cdf0fb7c96b03ee620114cd87e\" ;;\n  aarch64|arm64)\n    ARCH=arm64\n    SHA=\"c855bc06c4bcd97a9a8230f39f9da165f98964d6725a7d08abfc87ea4f677fbb\" ;;\n  *) echo \"不支持的 CPU 架构: $(uname -m)\" >&2; exit 1 ;;\nesac\nURL=\"https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-cli-linux-${ARCH}\"\n\nif [ ! -x \"$BIN\" ]; then\n  TMP=\"$(mktemp \"${TMPDIR:-/tmp}/khc-magpie.XXXXXX\")\"\n  trap 'rm -f -- \"$TMP\"' EXIT\n  # 91MB 的 GitHub release：不限连接/总时长就会一直挂着不出错（国内出站尤其明显），\n  # 面板那边只能看到进度停在 1%。这里给足三道闸：连接超时、总时长、低速率判死。\n  DL_MAX=\"${KHC_DL_MAX_TIME:-600}\"\n  echo \"下载 $URL（约 90MB，最长等 ${DL_MAX}s）\"\n  dl_fail() {\n    local got\n    got=\"$(wc -c < \"$TMP\" 2>/dev/null || echo 0)\"\n    echo \"下载失败：$1；已下载 ${got} 字节（完整文件应为 91MB 级别）\" >&2\n    echo \"排查：在该机器执行 curl -I $URL 看能否出站；拉不动就给节点配代理，\" >&2\n    echo \"      或手工把二进制放到 $BIN（sha256 须为 ${SHA}）\" >&2\n    exit 1\n  }\n  if command -v curl >/dev/null 2>&1; then\n    # --speed-limit 8KB + --speed-time 60：连续 60 秒低于 8KB/s 视为卡死，主动放弃\n    curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time \"$DL_MAX\" \\\n      --speed-limit 8192 --speed-time 60 -o \"$TMP\" \"$URL\" || dl_fail \"curl 失败\"\n  elif command -v wget >/dev/null 2>&1; then\n    wget -q --tries=3 --timeout=30 --read-timeout=60 -O \"$TMP\" \"$URL\" || dl_fail \"wget 失败\"\n  else\n    echo \"需要 curl 或 wget\" >&2; exit 1\n  fi\n  [ -s \"$TMP\" ] || dl_fail \"下载到的是空文件\"\n  ACTUAL=\"$(sha256sum \"$TMP\" | awk '{print $1}')\"\n  if [ \"$ACTUAL\" != \"$SHA\" ]; then\n    echo \"sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装\" >&2\n    exit 1\n  fi\n  install -m 0755 \"$TMP\" \"$BIN\"\n  rm -f -- \"$TMP\"\n  trap - EXIT\n  echo \"二进制已就位：$BIN\"\nfi\n\n# ---- 2. web 登录 key：可指定，未指定则生成一次并复用（重装后登录链接不变）----\n# 16+ 字符，只允许字母数字与 - . _ ~（magpie 的约束）\nif [ -n \"$WEB_KEY\" ]; then\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nelif [ -s \"$KEY_FILE\" ]; then\n  WEB_KEY=\"$(cat \"$KEY_FILE\")\"\nelse\n  WEB_KEY=\"$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)\"\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nfi\nchmod 0600 \"$KEY_FILE\"\nif [ \"${#WEB_KEY}\" -lt 16 ]; then\n  echo \"webKey 至少需要 16 位\" >&2; exit 1\nfi\n\n# ---- 3. 写 systemd user unit（应用用户自己的 unit，不需要 root）----\n# 只绑 127.0.0.1：网关 PORT、web 管理页 WEB_PORT。\n# MAGPIE_WEB_URL 让日志/页面打印通过 Caddy 的对外链接；\n# 主人填了 publicUrl 才设置，未填就是纯本地链接。\nEXTRA_ENV=\"\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  EXTRA_ENV=\"Environment=MAGPIE_WEB_URL=${PUBLIC_URL%/}\"\nfi\ncat > \"$UNIT\" <<EOF\n[Unit]\nDescription=magpie gateway + web UI (${INSTANCE})\nAfter=network.target\n\n[Service]\nType=simple\nEnvironment=HOME=$USER_HOME\nEnvironment=XDG_CONFIG_HOME=$CONF_DIR\nEnvironment=XDG_DATA_HOME=$STATE_DIR/data\nEnvironment=XDG_STATE_HOME=$STATE_DIR/state\nEnvironment=XDG_CACHE_HOME=$STATE_DIR/cache\nEnvironment=MAGPIE_ADDR=127.0.0.1:$PORT\nEnvironment=MAGPIE_WEB_KEY=$WEB_KEY\n$EXTRA_ENV\nExecStart=$BIN serve --web=127.0.0.1:$WEB_PORT\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\nEOF\nchmod 0600 \"$UNIT\"\n\n# ---- 4. 启动（降权用户自己的 user manager；执行器已 enable-linger）----\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\nsystemctl --user daemon-reload\n# 一律 restart：升级会回退执行本脚本，enable --now 不会重启已在运行的服务，新版二进制 / 新 unit 不生效。\nsystemctl --user enable \"$UNIT_NAME\"\nsystemctl --user restart \"$UNIT_NAME\"\n\n# ---- 5. 等待两个端口就绪 ----\nfor _ in $(seq 1 30); do\n  if curl -s -o /dev/null -m 2 \"http://127.0.0.1:$WEB_PORT/\" && \\\n     curl -s -o /dev/null -m 2 \"http://127.0.0.1:$PORT/v1/models\"; then\n    break\n  fi\n  sleep 1\ndone\n\n# ---- 6. 把「点一下就能登录」的链接回传面板 ----\nLOGIN_LOCAL=\"http://127.0.0.1:$WEB_PORT/?k=$WEB_KEY\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  LOGIN_URL=\"${PUBLIC_URL%/}/?k=$WEB_KEY\"\nelse\n  LOGIN_URL=\"$LOGIN_LOCAL\"\nfi\n\npython3 - \"$LOGIN_URL\" \"$PORT\" \"$WEB_KEY\" \"$VER\" <<'PY'\nimport json, sys\nlogin, port, key, version = sys.argv[1:5]\n# 只输出 cards（kind 供面板决定展示与脱敏，primary 标出完成页主按钮）\ncards = [\n    {\"title\": \"Web 管理页（点击登录）\", \"value\": login, \"kind\": \"url\", \"primary\": True, \"copy\": True},\n    {\"title\": \"Web 登录 Key\", \"value\": key, \"kind\": \"secret\", \"copy\": True},\n    {\"title\": \"网关地址（仅本机）\", \"value\": f\"http://127.0.0.1:{port}\", \"kind\": \"text\", \"copy\": True},\n    {\"title\": \"magpie 版本\", \"value\": version, \"kind\": \"text\", \"copy\": False},\n]\nprint(\"KHC_RESULT=\" + json.dumps({\"cards\": cards}, ensure_ascii=False))\nPY\n",
       "uninstall": "#!/usr/bin/env bash\n# magpie 卸载：把 install 写下的东西全部清掉——服务、unit、二进制、配置与登录 key、\n# 数据/状态/缓存目录，以及 KHC_APP_HOME 里的残留。\n#\n# 幂等：没装过也能跑；清完逐项复查，仍有残留就在 KHC_RESULT 里点名并 exit 1，\n# 不假装「已卸载」。面板创建的系统账号由执行器管理，不在这里删。\nset -euo pipefail\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-magpie-${INSTANCE}.service\"\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nCONF_DIR=\"$USER_HOME/.config\"\nUNIT_DIR=\"$CONF_DIR/systemd/user\"\nSTATE_DIR=\"$USER_HOME/.local\"\nBIN_DIR=\"$USER_HOME/bin\"\nKEY_FILE=\"$CONF_DIR/khc-magpie-${INSTANCE}.web.key\"\n\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\n\n# ---- 1. 停服务 ----\nsystemctl --user disable --now \"$UNIT_NAME\" >/dev/null 2>&1 || true\nsystemctl --user reset-failed \"$UNIT_NAME\" >/dev/null 2>&1 || true\n\n# ---- 2. unit 与二进制 ----\nrm -f \"$UNIT_DIR/$UNIT_NAME\"\nrm -f \"$UNIT_DIR/default.target.wants/$UNIT_NAME\"\n# 只删 magpie 自己的二进制，不动同目录下别的应用\nrm -rf \"$BIN_DIR\"/magpie-* 2>/dev/null || true\nsystemctl --user daemon-reload >/dev/null 2>&1 || true\n\n# ---- 3. 配置、登录 key、数据与缓存（magpie 会在这里放索引与模型）----\nrm -f \"$KEY_FILE\"\nrm -rf \"$STATE_DIR/data\" \"$STATE_DIR/state\" \"$STATE_DIR/cache\"\nif [ -n \"$APP_HOME\" ] && [ -d \"$APP_HOME\" ]; then\n  rm -rf \"${APP_HOME:?}\"/.[!.]* \"${APP_HOME:?}\"/* 2>/dev/null || true\nfi\n\n# ---- 4. 复查：不假装清干净 ----\nLEFTOVERS=()\nfor path in \\\n  \"$UNIT_DIR/$UNIT_NAME\" \\\n  \"$UNIT_DIR/default.target.wants/$UNIT_NAME\" \\\n  \"$KEY_FILE\" \\\n  \"$STATE_DIR/data\" \\\n  \"$STATE_DIR/state\" \\\n  \"$STATE_DIR/cache\"; do\n  [ -e \"$path\" ] && LEFTOVERS+=(\"$path\")\ndone\nwhile IFS= read -r leftover; do\n  [ -n \"$leftover\" ] && LEFTOVERS+=(\"$leftover\")\ndone < <(find \"$BIN_DIR\" -maxdepth 1 -name 'magpie-*' 2>/dev/null || true)\n\npython3 - \"$INSTANCE\" \"${LEFTOVERS[*]:-}\" <<'PY'\nimport json, sys\ninstance, raw = sys.argv[1], sys.argv[2]\nleftovers = [item for item in raw.split() if item]\ncards = [{\"title\": \"magpie\", \"value\": \"已卸载（unit / 二进制 / 配置 / 数据已清理）\", \"copy\": False}]\naccess = []\nif leftovers:\n    cards.append({\"title\": \"残留\", \"value\": f\"{len(leftovers)} 项\", \"copy\": False})\n    access.append({\n        \"label\": \"清理未完成\",\n        \"value\": \"、\".join(leftovers),\n        \"kind\": \"text\",\n        \"copy\": True,\n    })\nprint(\"KHC_RESULT=\" + json.dumps(\n    {\"access\": access, \"cards\": cards, \"warnings\": leftovers, \"instance\": instance},\n    ensure_ascii=False,\n))\nPY\n\nif [ ${#LEFTOVERS[@]} -gt 0 ]; then\n  echo \"卸载后有残留：${LEFTOVERS[*]}\" >&2\n  exit 1\nfi\n"
     },
     "sha256": {
-      "install": "ad243d130389da3e542a3e6a36dfc2d158df913e22d40557e94952dd3e8a0ce1",
+      "install": "4807fb8c3a206cbad9d7dbed5603a65d3ddd17873dfea6799f524c6b065f0673",
       "uninstall": "05cfa9bb3d00d8afb58276ee72d13f7176037787d41c52003b2d15c1e9ae6cf5"
-    },
-    "publish": {
-      "label": "Web 管理页",
-      "host": "127.0.0.1",
-      "portParam": "web_port",
-      "port": 3430
     },
     "writes": [
       "~/.local/share/khc-apps/magpie"
-    ]
-  },
-  "enabled": true,
-  "priorManifests": [
-    {
-      "name": "magpie",
-      "version": "0.1.4265",
-      "runtime": {
-        "mode": "create",
-        "user": "khc-app-magpie",
-        "linger": true
-      },
-      "params": [
-        {
-          "key": "port",
-          "type": "integer",
-          "label": "网关端口",
-          "default": 3425,
-          "min": 1024,
-          "max": 65535
-        },
-        {
-          "key": "web_port",
-          "type": "integer",
-          "label": "Web 管理页端口",
-          "default": 3430,
-          "min": 1024,
-          "max": 65535
-        },
-        {
-          "key": "public_url",
-          "type": "string",
-          "label": "Caddy 发布后的对外地址（可选）",
-          "default": ""
-        },
-        {
-          "key": "web_key",
-          "type": "string",
-          "label": "Web 登录 Key（留空自动生成）",
-          "default": ""
-        }
-      ],
-      "scripts": {
-        "install": "#!/usr/bin/env bash\n# magpie 适配脚本（KHC 应用清单 / 第一份适配）。\n#\n# 目标：装完不需要再登录 VM。脚本自己下载校验二进制、生成 web 登录 key、\n# 写 systemd user unit、启动并把「带 key 的登录链接」回传到面板。\n# 只监听 127.0.0.1；Caddy 反代由主人在面板里另行发布。\n#\n# 可用环境变量（由执行器注入）：\n#   KHC_APP_HOME     应用可写根目录（属主 = 运行用户）\n#   KHC_INSTANCE     实例名\n#   KHC_PARAM_*      安装表单里填的参数\n#   KHC_RESULT_FILE  也可把结果写这里\nset -euo pipefail\n\nVER=\"0.1.4265\"\nPORT=\"${KHC_PARAM_PORT:-3425}\"\nWEB_PORT=\"${KHC_PARAM_WEB_PORT:-3430}\"\nPUBLIC_URL=\"${KHC_PARAM_PUBLIC_URL:-}\"\nWEB_KEY=\"${KHC_PARAM_WEB_KEY:-}\"\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-magpie-${INSTANCE}.service\"\n# systemd user manager 只在 $HOME/.config/systemd/user 找 unit（路径由 user@.service\n# 启动时固定），所以 unit 必须写进真实家目录；执行器 create 模式已把家目录\n# 建在 /var/lib/khc-apps/home/<user>。其余文件也统一放家目录下，便于卸载清理。\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nBIN_DIR=\"$USER_HOME/bin\"\nCONF_DIR=\"$USER_HOME/.config\"\nUNIT_DIR=\"$CONF_DIR/systemd/user\"\nSTATE_DIR=\"$USER_HOME/.local\"\nKEY_FILE=\"$CONF_DIR/khc-magpie-${INSTANCE}.web.key\"\nBIN=\"$BIN_DIR/magpie-$VER\"\nUNIT=\"$UNIT_DIR/$UNIT_NAME\"\n\nmkdir -p \"$BIN_DIR\" \"$CONF_DIR\" \"$UNIT_DIR\" \"$STATE_DIR/data\" \"$STATE_DIR/state\" \"$STATE_DIR/cache\"\n# 兼容：若之前装在 KHC_APP_HOME 下，把登录 key 迁过来，保持登录链接不变\nif [ ! -s \"$KEY_FILE\" ] && [ -s \"$APP_HOME/config/web.key\" ]; then\n  cp \"$APP_HOME/config/web.key\" \"$KEY_FILE\"\nfi\n\n# ---- 1. 下载并校验二进制（固定版本 + 固定 sha256，不用官方 install.sh，避免自更新）----\ncase \"$(uname -m)\" in\n  x86_64|amd64)\n    ARCH=amd64\n    SHA=\"21120a89b1683b1c4445856caed7cf2b0c5805cdf0fb7c96b03ee620114cd87e\" ;;\n  aarch64|arm64)\n    ARCH=arm64\n    SHA=\"c855bc06c4bcd97a9a8230f39f9da165f98964d6725a7d08abfc87ea4f677fbb\" ;;\n  *) echo \"不支持的 CPU 架构: $(uname -m)\" >&2; exit 1 ;;\nesac\nURL=\"https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-cli-linux-${ARCH}\"\n\nif [ ! -x \"$BIN\" ]; then\n  TMP=\"$(mktemp \"${TMPDIR:-/tmp}/khc-magpie.XXXXXX\")\"\n  trap 'rm -f -- \"$TMP\"' EXIT\n  echo \"下载 $URL\"\n  if command -v curl >/dev/null 2>&1; then\n    curl -fsSL --retry 2 -o \"$TMP\" \"$URL\"\n  elif command -v wget >/dev/null 2>&1; then\n    wget -q -O \"$TMP\" \"$URL\"\n  else\n    echo \"需要 curl 或 wget\" >&2; exit 1\n  fi\n  ACTUAL=\"$(sha256sum \"$TMP\" | awk '{print $1}')\"\n  if [ \"$ACTUAL\" != \"$SHA\" ]; then\n    echo \"sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装\" >&2\n    exit 1\n  fi\n  install -m 0755 \"$TMP\" \"$BIN\"\n  rm -f -- \"$TMP\"\n  trap - EXIT\nfi\n\n# ---- 2. web 登录 key：可指定，未指定则生成一次并复用（重装后登录链接不变）----\n# 16+ 字符，只允许字母数字与 - . _ ~（magpie 的约束）\nif [ -n \"$WEB_KEY\" ]; then\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nelif [ -s \"$KEY_FILE\" ]; then\n  WEB_KEY=\"$(cat \"$KEY_FILE\")\"\nelse\n  WEB_KEY=\"$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)\"\n  printf '%s' \"$WEB_KEY\" > \"$KEY_FILE\"\nfi\nchmod 0600 \"$KEY_FILE\"\nif [ \"${#WEB_KEY}\" -lt 16 ]; then\n  echo \"webKey 至少需要 16 位\" >&2; exit 1\nfi\n\n# ---- 3. 写 systemd user unit（应用用户自己的 unit，不需要 root）----\n# 只绑 127.0.0.1：网关 PORT、web 管理页 WEB_PORT。\n# MAGPIE_WEB_URL 让日志/页面打印通过 Caddy 的对外链接；\n# 主人填了 publicUrl 才设置，未填就是纯本地链接。\nEXTRA_ENV=\"\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  EXTRA_ENV=\"Environment=MAGPIE_WEB_URL=${PUBLIC_URL%/}\"\nfi\ncat > \"$UNIT\" <<EOF\n[Unit]\nDescription=magpie gateway + web UI (${INSTANCE})\nAfter=network.target\n\n[Service]\nType=simple\nEnvironment=HOME=$USER_HOME\nEnvironment=XDG_CONFIG_HOME=$CONF_DIR\nEnvironment=XDG_DATA_HOME=$STATE_DIR/data\nEnvironment=XDG_STATE_HOME=$STATE_DIR/state\nEnvironment=XDG_CACHE_HOME=$STATE_DIR/cache\nEnvironment=MAGPIE_ADDR=127.0.0.1:$PORT\nEnvironment=MAGPIE_WEB_KEY=$WEB_KEY\n$EXTRA_ENV\nExecStart=$BIN serve --web=127.0.0.1:$WEB_PORT\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\nEOF\nchmod 0600 \"$UNIT\"\n\n# ---- 4. 启动（降权用户自己的 user manager；执行器已 enable-linger）----\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\nsystemctl --user daemon-reload\nsystemctl --user enable --now \"$UNIT_NAME\"\n\n# ---- 5. 等待两个端口就绪 ----\nfor _ in $(seq 1 30); do\n  if curl -s -o /dev/null -m 2 \"http://127.0.0.1:$WEB_PORT/\" && \\\n     curl -s -o /dev/null -m 2 \"http://127.0.0.1:$PORT/v1/models\"; then\n    break\n  fi\n  sleep 1\ndone\n\n# ---- 6. 把「点一下就能登录」的链接回传面板 ----\nLOGIN_LOCAL=\"http://127.0.0.1:$WEB_PORT/?k=$WEB_KEY\"\nif [ -n \"$PUBLIC_URL\" ]; then\n  LOGIN_URL=\"${PUBLIC_URL%/}/?k=$WEB_KEY\"\nelse\n  LOGIN_URL=\"$LOGIN_LOCAL\"\nfi\n\npython3 - \"$LOGIN_URL\" \"$PORT\" \"$WEB_PORT\" \"$WEB_KEY\" \"$VER\" \"$PUBLIC_URL\" <<'PY'\nimport json, sys\nlogin, port, web_port, key, version, public = sys.argv[1:7]\naccess = [\n    {\"label\": \"Web 管理页（点击登录）\", \"value\": login, \"kind\": \"url\", \"copy\": True},\n    {\"label\": \"网关地址（供 Agent 使用）\", \"value\": f\"http://127.0.0.1:{port}\", \"kind\": \"url\", \"copy\": True},\n    {\"label\": \"Caddy 反代目标（发布本机端口）\", \"value\": f\"127.0.0.1:{web_port}\", \"kind\": \"text\", \"copy\": True},\n    {\"label\": \"Web 登录 Key\", \"value\": key, \"kind\": \"text\", \"copy\": True},\n]\nif not public:\n    access.append({\n        \"label\": \"说明\",\n        \"value\": \"当前只监听 127.0.0.1。到面板「发布本机端口」把上面端口发布出去，再回来点登录链接。\",\n        \"kind\": \"text\", \"copy\": False,\n    })\nprint(\"KHC_RESULT=\" + json.dumps({\n    \"access\": access,\n    \"cards\": [\n        {\"title\": \"magpie 版本\", \"value\": version, \"copy\": False},\n        {\"title\": \"Web 登录 Key\", \"value\": key, \"copy\": True},\n        {\"title\": \"监听\", \"value\": f\"127.0.0.1:{port} / 127.0.0.1:{web_port}\", \"copy\": True},\n    ],\n}, ensure_ascii=False))\nPY\n",
-        "uninstall": "#!/usr/bin/env bash\n# magpie 卸载：停 user unit、删 unit 与二进制，保留登录 key 以便重装后链接不变。\nset -euo pipefail\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-magpie-${INSTANCE}.service\"\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nCONF_DIR=\"$USER_HOME/.config\"\n\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\nsystemctl --user disable --now \"$UNIT_NAME\" >/dev/null 2>&1 || true\nrm -f \"$CONF_DIR/systemd/user/$UNIT_NAME\"\nrm -f \"$CONF_DIR/systemd/user/default.target.wants/$UNIT_NAME\"\nsystemctl --user daemon-reload >/dev/null 2>&1 || true\nrm -rf \"$USER_HOME/bin\"\n\nprintf 'KHC_RESULT=%s\\n' '{\"access\":[],\"cards\":[{\"title\":\"magpie\",\"value\":\"已卸载\",\"copy\":false}]}'\n"
-      },
-      "sha256": {
-        "install": "5eb195b6991df47a0cc11537ef8e8e04c0a774127c273c638c1ea1b7f85a0800",
-        "uninstall": "07d8a5d01f6f7f8104b2729625cbbba23fbf790e686cc28f7c969a4c0e4e72f2"
-      },
-      "writes": [
-        "~/.local/share/khc-apps/magpie"
-      ],
-      "publish": {
-        "label": "Web 管理页",
-        "host": "127.0.0.1",
-        "portParam": "web_port",
-        "port": 3430
+    ],
+    "units": [
+      {
+        "name": "khc-magpie-{{instance}}.service",
+        "scope": "user"
       }
-    }
-  ]
+    ],
+    "health": {
+      "type": "tcp",
+      "portParam": "web_port",
+      "graceSec": 60
+    },
+    "endpoints": [
+      {
+        "id": "web",
+        "label": "Web 管理页",
+        "protocol": "http",
+        "portParam": "web_port",
+        "bind": "loopback",
+        "publish": "caddy",
+        "auth": {
+          "type": "key-in-url",
+          "hint": "登录链接中的 ?k= 即凭据"
+        }
+      },
+      {
+        "id": "gateway",
+        "label": "网关",
+        "protocol": "http",
+        "portParam": "port",
+        "bind": "loopback",
+        "publish": "none",
+        "auth": {
+          "type": "none",
+          "hint": "OpenAI / Anthropic / Gemini 兼容端点，仅本机"
+        }
+      }
+    ],
+    "sources": [
+      {
+        "host": "github.com",
+        "purpose": "magpie 发布包（固定版本 + sha256）",
+        "pinned": true
+      },
+      {
+        "host": "release-assets.githubusercontent.com",
+        "purpose": "magpie 发布包下载重定向（固定版本 + sha256）",
+        "pinned": true
+      }
+    ]
+  }
 }

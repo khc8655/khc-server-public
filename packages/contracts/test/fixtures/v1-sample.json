@@ -1,0 +1,60 @@
+{
+  "id": "v1-sample",
+  "enabled": true,
+  "manifest": {
+    "name": "v1-sample",
+    "version": "0.1.4265",
+    "runtime": {
+      "mode": "create",
+      "user": "khc-app-magpie",
+      "linger": true
+    },
+    "params": [
+      {
+        "key": "port",
+        "type": "integer",
+        "label": "网关端口",
+        "default": 3425,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "web_port",
+        "type": "integer",
+        "label": "Web 管理页端口",
+        "default": 3430,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "public_url",
+        "type": "string",
+        "label": "Caddy 发布后的对外地址（可选）",
+        "default": ""
+      },
+      {
+        "key": "web_key",
+        "type": "string",
+        "label": "Web 登录 Key（留空自动生成）",
+        "default": ""
+      }
+    ],
+    "scripts": {
+      "install": "#!/usr/bin/env bash\necho install\n",
+      "uninstall": "#!/usr/bin/env bash\necho uninstall\n"
+    },
+    "sha256": {
+      "install": "ee24bf9742c15ee2b12dc52fd07ceb9aec5a473045c43498fb2dc02f167ac699",
+      "uninstall": "4d7dc0238e25499a132672928f4a23eb1509473ae27f8431b0b5b659171297d8"
+    },
+    "publish": {
+      "label": "Web 管理页",
+      "host": "127.0.0.1",
+      "portParam": "web_port",
+      "port": 3430
+    },
+    "writes": [
+      "~/.local/share/khc-apps/magpie"
+    ]
+  }
+}

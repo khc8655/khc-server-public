@@ -2,7 +2,7 @@
 
 > 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §8、§11 V5、§12 第 4–5 项；`docs/verification/2026-11-23/manifest-v2-live.md` §五-2
 
-> **给开发 agent**：开工前提：**V4 已合入**，**V4.1、V4.2 已合入**（Worker 对 upgrade / uninstall 转发原始 `values`，§8.2 依赖它），V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
+> **给开发 agent**：开工前提：**V4 已合入**，**V4.1、V4.2 已合入**（Worker 对 upgrade / uninstall 转发原始 `values`，§8.2 依赖它），V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。**§12 开工前推演是本文的一部分，与正文冲突时以 §12 为准。** 认为本文有误时在 PR 里提出；设计任务的修订随你的 PR 一起提交（提案 §13）。
 
 ## 0. 速览
 
@@ -11,7 +11,7 @@
 | V5a | `feat/app-library` | §2 去打包、§3 导入、§4 推送脚本、§5 magpie v2、§6 校验脚本通用化 | A + W，面板 **minor** |
 | V5b | `chore/remove-legacy-recipes` | §7 旧 recipe 删除、§8 Agent 0.8.1（8.1 用户总线就绪、8.2 安装记录保存参数值） | G + P，Agent **patch → 0.8.1**；面板不 bump（无 `apps/` 改动时） |
 
-合并顺序：V5a → 在测试节点用新导入功能导入 magpie v2 并回归 → V5b → 测试节点升级 0.8.1 → 滚动升级。
+合并顺序：V4.2（0.41.2）→ V5a（0.42.0）→ 在测试节点用新导入功能导入 magpie v2 并回归 → V5b → 测试节点升级 0.8.1 → 滚动升级。V5a 可与 V4.2 并行开发，V4.2 合入后 rebase（冲突点：`apps/api/src/routes/appManifests.ts`、`docs/hosted-apps.md`、CHANGELOG、`package.json`）。V5b 可在 V5a 推送后立即开工，不必等 V5a 审完。
 
 ## 1. 开工前核对（结果写进 V5b 的 PR 描述）
 
@@ -145,3 +145,43 @@ V4 真机证据 §五-1：安装记录不保存参数值，升级时只能拿到
 - [ ] schema 校验只有一个来源（contracts）；卸载测试按 fixture 遍历全部应用
 - [ ] 旧 recipe 文件与引用全部删除，`pkg.py` 保留；`recipe_*` 别名保留
 - [ ] 0.8.1 总线就绪修复与测试；安装记录保存 `values`、不外泄、升级三层合并、`param_invalid` + `field`；`docs/security-boundaries.md` 写明安装记录含参数值（0600，root）；文档六处；版本号正确
+## 12. 开工前推演（2026-11-23，设计任务逐动作核对代码后补充；与正文冲突时以本节为准）
+
+按「安装 / 升级 / 卸载 / 控制 / 日志 / 预检」× 前端 → Worker → Agent 逐条核对 `main`（15a9008）后的结论。
+
+### 12.1 magpie v2 数据（修订 §5）
+
+1. `public_url` 改 `derive` 后**保留 `default: ""`**；`web_key` 保留 `default: ""`。原因：V4.2 起 preUpgrade / preUninstall 不能引用无默认值参数（magpie 不声明 hooks，但保持一致）；0.8.0 节点升级时不记得安装值，无默认值会直接报缺失。`install.sh` 在 `WEB_KEY` 为空时沿用 `$KEY_FILE`（第 93–99 行），升级不会换 Key。
+2. 已知代价：0.8.0 节点上升级 magpie，`public_url` 回到 `""`，单元里 `MAGPIE_WEB_URL` 被去掉，登录链接变回本机地址；0.8.1 起由安装记录保留。证据里如实记录，不算缺陷。
+3. `sources`：GitHub 发布包的重定向主机近年有变化。开发时用 `curl -sI <下载地址>` 实测一次，把**实际出现的全部主机**列进 `sources`（不要照抄本文的 `objects.githubusercontent.com`）。
+4. `units` 名 `khc-magpie-{{instance}}.service` 与 `install.sh` / `uninstall.sh` 的 `UNIT_NAME` 一致（第 23 / 11 行），v1 安装的实例改用 v2 清单控制、卸载都能对上，不要改脚本里的命名。
+5. `uninstall-fixture.json` 至少覆盖：`$CONF_DIR/khc-magpie-<instance>.web.key`、`$APP_HOME/config/web.key`（旧位置）、user unit 文件及 `default.target.wants` 链接、二进制、`writes` 声明的目录。
+
+### 12.2 v1 → v2 过渡（补 §10，最关键的一条真机路径）
+
+生产 D1 的 magpie 现在是 v1。V5a 合入前，先在测试节点用**现有 v1 清单**装一个 magpie（不发布）；V5a 合入并导入 magpie v2 后，对这个实例依次做：抽屉显示 v2 与「升级到 0.1.4265-khc.2」→ 升级（0.8.0 上应成功，`public_url` 回到空、Web Key 不变）→ 重启 → 日志 → 卸载干净。这一条替代 §10 里「一台仍装着 v1 magpie 的节点」（大概率不存在）。
+
+### 12.3 开工前核对（补 §1）
+
+3. 三台节点的已装条目里，`instance !== manifestId` 的条目（早期手工测试留下的 `default` 等）：前端从不发送 `instance`，这些条目在面板上**卸不掉**。V5b 之前用同源 API 带 `instance` 卸载，结果写进 PR 描述。
+
+### 12.4 Agent 0.8.1（补 §8.2）
+
+1. **日志遮罩用合并后的值**：`_secret_values` 现在只看请求 `values`。改为对「请求值 > 记录值 > 默认值」合并后的结果计算，否则从记录取出的 secret 若被脚本打印，不会被遮罩。测试：secret 只存在于记录里、请求不带，脚本 `echo` 该值，任务日志里应为遮罩。
+2. `values` 中 `derive` 参数照存（升级不重新推导）。
+3. 记录读写只经 `run_manifest` 与 `_validate_values_both`，不要新增第二条读取 `values` 的路径。
+
+### 12.5 导入（补 §3）
+
+保存被 Worker 拒绝时（如 V4.2 的 `manifest_invalid`，带 `fields`），导入抽屉按 `fields` 路径标出，不要只显示一行错误。
+
+### 12.6 推送脚本（补 §4）
+
+`scripts/lib/relay-latency.mjs` 只提供 `sessionCookie` 解析。登录流程（含 TOTP）若该文件没有现成函数，按 `/api/v1/auth/login` 契约在推送脚本里实现，并抽到 `scripts/lib/` 供两个脚本共用；不要复制粘贴。
+
+### 12.7 证据（替代 §10 的截图要求，按提案 §13 轻流程）
+
+- 不再要求浅色 / 深色 / 390 宽三套截图；V5a 只截一张导入差异确认页。
+- V5a 的真机路径（§12.2 与导入）写进 **V5b 的 PR**；V5b 的真机路径（0.8.1 首装、升级沿用参数、`/state` 与日志搜不到参数值、滚动升级）合入部署后写进 **V6 的 PR**。两段都写入 `docs/verification/<日期>/app-library.md`。
+
+

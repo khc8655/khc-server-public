@@ -14,7 +14,8 @@
  */
 import crypto from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { cookieValue, renderMarkdown, sessionCookie, summarize } from './lib/relay-latency.mjs';
+import { renderMarkdown, sessionCookie, summarize } from './lib/relay-latency.mjs';
+import { loginAdmin, makeCookieJar } from './lib/admin-session.mjs';
 
 const SNAPSHOT_DEDUPE_WAIT_MS = 2100;
 
@@ -51,25 +52,6 @@ function parseArgs(argv) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function makeCookieJar() {
-  let sess = null;
-  let d1bm = null;
-  return {
-    header() {
-      return [sess, d1bm].filter(Boolean).join('; ') || null;
-    },
-    update(headers) {
-      const nextSess = sessionCookie(headers);
-      if (nextSess) sess = nextSess;
-      const nextBm = cookieValue(headers, 'khc_d1bm');
-      if (nextBm) d1bm = nextBm;
-    },
-    hasSession() {
-      return Boolean(sess);
-    },
-  };
-}
-
 async function timedFetch(
   base,
   path,
@@ -103,14 +85,6 @@ async function timedFetch(
   };
 }
 
-async function login(base, password, totp, jar) {
-  const payload = totp ? { password, totp } : { password };
-  const res = await timedFetch(base, '/api/v1/auth/login', { method: 'POST', jar, body: payload });
-  if (res.status !== 200 || !jar.hasSession()) {
-    throw new Error(`登录 ${base} 失败（status=${res.status}）`);
-  }
-}
-
 async function sampleSeries(runs, fn, gapMs = 0) {
   const samples = [];
   for (let i = 0; i < runs; i += 1) {
@@ -134,7 +108,7 @@ async function main() {
   for (const base of opts.bases) {
     const entryHost = new URL(base).host;
     const jar = makeCookieJar();
-    await login(base, password, totp, jar);
+    await loginAdmin(base, password, totp, jar);
 
     const nodesSamples = await sampleSeries(opts.runs, () =>
       timedFetch(base, '/api/v1/nodes', { jar }),

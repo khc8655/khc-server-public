@@ -43,6 +43,7 @@ import {
   type ColumnDef,
 } from '../../ui';
 import { zh } from '../../i18n/zh';
+import { ImportAppDrawer } from './ImportAppDrawer';
 
 interface ManifestForm {
   mode: 'create' | 'update';
@@ -86,11 +87,18 @@ function hookHost(url: string): string {
   }
 }
 
-export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
+export function AppManifests({
+  createSignal = 0,
+  importSignal = 0,
+}: {
+  createSignal?: number;
+  importSignal?: number;
+}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const query = useQuery(appManifestsQueryOptions());
   const [form, setForm] = useState<ManifestForm | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AppManifest | null>(null);
   const [secretEdit, setSecretEdit] = useState<SecretEditState | null>(null);
   const [secretDeleteName, setSecretDeleteName] = useState<string | null>(null);
@@ -123,6 +131,13 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
     if (createSignal > 0) openCreate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createSignal]);
+
+  useEffect(() => {
+    if (importSignal > 0) {
+      setForm(null);
+      setImportOpen(true);
+    }
+  }, [importSignal]);
 
   const openUpdate = (item: AppManifest) => {
     setSecretEdit(null);
@@ -388,13 +403,12 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
         empty={{
           icon: 'box',
           title: '还没有应用',
-          description: '添加第一份应用定义，之后就能在节点应用页里安装。',
-          action: <Button label="添加应用" variant="primary" icon="plus" onClick={openCreate} />,
+          description: '点页头「导入应用」从 JSON、文件或地址导入，或用下方「添加应用」手写一份；之后就能在节点应用页里安装。',
         }}
       />
 
       <Row>
-        <Button label="添加应用" variant="primary" icon="plus" onClick={openCreate} />
+        <Button label="添加应用" icon="plus" onClick={openCreate} />
       </Row>
 
       {form ? (
@@ -636,6 +650,10 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
             ) : null}
           </Stack>
         </Drawer>
+      ) : null}
+
+      {importOpen ? (
+        <ImportAppDrawer rows={rows} onClose={() => setImportOpen(false)} />
       ) : null}
 
       {deleteTarget ? (

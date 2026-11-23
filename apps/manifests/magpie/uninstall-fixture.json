@@ -1,0 +1,21 @@
+{
+  "instance": "default",
+  "home": [
+    "bin/magpie-0.1.4265",
+    ".config/khc-magpie-default.web.key",
+    ".config/systemd/user/khc-magpie-default.service",
+    ".local/data/",
+    ".local/state/",
+    ".local/cache/"
+  ],
+  "appHome": ["config/web.key"],
+  "root": [],
+  "symlinks": [
+    [
+      ".config/systemd/user/default.target.wants/khc-magpie-default.service",
+      ".config/systemd/user/khc-magpie-default.service"
+    ]
+  ],
+  "keep": ["bin/other-app"],
+  "appHomeEmpty": true
+}
