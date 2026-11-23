@@ -407,7 +407,7 @@ describe('B2 工作区单一入口、运维分段缓存与写后精确刷新', (
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     const drawer = await screen.findByRole('dialog');
     await userEvent.type(within(drawer).getByLabelText(/^域名/), 'app.example.dev');
-    const port = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    const port = within(drawer).getByLabelText(/^本机监听端口/) as HTMLInputElement;
     await userEvent.clear(port);
     await userEvent.type(port, '9000');
     await userEvent.click(within(drawer).getByRole('button', { name: '保存并生效' }));

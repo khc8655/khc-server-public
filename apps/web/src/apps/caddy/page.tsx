@@ -111,6 +111,52 @@ interface ServiceError {
   details: string | null;
 }
 
+interface SiteSaveError {
+  message: string;
+  details: string | null;
+  hint: string | null;
+}
+
+function collectErrorLines(raw: unknown, out: string[], depth = 0): void {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 4) return;
+  const record = raw as Record<string, unknown>;
+  for (const key of ['restartStderr', 'systemctlStderr', 'reloadStderr', 'stderr', 'stdout'] as const) {
+    const val = record[key];
+    if (typeof val === 'string' && val.trim()) {
+      out.push(`${key}: ${val.trim()}`);
+    }
+  }
+  const cause = record.cause;
+  if (cause && typeof cause === 'object' && !Array.isArray(cause)) {
+    const causeRec = cause as Record<string, unknown>;
+    if (typeof causeRec.message === 'string' && causeRec.message.trim()) {
+      out.push(`cause: ${causeRec.message.trim()}`);
+    }
+    collectErrorLines(causeRec.details, out, depth + 1);
+  }
+}
+
+function formatErrorDetails(raw: unknown, fields?: Record<string, string>): string | null {
+  const lines: string[] = [];
+  collectErrorLines(raw, lines);
+  if (lines.length > 0) return lines.join('\n');
+  if (raw && typeof raw === 'object' && Object.keys(raw as Record<string, unknown>).length > 0) {
+    try {
+      return JSON.stringify(raw, null, 2);
+    } catch {
+      return null;
+    }
+  }
+  if (fields && Object.keys(fields).length > 0) {
+    try {
+      return JSON.stringify(fields, null, 2);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function message(error: unknown, fallback: string): string {
   const raw =
     error instanceof ApiError
@@ -119,6 +165,20 @@ function message(error: unknown, fallback: string): string {
         ? error.message
         : fallback;
   return friendlyAgentError(raw) ?? fallback;
+}
+
+function extractSaveError(error: unknown, fallback: string): SiteSaveError {
+  const msg = message(error, fallback);
+  const details = error instanceof ApiError ? formatErrorDetails(error.details, error.fields) : null;
+  const combined = `${msg}\n${details ?? ''}`;
+  const isNotActive =
+    /is not active/i.test(combined) ||
+    (/127\.0\.0\.1:2019/i.test(combined) && /connection refused/i.test(combined));
+  return {
+    message: msg,
+    details,
+    hint: isNotActive ? zh.sites.caddyNotActiveHint : null,
+  };
 }
 
 function formatServiceTime(value: string | null): string {
@@ -489,7 +549,7 @@ export default function SitesPage() {
     return undefined;
   })();
   const [errors, setErrors] = useState<SiteErrors>({});
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<SiteSaveError | null>(null);
   const [saving, setSaving] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<{ message: string; details: string | null } | null>(
@@ -693,7 +753,7 @@ export default function SitesPage() {
       if (showPageError && error instanceof ApiError) {
         setApplyError({
           message: error.message,
-          details: error.fields ? JSON.stringify(error.fields, null, 2) : null,
+          details: formatErrorDetails(error.details, error.fields),
         });
       }
       throw error;
@@ -702,10 +762,16 @@ export default function SitesPage() {
       if (showPageError) {
         setApplyError({
           message: envelope.error?.message ?? zh.sites.applyFailed,
-          details: envelope.error?.details ? JSON.stringify(envelope.error.details, null, 2) : null,
+          details: formatErrorDetails(envelope.error?.details),
         });
       }
-      throw new Error(envelopeErrorText(envelope) ?? zh.sites.applyFailed);
+      throw new ApiError(
+        502,
+        envelope.error?.code ?? 'apply_failed',
+        envelopeErrorText(envelope) ?? zh.sites.applyFailed,
+        undefined,
+        envelope.error?.details,
+      );
     }
     setApplyError(null);
     setPendingSiteNames([]);
@@ -931,7 +997,7 @@ export default function SitesPage() {
       toast.show({ message: zh.sites.savedToast });
       closeDrawer();
     } catch (error) {
-      setSaveError(message(error, zh.sites.createFailed));
+      setSaveError(extractSaveError(error, zh.sites.createFailed));
     } finally {
       setSaving(false);
     }
@@ -1874,13 +1940,6 @@ export default function SitesPage() {
           onChange={(patch) => setForm((prev) => (prev ? { ...prev, ...patch } : prev))}
           onClose={closeDrawer}
           onSave={(apply) => void save(apply)}
-          onOpenInstallWizard={() => {
-            closeDrawer();
-            setSelectedInstalledKey(null);
-            setServiceOpen(false);
-            setImportView(null);
-            setWizardOpen(true);
-          }}
         />
       ) : null}
 

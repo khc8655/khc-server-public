@@ -80,6 +80,7 @@ export interface TextInputProps {
   invalid?: boolean;
   autoComplete?: string;
   inputMode?: 'text' | 'numeric' | 'decimal' | 'url';
+  list?: string;
   name?: string;
   ariaLabel?: string;
   onBlur?: () => void;
@@ -100,6 +101,7 @@ export function TextInput({
   invalid = false,
   autoComplete,
   inputMode,
+  list,
   name,
   ariaLabel,
   onBlur,
@@ -128,6 +130,7 @@ export function TextInput({
         disabled={disabled}
         autoComplete={autoComplete}
         inputMode={inputMode}
+        list={list}
         aria-label={ariaLabel}
         aria-invalid={invalid || undefined}
         aria-describedby={invalid ? `${id}-error` : undefined}

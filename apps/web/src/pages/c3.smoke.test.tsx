@@ -583,7 +583,7 @@ describe('C3 页面', () => {
     await screen.findByRole('heading', { name: '应用' });
 
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
-    expect((await screen.findAllByText('上游地址')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('本机监听端口')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('对外端口').length).toBeGreaterThan(0);
 
     const drawer = screen.getAllByRole('dialog').at(-1);

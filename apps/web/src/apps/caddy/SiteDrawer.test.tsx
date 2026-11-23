@@ -100,40 +100,48 @@ function Harness({
   initial,
   nodeOverride,
   existingSites,
-  onOpenInstallWizard,
+  certificates = [],
+  existingDomains = [],
+  saveError = null,
 }: {
   initial?: Partial<SiteFormState>;
   nodeOverride?: Node;
   existingSites?: import('../../data/sites').CaddySite[];
-  onOpenInstallWizard?: () => void;
+  certificates?: { id: string; name: string; domains: string[]; notAfter: number | null }[];
+  existingDomains?: string[];
+  saveError?: string | { message: string; details?: string | null; hint?: string | null } | null;
 }) {
   const [form, setForm] = useState<SiteFormState>(() => ({ ...createForm(), ...initial }));
   return (
     <SiteDrawer
       form={form}
       errors={{}}
-      saveError={null}
+      saveError={saveError}
       saving={false}
       hubId="hub-1"
       hubName="app-1"
       node={nodeOverride ?? node}
-      certificates={[]}
+      certificates={certificates}
       peers={[{ name: 'peer-a', host: '10.20.30.40' }]}
-      existingDomains={[]}
+      existingDomains={existingDomains}
       existingSites={existingSites}
       onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
       onClose={() => {}}
       onSave={() => {}}
       onDelete={async () => {}}
-      onOpenInstallWizard={onOpenInstallWizard}
     />
   );
 }
 
 function renderDrawer(
   initial?: Partial<SiteFormState>,
-  onOpenInstallWizard?: () => void,
-  options?: { nodeOverride?: Node; existingSites?: import('../../data/sites').CaddySite[] },
+  options?: {
+    nodeOverride?: Node;
+    existingSites?: import('../../data/sites').CaddySite[];
+    certificates?: { id: string; name: string; domains: string[]; notAfter: number | null }[];
+    existingDomains?: string[];
+    saveError?: string | { message: string; details?: string | null; hint?: string | null } | null;
+  },
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -142,48 +150,52 @@ function renderDrawer(
         initial={initial}
         nodeOverride={options?.nodeOverride}
         existingSites={options?.existingSites}
-        onOpenInstallWizard={onOpenInstallWizard}
+        certificates={options?.certificates}
+        existingDomains={options?.existingDomains}
+        saveError={options?.saveError}
       />
     </QueryClientProvider>,
   );
 }
 
-describe('站点抽屉上游配置（S2 简化版）', () => {
+describe('站点抽屉上游配置（精简版）', () => {
   beforeEach(stubApi);
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
   });
 
-  it('本机目标直接填端口，不内嵌安装组件并可跳转到「安装并发布应用」向导', async () => {
-    const onOpenInstallWizard = vi.fn();
-    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 }, onOpenInstallWizard);
+  it('本机目标使用「本机监听端口」并精简掉重复域名下拉、启用开关、向导横幅与只读上游灰框', async () => {
+    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 });
 
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
     expect(screen.queryByLabelText('上游来源')).toBeNull();
+    expect(screen.queryByLabelText(/从已有域名选择/)).toBeNull();
+    expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
+    expect(screen.queryByText('启用')).toBeNull();
+    expect(screen.queryByText('上游地址')).toBeNull();
+    expect(document.getElementById('site-upstreams')).toBeNull();
 
-    const portInput = screen.getByLabelText('目标端口') as HTMLInputElement;
+    const portInput = screen.getByLabelText(/^本机监听端口/) as HTMLInputElement;
     await userEvent.clear(portInput);
     await userEvent.type(portInput, '3430');
-    expect(screen.getAllByText('127.0.0.1:3430').length).toBeGreaterThanOrEqual(2);
-
-    await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
-    expect(onOpenInstallWizard).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('127.0.0.1:3430')).toBeTruthy();
   });
 
-  it('目标指向 Peer 时隐藏向导引导并填充 Peer 上游', async () => {
-    const onOpenInstallWizard = vi.fn();
-    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 }, onOpenInstallWizard);
+  it('目标指向 Peer 时不渲染向导与只读上游框，并实时更新顶部路由预览', async () => {
+    renderDrawer({ domains: 'svc.example.com', listenPort: 2083 });
     await userEvent.selectOptions(screen.getByLabelText('目标来源'), '10.20.30.40');
 
     expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
-    expect(screen.getAllByText(/10\.20\.30\.40:/).length).toBeGreaterThanOrEqual(2);
+    expect(document.getElementById('site-upstreams')).toBeNull();
+    expect(screen.getByText(/10\.20\.30\.40:/)).toBeTruthy();
   });
 
-  it('新建站点默认选中本机（127.0.0.1）；已有自定义上游保持 custom', async () => {
+  it('编辑已有站点展示「启用」开关，且路径路由收纳进「高级」；自定义上游才显示上游地址输入', async () => {
     renderDrawer({ domains: 'new.example.com', listenPort: 2083 });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('local');
     expect(screen.getByLabelText('应用名称')).toBeTruthy();
+    expect(screen.queryByText('路径路由')).toBeNull();
 
     cleanup();
 
@@ -194,7 +206,9 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
       upstreams: '192.168.1.10:8080',
     });
     expect((screen.getByLabelText('目标来源') as HTMLSelectElement).value).toBe('custom');
-    expect(screen.queryByLabelText('目标端口')).toBeNull();
+    expect(screen.queryByLabelText(/^本机监听端口/)).toBeNull();
+    expect(screen.getByLabelText(/^上游地址/)).toBeTruthy();
+    expect(screen.getByText('启用')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
     // 瘦身：精简掉低频企业反代细项与抽屉内重复删除
     expect(screen.getByLabelText('应用名称')).toBeTruthy();
@@ -206,6 +220,7 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     expect(screen.queryByLabelText('日志路径')).toBeNull();
     expect(screen.queryByRole('button', { name: '删除此站点' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: '高级' }));
+    expect(screen.getByText('路径路由')).toBeTruthy();
     expect(screen.getByText('响应头')).toBeTruthy();
   });
 
@@ -218,7 +233,7 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     });
     expect(screen.getByText('对外访问预览')).toBeTruthy();
     expect(screen.getByText('https://app.example.com:8443')).toBeTruthy();
-    expect(screen.getAllByText('127.0.0.1:8787').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('127.0.0.1:8787')).toBeTruthy();
     expect((screen.getByLabelText('应用名称') as HTMLInputElement).value).toBe('llmproxy');
   });
 
@@ -243,7 +258,6 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
         listenPort: 443,
         upstreams: '127.0.0.1:8787',
       },
-      undefined,
       { nodeOverride: { ...node, endpoint: 'https://app.example.com:443' } },
     );
     expect(screen.getByText('端口 443 已被本节点 Agent 占用，请改用其他对外端口。')).toBeTruthy();
@@ -264,5 +278,39 @@ describe('站点抽屉上游配置（S2 简化版）', () => {
     await userEvent.click(screen.getByRole('button', { name: '改用节点域名 app.example.com' }));
     expect((screen.getByLabelText(/^域名/) as HTMLInputElement).value).toBe('app.example.com');
     expect(screen.queryByText('当前域名无法自动签发公网证书')).toBeNull();
+  });
+
+  it('域名框关联 datalist 候选并在匹配证书库时自动切换手动模式与证书；失败展示 details 与 hint', async () => {
+    renderDrawer(
+      { name: 'magpie', listenPort: 2583, upstreams: '127.0.0.1:3430', tlsMode: 'auto' },
+      {
+        existingDomains: ['hw.16666.cyou'],
+        certificates: [
+          {
+            id: 'cert-wild',
+            name: '16666.cyou wildcard',
+            domains: ['*.16666.cyou'],
+            notAfter: Math.floor(Date.now() / 1000) + 86400 * 60,
+          },
+        ],
+        saveError: {
+          message: '应用失败，已自动回滚：caddy reload 失败',
+          details: 'systemctlStderr: caddy.service is not active, cannot reload.',
+          hint: '节点上的 Caddy 服务当前未启动：请先在应用页右上角「Caddy 服务」启动 Caddy。',
+        },
+      },
+    );
+
+    const domainInput = screen.getByLabelText(/^域名/) as HTMLInputElement;
+    expect(domainInput.getAttribute('list')).toBe('site-domain-options');
+    expect(document.querySelector('#site-domain-options option[value="hw.16666.cyou"]')).toBeTruthy();
+
+    await userEvent.type(domainInput, 'hw.16666.cyou');
+    expect((screen.getByLabelText(/^TLS 模式/) as HTMLSelectElement).value).toBe('manual');
+    expect((screen.getByLabelText(/^证书/) as HTMLSelectElement).value).toBe('cert-wild');
+
+    expect(screen.getByText('应用失败，已自动回滚：caddy reload 失败')).toBeTruthy();
+    expect(screen.getByText(/caddy\.service is not active, cannot reload\./)).toBeTruthy();
+    expect(screen.getByText(/节点上的 Caddy 服务当前未启动/)).toBeTruthy();
   });
 });

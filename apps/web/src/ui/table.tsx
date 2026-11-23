@@ -164,7 +164,12 @@ export function Table<T>({
   }
 
   const headerCells = columns.map((column) => (
-    <th key={column.key} scope="col" className={`ui-th ${columnClass(column)}`}>
+    <th
+      key={column.key}
+      scope="col"
+      className={`ui-th ${columnClass(column)}`}
+      style={column.width ? { width: column.width } : undefined}
+    >
       {column.header}
     </th>
   ));

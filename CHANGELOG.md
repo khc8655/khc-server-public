@@ -2,6 +2,12 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.43.1] - 2026-11-24
+### Fixed
+- 精简站点发布表单：合并「选择已有域名」与域名输入框，新建隐藏「启用」开关，移除向导横幅、只读「上游地址」灰框并把路径路由收进高级区。
+- 修复 `InstalledAppsCard` 列表右侧「详情」按钮因 `.ui-col-actions` 固定 48px 被裁切的问题；应用失败时抽屉直接透出 Caddy stderr 与排查提示。
+- Agent `0.9.1`：站点 apply 与 `--acme` 安装收尾在 `caddy.service` 未运行时自动拉起或启动，解决 `caddy reload` 失败循环。
+
 ## [0.43.0] - 2026-11-24
 ### Added
 - 设置「域名管理」新建 A/AAAA 解析时默认同时签发 Cloudflare DNS-01 证书（支持 `*.<主域>` 泛域名并默认开启 `autoSync`，已覆盖则免签，列表无证行支持补签）。

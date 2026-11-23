@@ -1085,27 +1085,6 @@ export function InstallAndPublishDrawer({
 
                   {hasCaddyPublish ? (
                     <>
-                      {domainOptions.length > 0 ? (
-                        <Field
-                          id="wizard-domain-pick"
-                          label={zh.hosted.wizardDomainPick}
-                          help={zh.hosted.wizardDomainPickHelp}
-                          optional
-                        >
-                          <Select
-                            id="wizard-domain-pick"
-                            value={domainOptions.includes(normalizedDomain) ? normalizedDomain : ''}
-                            options={[
-                              { value: '', label: zh.sites.domainPickCustom },
-                              ...domainOptions.map((item) => ({ value: item, label: item })),
-                            ]}
-                            onChange={(value) => {
-                              if (value) setDomain(value);
-                            }}
-                          />
-                        </Field>
-                      ) : null}
-
                       <Field
                         id="wizard-domain"
                         label={zh.hosted.wizardDomainLabel}
@@ -1117,9 +1096,17 @@ export function InstallAndPublishDrawer({
                           id="wizard-domain"
                           value={domain}
                           mono
+                          list={domainOptions.length > 0 ? 'wizard-domain-options' : undefined}
                           placeholder="app.example.com"
                           onChange={setDomain}
                         />
+                        {domainOptions.length > 0 ? (
+                          <datalist id="wizard-domain-options">
+                            {domainOptions.map((item) => (
+                              <option key={item} value={item} />
+                            ))}
+                          </datalist>
+                        ) : null}
                       </Field>
 
                       <HostFirewallPortAlert

@@ -234,8 +234,13 @@ class CaddyRunner(FakeRunner):
                     return RunResult(cmd=cmd, rc=1, stdout="", stderr="unrecognized directive: bogus")
                 return RunResult(cmd=cmd, rc=0, stdout="Valid configuration\n")
             if sub == "reload":
-                if self.reload_fail:
-                    return RunResult(cmd=cmd, rc=1, stdout="", stderr="admin api disabled")
+                if self.reload_fail or not self.unit_active:
+                    stderr = (
+                        "admin api disabled"
+                        if self.reload_fail
+                        else "reload: dial tcp 127.0.0.1:2019: connect: connection refused"
+                    )
+                    return RunResult(cmd=cmd, rc=1, stdout="", stderr=stderr)
                 return RunResult(cmd=cmd, rc=0)
             if sub == "version":
                 return RunResult(cmd=cmd, rc=0, stdout=self.caddy_version + "\n")
@@ -246,9 +251,12 @@ class CaddyRunner(FakeRunner):
         if base == "systemctl":
             args = [part for part in cmd[1:] if part != "--user"]
             sub = args[0] if args else ""
-            if sub == "reload" and "caddy.service" in args and self.systemctl_reload_fail:
-                return RunResult(cmd=cmd, rc=1, stdout="", stderr="unit reload failed")
-            if sub == "start" and "caddy.service" in args:
+            if sub == "reload" and "caddy.service" in args:
+                if not self.unit_active:
+                    return RunResult(cmd=cmd, rc=1, stdout="", stderr="caddy.service is not active, cannot reload.")
+                if self.systemctl_reload_fail:
+                    return RunResult(cmd=cmd, rc=1, stdout="", stderr="unit reload failed")
+            if sub in ("start", "restart") and "caddy.service" in args:
                 if self.unit_start_fail:
                     return RunResult(cmd=cmd, rc=1, stdout="", stderr="unit start failed")
                 self.unit_active = True
@@ -983,9 +991,17 @@ class ApplyTests(ApplyTestBase):
             self.apply(config(site()), expect_rev=1)
         self.assertTrue(caught.exception.details["rolledBack"])
         self.assertEqual(caught.exception.details["stage"], "caddy")
+        self.assertIn("unit reload failed", caught.exception.message)
         self.assertEqual(read_text(self.paths.caddyfile), ORIGINAL_CADDYFILE)
         self.assertFalse(os.path.exists(self.paths.caddy_file("caddy-site")))
         self.assertEqual(self.kernel.store.applied_rev("caddy-site"), None)
+
+    def test_reload_auto_restarts_inactive_caddy_unit(self) -> None:
+        self.runner.unit_active = False
+        result = self.apply(config(site()), expect_rev=1)
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.runner.unit_active)
+        self.assertTrue(self.runner.called("systemctl", "restart", "caddy.service"))
 
     def test_reload_failure_falls_back_to_systemctl(self) -> None:
         self.runner.reload_fail = True
@@ -1116,11 +1132,23 @@ class CertReloadTests(ApplyTestBase):
             self.apply(config(site(tls=manual_tls(cert=CERT_PEM_2))), expect_rev=2)
         self.assertTrue(caught.exception.details["rolledBack"])
         self.assertEqual(caught.exception.details["stage"], "after_apply")
+        self.assertIn("unit reload failed", caught.exception.message)
         self.assertEqual(read_text(cert_file), CERT_PEM)
         self.assertEqual(self.kernel.store.applied_rev("caddy-site"), 1)
         state = json.loads(read_text(self.adapter.state_path(self.caddy_ctx())) or "{}")
         self.assertFalse(state.get("lastReloadOk"))
         self.assertIn("caddy reload", state.get("lastError") or "")
+
+    def test_after_apply_auto_restarts_inactive_caddy_unit(self) -> None:
+        self.apply(config(site(tls=manual_tls())), expect_rev=1)
+        self.runner.unit_active = False
+        result = self.apply(config(site(tls=manual_tls(cert=CERT_PEM_2))), expect_rev=2)
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.runner.unit_active)
+        self.assertTrue(self.runner.called("systemctl", "restart", "caddy.service"))
+        state = json.loads(read_text(self.adapter.state_path(self.caddy_ctx())) or "{}")
+        self.assertTrue(state.get("lastReloadOk"))
+        self.assertEqual(state.get("lastReloadSource"), "systemctl-restart")
 
     def test_kernel_reload_records_timestamp(self) -> None:
         self.apply(config(site(domain="a.example.com")), expect_rev=1)

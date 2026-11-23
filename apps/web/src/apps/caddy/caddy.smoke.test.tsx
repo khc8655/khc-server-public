@@ -46,6 +46,7 @@ let currentNode: Record<string, unknown> = node;
 let listeningItems: { proto: string; address: string; port: number; process?: string }[] = [];
 let scanBlocks: Record<string, unknown>[] = [];
 let applyError: string | null = null;
+let applyFailure: { status?: number; message: string; details?: Record<string, unknown> } | null = null;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function appConfig() {
@@ -91,6 +92,7 @@ function mockApi(
   caddyAppliedRev = 1;
   scanBlocks = [];
   applyError = null;
+  applyFailure = null;
   caddySites = options.sites ?? [
     {
       name: 'blog',
@@ -144,6 +146,18 @@ function mockApi(
         return json({ app: appConfig() });
       }
       if (url === '/api/v1/nodes/tyo-1/apps/caddy-site/apply') {
+        if (applyFailure) {
+          return json(
+            {
+              error: {
+                code: 'apply_failed',
+                message: applyFailure.message,
+                ...(applyFailure.details ? { details: applyFailure.details } : {}),
+              },
+            },
+            applyFailure.status ?? 500,
+          );
+        }
         if (applyError) {
           return json({ ok: false, error: { code: 'apply_failed', message: applyError } });
         }
@@ -296,7 +310,7 @@ describe('站点抽屉与列表交互规范（T3）', () => {
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     const drawer = await screen.findByRole('dialog');
     await userEvent.type(within(drawer).getByLabelText(/^域名/), 'bad.example.com');
-    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    const targetPort = within(drawer).getByLabelText(/^本机监听端口/) as HTMLInputElement;
     await userEvent.clear(targetPort);
     await userEvent.type(targetPort, '9999');
 
@@ -317,7 +331,7 @@ describe('站点抽屉与列表交互规范（T3）', () => {
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     const drawer = await screen.findByRole('dialog');
     await userEvent.type(within(drawer).getByLabelText(/^域名/), 'draft.example.com');
-    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    const targetPort = within(drawer).getByLabelText(/^本机监听端口/) as HTMLInputElement;
     await userEvent.clear(targetPort);
     await userEvent.type(targetPort, '9100');
     await userEvent.click(within(drawer).getByRole('button', { name: '保存' }));
@@ -494,7 +508,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect((within(drawer).getByLabelText('对外端口') as HTMLInputElement).value).toBe('2083');
 
     await userEvent.type(within(drawer).getByLabelText(/^应用名称/), 'magpie');
-    const targetPort = within(drawer).getByLabelText('目标端口') as HTMLInputElement;
+    const targetPort = within(drawer).getByLabelText(/^本机监听端口/) as HTMLInputElement;
     await userEvent.clear(targetPort);
     await userEvent.type(targetPort, '3430');
 
@@ -519,7 +533,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(router.state.location.pathname).toBe('/hubs/tyo-1/sites');
   });
 
-  it('应用页支持直接打开「安装并发布应用」三步向导，并可从添加站点抽屉一键切换', async () => {
+  it('应用页主按钮可直接打开「安装并发布应用」三步向导，添加站点抽屉内不再嵌套向导与冗余域名下拉', async () => {
     await renderRoute('/hubs/tyo-1/sites');
     await userEvent.click(await screen.findByRole('button', { name: '安装并发布应用' }));
     expect(await screen.findByRole('heading', { name: '安装并发布应用' })).toBeTruthy();
@@ -527,10 +541,8 @@ describe('应用页分段与本机监听端口（U3）', () => {
     await userEvent.click(screen.getAllByRole('button', { name: '关闭' }).at(-1)!);
     await userEvent.click(screen.getByRole('button', { name: '添加站点' }));
     expect(await screen.findByRole('heading', { name: '添加站点' })).toBeTruthy();
-
-    await userEvent.click(screen.getByRole('button', { name: '打开安装并发布向导' }));
-    expect(await screen.findByRole('heading', { name: '安装并发布应用' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: '添加站点' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '打开安装并发布向导' })).toBeNull();
+    expect(screen.queryByLabelText(/从已有域名选择/)).toBeNull();
   });
 
   it('存在未托管外部站点块时自动顶升外部配置卡到「高级」区外，且过滤 socat 转发端口', async () => {
@@ -727,5 +739,33 @@ describe('应用页分段与本机监听端口（U3）', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '编辑' }));
     expect(await screen.findByRole('heading', { name: '编辑站点' })).toBeTruthy();
+  });
+
+  it('保存并生效遇到 caddy reload 失败时，抽屉内透出具体 stderr 与 Caddy 未启动提示', async () => {
+    mockApi({
+      nodeOverride: { ...node, domain: 'vm.example.com', endpoint: 'https://vm.example.com:2053' },
+    });
+    applyFailure = {
+      status: 500,
+      message: '应用失败，已自动回滚：caddy reload 失败',
+      details: {
+        cause: {
+          details: {
+            systemctlStderr: 'caddy.service is not active, cannot reload.',
+          },
+        },
+      },
+    };
+    await renderRoute('/hubs/tyo-1/sites');
+    await userEvent.click(await screen.findByRole('button', { name: '添加站点' }));
+    const drawer = await screen.findByRole('dialog');
+    await userEvent.type(within(drawer).getByLabelText(/^应用名称/), 'magpie');
+    const targetPort = within(drawer).getByLabelText(/^本机监听端口/) as HTMLInputElement;
+    await userEvent.clear(targetPort);
+    await userEvent.type(targetPort, '3430');
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存并生效' }));
+    expect(await within(drawer).findByText(/caddy\.service is not active, cannot reload\./)).toBeTruthy();
+    expect(within(drawer).getByText(/节点上的 Caddy 服务当前未启动/)).toBeTruthy();
   });
 });
