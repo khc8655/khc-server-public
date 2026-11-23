@@ -23,11 +23,11 @@
 
 ## 2. Worker（`apps/api/src/lib/manifest-lifecycle.ts`）
 
-1. **upgrade 转发原值**：`manifest_upgrade` 转发给 Agent 的 `actionParams.values` 改为请求里的**原始 `values`**（不合并清单默认值）。理由：默认值由 Agent 补（`_validate_values_both` 已有 `raw.get(key, spec.get("default"))`），0.8.0 节点行为不变；0.8.1 起 Agent 按「本次值 > 安装记录值 > 清单默认值」合并，Worker 预先塞默认值会盖掉安装记录值。
+1. **非 install 一律转发原值**（2026-11-23 审核 #162 修订：原文只写了 upgrade）：`manifest_upgrade`、`manifest_uninstall` 转发给 Agent 的 `actionParams.values`，以及 upgrade / uninstall 阶段 `manifest_preflight` 的 `values`，都改为请求里的**原始 `values`**（不合并清单默认值）；只有 install 阶段（含其预检）继续合并默认值。同步动作（`manifest_control` / `manifest_logs` / `manifest_installed`）不改：Agent 优先用安装记录里渲染好的单元名，`values` 只在旧记录缺单元时兜底。理由：默认值由 Agent 补（`_validate_values_both` 已有 `raw.get(key, spec.get("default"))`），0.8.0 节点行为不变；0.8.1 起 Agent 按「本次值 > 安装记录值 > 清单默认值」合并，Worker 预先塞默认值会盖掉安装记录值。
 2. **hooks 渲染不变**：`preUpgrade` / `preUninstall` 的模板渲染仍用 `mergeParamDefaults(defV2, values)`（Worker 拿不到节点上的安装值）。install 的转发与渲染都不变。
 3. **幂等重放**：`getHookReplay` 命中时转发的 `values` 与第 1 条一致（同一个变量，别一处改一处漏）。
 4. **保存提醒**：`POST` / `PUT /app-manifests` 返回的 `warnings[]` 增加一条：`hooks.preUpgrade` 或 `hooks.preUninstall` 的 `url` / `headers` / `body` 引用了 `{{params.*}}` 时，提示「升级 / 卸载时控制面步骤只能拿到清单默认值和本次填写的值，拿不到安装时填的值」。实现放 Worker，**不改契约**。
-5. 测试（`apps/api` vitest）：upgrade 请求 `values: {}` → 转发给 Agent 的 `values` 为 `{}`（不含默认值）；`values: {port: 9000}` → 原样转发；preUpgrade 模板里 `{{params.port}}` 渲染为默认值（未填时）/ 本次值（填了时）；install 行为快照不变；warning 正反各一。
+5. 测试（`apps/api` vitest）：upgrade、uninstall 请求 `values: {}` → 转发给 Agent 的任务参数与预检参数的 `values` 都为 `{}`（不含默认值）；`values: {port: 9000}` → 原样转发；preUpgrade 模板里 `{{params.port}}` 渲染为默认值（未填时）/ 本次值（填了时）；install 行为快照不变；warning 正反各一。
 
 ## 3. 前端
 
@@ -80,9 +80,10 @@
 
 ## 6. 坑
 
-1. 0.8.0 节点在 V5b 之前仍然**不记得安装值**：本批修好后，无默认值参数升级仍会失败，但用户能在折叠区补填自救；有默认值且安装时改过的参数，0.8.0 上升级时用户必须在折叠区填回原值，否则会被默认值覆盖——在升级确认里加一行提示：「节点 Agent < 0.8.1 时不会记住安装参数；安装时改过的参数请在下面填回」（按 `state.agent.version` 判断，比较用现有版本比较工具，不要手写字符串比较）。
-2. 不要把用户填的 secret 值放进组件外状态或 toast。
-3. `details.field` 可能不在新版本清单的 params 里（参数被删了）：此时只显示错误原文，不展开不存在的字段。
+1. 0.8.0 节点卸载时 Agent 不带 `allow_missing` 校验参数：**无默认值参数的应用在 0.8.0 上卸载会报缺失**（转发原值前后都一样，不是本批引入）。本批不在卸载确认里加参数表单，由 V5b §8.2-6（卸载用记录值）解决；`docs/hosted-apps.md` 排障一节写一句。
+2. 0.8.0 节点在 V5b 之前仍然**不记得安装值**：本批修好后，无默认值参数升级仍会失败，但用户能在折叠区补填自救；有默认值且安装时改过的参数，0.8.0 上升级时用户必须在折叠区填回原值，否则会被默认值覆盖——在升级确认里加一行提示：「节点 Agent < 0.8.1 时不会记住安装参数；安装时改过的参数请在下面填回」（按 `state.agent.version` 判断，比较用现有版本比较工具，不要手写字符串比较）。
+3. 不要把用户填的 secret 值放进组件外状态或 toast。
+4. `details.field` 可能不在新版本清单的 params 里（参数被删了）：此时只显示错误原文，不展开不存在的字段。
 
 ## 7. 文档、版本、证据
 
@@ -93,7 +94,7 @@
 
 ## 8. 审核清单
 
-- [ ] Worker upgrade 转发原始 `values`（含幂等重放分支）；hooks 渲染仍合并默认值；install 不变
+- [ ] Worker upgrade / uninstall 的任务与预检都转发原始 `values`（含幂等重放分支）；hooks 渲染仍合并默认值；install 不变
 - [ ] 保存提醒覆盖 preUpgrade / preUninstall 引用 `params.*`
 - [ ] 升级折叠区：只提交改动键；boolean 三态；derive 可填；secret 遮罩、不进缓存键
 - [ ] 失败按 `details.field` 自动展开；Agent < 0.8.1 提示
