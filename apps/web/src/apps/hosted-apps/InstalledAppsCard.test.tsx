@@ -2,13 +2,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import {
   RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRouter,
 } from '@tanstack/react-router';
+import { hubOverviewQueryOptions } from '../../data/queries';
 import { ToastContextProvider } from '../../ui';
 import { InstalledAppsCard } from './InstalledAppsCard';
 
@@ -127,6 +128,19 @@ function makeOverviewResponse(catalogStatus: Record<string, unknown>) {
   };
 }
 
+/** 与页面调用方一致：只经 /overview 取状态，再作为必传 prop 传入。 */
+function Harness() {
+  const overview = useQuery(hubOverviewQueryOptions('hub-1'));
+  return (
+    <InstalledAppsCard
+      hubId="hub-1"
+      state={overview.data?.state ?? null}
+      stateLoading={overview.isLoading}
+      pollIntervalMs={5}
+    />
+  );
+}
+
 function renderWithRouter(ui: React.ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({
@@ -171,9 +185,6 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
         const url = String(input);
         requestedUrls.push(url);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [v1Manifest] });
-        if (url === '/api/v1/nodes/hub-1/state') {
-          return json(makeOverviewResponse({ installedDetail }));
-        }
         if (url === '/api/v1/nodes/hub-1/overview?force=1' || url === '/api/v1/nodes/hub-1/overview') {
           return json(makeOverviewResponse({ installedDetail }));
         }
@@ -199,7 +210,7 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
       }),
     );
 
-    renderWithRouter(<InstalledAppsCard hubId="hub-1" pollIntervalMs={5} />);
+    renderWithRouter(<Harness />);
 
     expect((await screen.findAllByText(/demo-v1/)).length).toBeGreaterThanOrEqual(1);
     expect(requestedUrls.some((u) => u.includes('recipe_installed'))).toBe(false);
@@ -247,7 +258,6 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
         const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
         calls.push({ url, body });
         if (url === '/api/v1/app-manifests') return json({ appManifests: [v2Manifest] });
-        if (url === '/api/v1/nodes/hub-1/state') return json(makeOverviewResponse({ installedDetail }));
         if (url.includes('/overview')) return json(makeOverviewResponse({ installedDetail }));
         if (url.endsWith('/manifest_control')) {
           return json({
@@ -303,7 +313,7 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
       }),
     );
 
-    renderWithRouter(<InstalledAppsCard hubId="hub-1" pollIntervalMs={5} />);
+    renderWithRouter(<Harness />);
 
     expect(await screen.findByText('→ 2.0.0')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: '详情' }));
@@ -373,7 +383,7 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [v2Manifest] });
-        if (url === '/api/v1/nodes/hub-1/state') {
+        if (url.includes('/overview')) {
           return json(
             makeOverviewResponse({
               stale: { since: 1700000000, reason: 'timeout' },
@@ -394,7 +404,7 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
       }),
     );
 
-    renderWithRouter(<InstalledAppsCard hubId="hub-1" pollIntervalMs={5} />);
+    renderWithRouter(<Harness />);
     expect(await screen.findByText('状态可能不是最新')).toBeTruthy();
     expect(screen.getByText('状态读取中')).toBeTruthy();
     expect(screen.getAllByText('未读取').length).toBeGreaterThanOrEqual(1);

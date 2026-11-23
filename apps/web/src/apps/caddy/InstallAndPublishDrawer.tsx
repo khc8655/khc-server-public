@@ -30,7 +30,7 @@ import {
   validateManifestValues,
   type AppView,
 } from '../../data/manifestApps';
-import { hubStateQueryOptions, refreshHubRuntime } from '../../data/queries';
+import { refreshHubRuntime } from '../../data/queries';
 import { publishProxySite, type CaddySite } from '../../data/sites';
 import { paths } from '../../registry/routes';
 import { formatExpiry } from '../../i18n/format';
@@ -63,17 +63,23 @@ import { ResultCardsView } from '../hosted-apps/ResultCardsView';
 import { HostFirewallPortAlert, isTcpPortAllowedByFirewall } from './HostFirewallPortAlert';
 import { DOMAIN_RE, parseEndpointPort, pickRecommendedListenPort } from './siteForm';
 
+/** Agent 脚本超时 900s + 20s 余量 */
+const INSTALL_POLL_MAX_MS = 920_000;
+
 export interface InstallAndPublishDrawerProps {
   hubId: string;
   hubName: string;
   node: Node | undefined;
-  state?: AgentState | null;
+  /** 来自 /overview 的节点状态，调用方必传（无状态时传 null） */
+  state: AgentState | null;
   hasHostOps?: boolean;
   certificates: Certificate[];
   existingSites: CaddySite[];
   offlineReason?: string;
   /** 测试可注入更短轮询间隔，生产默认 800ms */
   pollIntervalMs?: number;
+  /** 安装任务轮询上限（毫秒）；Agent 脚本超时 900s + 余量，测试可注入更短值 */
+  installTimeoutMs?: number;
   onClose: () => void;
   onPublished: () => Promise<void> | void;
 }
@@ -109,22 +115,18 @@ export function InstallAndPublishDrawer({
   hubId,
   hubName,
   node,
-  state: stateProp,
+  state: effectiveState,
   hasHostOps = false,
   certificates,
   existingSites,
   offlineReason,
   pollIntervalMs = 800,
+  installTimeoutMs = INSTALL_POLL_MAX_MS,
   onClose,
   onPublished,
 }: InstallAndPublishDrawerProps) {
   const queryClient = useQueryClient();
   const manifestsQuery = useQuery(appManifestsQueryOptions());
-  const fallbackStateQuery = useQuery({
-    ...hubStateQueryOptions(hubId),
-    enabled: stateProp === undefined && !offlineReason,
-  });
-  const effectiveState = stateProp !== undefined ? stateProp : fallbackStateQuery.data?.state;
 
   const appViews = useMemo(
     () => (manifestsQuery.data ?? []).filter((item) => item.enabled).map(toAppView),
@@ -198,7 +200,8 @@ export function InstallAndPublishDrawer({
 
   // bind:any 端点需要在第 2 步核对宿主防火墙是否已放行（信息 vs 警告）。
   const fwShowQuery = useQuery({
-    queryKey: ['hubs', hubId, 'host-ops', 'fw-show'] as const,
+    // 与 HostFirewallPortAlert 的 fw-show 缓存形状不同，必须用独立 key（前缀相同，放行后仍会一并失效）
+    queryKey: ['hubs', hubId, 'host-ops', 'fw-show', 'wizard-bind-any'] as const,
     enabled: Boolean(
       step === 2 &&
         hasHostOps &&
@@ -483,7 +486,13 @@ export function InstallAndPublishDrawer({
         let current = await fetchTask(hubId, envelope.taskId);
         if (cancelledRef.current) return;
         setTask(current);
+        const pollDeadline = Date.now() + installTimeoutMs;
         while (current.task.state === 'pending' || current.task.state === 'running') {
+          if (Date.now() >= pollDeadline) {
+            throw new Error(
+              fmt(zh.hosted.wizardInstallTimeout, { seconds: String(Math.round(installTimeoutMs / 1000)) }),
+            );
+          }
           await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
           if (cancelledRef.current) return;
           current = await fetchTask(hubId, envelope.taskId);

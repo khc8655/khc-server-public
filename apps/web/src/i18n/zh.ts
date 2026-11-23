@@ -1300,6 +1300,7 @@ export const zh = {
     wizardDoneTitle: '{name} 已安装并发布',
     wizardDoneDesc: '对外访问：{url}（反代到 127.0.0.1:{port}）',
     wizardFailedInstall: '应用安装失败',
+    wizardInstallTimeout: '安装任务超过 {seconds} 秒仍未结束，已停止等待；请查看任务日志确认节点上的实际进度。',
     wizardFailedPublish: '创建或应用站点失败',
     wizardRetryPublish: '重试发布站点',
     wizardRetryInstall: '重新安装',

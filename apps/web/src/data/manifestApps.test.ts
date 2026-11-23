@@ -255,13 +255,22 @@ describe('manifestApps 纯函数单测（V4）', () => {
 
     expect(
       manifestErrorView(
-        new ApiError(400, 'secret_not_configured', '凭据未配置', undefined, { secret: 'api_key' }),
+        new ApiError(400, 'secret_not_configured', '凭据未配置', undefined, { name: 'api_key' }),
       ),
     ).toMatchObject({ actionKind: 'config-secrets', secretNames: ['api_key'] });
 
     expect(
-      manifestErrorView(new ApiError(400, 'secret_host_not_allowed', '主机越界')),
-    ).toMatchObject({ actionKind: 'config-secrets' });
+      manifestErrorView(
+        new ApiError(400, 'secret_host_not_allowed', '主机越界', undefined, {
+          name: 'api_key',
+          host: 'xng.khc6.cn',
+        }),
+      ),
+    ).toMatchObject({
+      actionKind: 'config-secrets',
+      secretNames: ['api_key'],
+      detail: '凭据 api_key 未授权发送给 xng.khc6.cn',
+    });
 
     expect(
       manifestErrorView(

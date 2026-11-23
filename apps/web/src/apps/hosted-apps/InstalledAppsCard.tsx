@@ -15,7 +15,7 @@ import {
   toAppView,
   type InstalledApp,
 } from '../../data/manifestApps';
-import { hubStateQueryOptions, refreshHubRuntime } from '../../data/queries';
+import { refreshHubRuntime } from '../../data/queries';
 import { zh } from '../../i18n/zh';
 import { Badge, Banner, Button, Card, InlineError, Row, Stack, Table, type ColumnDef } from '../../ui';
 import { InstalledAppDrawer } from './InstalledAppDrawer';
@@ -27,8 +27,8 @@ function entryIdentity(entry: Pick<InstalledApp, 'manifestId' | 'instance'>): st
 export function InstalledAppsCard({
   hubId,
   hubName,
-  state: stateProp,
-  stateLoading: stateLoadingProp,
+  state: effectiveState,
+  stateLoading: effectiveLoading,
   offlineReason,
   pollIntervalMs = 800,
   selectedKey: controlledKey,
@@ -37,8 +37,9 @@ export function InstalledAppsCard({
 }: {
   hubId: string;
   hubName?: string;
-  state?: AgentState | null;
-  stateLoading?: boolean;
+  /** 来自 /overview 的节点状态，调用方必传 */
+  state: AgentState | null;
+  stateLoading: boolean;
   offlineReason?: string;
   /** 测试可注入更短轮询间隔，生产默认 800ms */
   pollIntervalMs?: number;
@@ -48,14 +49,6 @@ export function InstalledAppsCard({
 }) {
   const queryClient = useQueryClient();
   const manifestsQuery = useQuery(appManifestsQueryOptions());
-  const fallbackStateQuery = useQuery({
-    ...hubStateQueryOptions(hubId),
-    enabled: stateProp === undefined && !stateLoadingProp,
-  });
-
-  const effectiveState = stateProp !== undefined ? stateProp : fallbackStateQuery.data?.state;
-  const effectiveLoading =
-    stateLoadingProp !== undefined ? stateLoadingProp : fallbackStateQuery.isLoading;
 
   const appViews = useMemo(
     () => (manifestsQuery.data ?? []).map(toAppView),

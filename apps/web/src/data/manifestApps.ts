@@ -447,18 +447,17 @@ export function manifestErrorView(error: unknown): ManifestErrorView {
     }
     case 'secret_not_configured':
     case 'secret_host_not_allowed': {
-      const secretNames =
-        typeof details?.secret === 'string'
-          ? [details.secret]
-          : Array.isArray(details?.secrets)
-            ? details.secrets.filter((s): s is string => typeof s === 'string')
-            : [];
+      const name = typeof details?.name === 'string' && details.name ? details.name : '';
+      const host = typeof details?.host === 'string' && details.host ? details.host : '';
+      const detail = !name
+        ? undefined
+        : code === 'secret_host_not_allowed' && host
+          ? `凭据 ${name} 未授权发送给 ${host}`
+          : `涉及凭据：${name}`;
       return {
         code,
         title: message,
-        ...(secretNames.length > 0
-          ? { detail: `涉及凭据：${secretNames.join('、')}`, secretNames }
-          : {}),
+        ...(name ? { detail, secretNames: [name] } : {}),
         actionKind: 'config-secrets',
       };
     }

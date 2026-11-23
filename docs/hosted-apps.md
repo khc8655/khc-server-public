@@ -38,6 +38,30 @@
 2. **声明式参数与发布配置**：按参数定义渲染输入；跳过 `derive` 字段并在提交前由选定发布端点推导赋值；`mode="create"` 新建账号不填密码。发布域名默认预填节点域名（排除关闭 TLS 的站点），对外端口自动避开 Agent 端口与同域名已占端口；对开启 `host-ops` 且非 Tunnel 的节点内联核对 `fw.show`，`bind=any` 端口未放行时给出一键放行提示。
 3. **执行与完成**：v2 应用走 `POST /nodes/:id/apps/app-catalog/manifest_install`（v1 走 `recipe_install`），控制面先按需执行 `hooks.preInstall` 再下发 Agent 任务；向导轮询任务进度与日志，结束后逐一发布已勾选 Caddy 的端点并 `apply`，完成页通过 `ResultCardsView` 渲染 `KHC_RESULT.cards`（主链接按钮 + 复制/下载，v1 兼容转卡片）；错误由 `ManifestErrorAlert` 映射结构化错误码与修复入口（如跳转 `?manifest=<id>` 补凭据）。
 
+### 3.1 脚本里的下载必须自带超时
+
+清单脚本里的 `curl` 若只写 `-fsSL`，在网络差的机器上会一直挂着不报错，只能等任务 900 秒上限，现象是**面板进度停在 1%，日志一行不出**。所以脚本统一这样下载（无论是否在 `sources[]` 里声明了 `pinned` 校验）：
+
+```bash
+curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
+     --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL"
+```
+
+- `--connect-timeout` 管连不上；`--max-time` 管总时长；
+- `--speed-limit/--speed-time` 管「连着但几乎不动」（连续 60 秒低于 8KB/s 主动放弃）；
+- 下载到 `mktemp` 文件，失败时打印**已下载多少字节**并给出排查命令，不能只 `exit 1`；
+- 固定来源的 sha256 必须与清单一致，否则执行器拒绝。
+
+写新清单时照抄这一段。拉不动外网的机器，可先给节点配代理，或手工把文件放到清单声明的位置。向导对安装任务的等待上限约 920 秒（Agent 脚本超时 900 秒加余量），超时后转为失败并提示查看任务日志。
+
+### 3.2 执行器：慢脚本要边跑边出日志
+
+清单脚本（安装、升级、卸载）走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行回写任务日志，运行中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。不得改回 `subprocess.run(capture_output=True)`：整段缓冲会让脚本不退出就一行日志都没有，卡住时看不出卡在哪。超时与取消必须能真的杀掉进程，实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**。
+
+### 3.3 实例约定
+
+每个节点每个应用只有一个实例，默认实例 = `manifestId`，前端不传 `instance`。
+
 ## 4. 多端点发布（`endpoints[]`）
 
 - `publish: 'caddy'`：向导默认勾选首个 Caddy 端点，其余可自由勾选或改配对外端口；每个已勾端点独立写入一条 `caddy-site`（名称为 `<manifestId>` 或 `<manifestId>-<endpointId>`），任一步失败自动回滚站点配置并保留重发入口。
@@ -51,6 +75,12 @@
 - **unit 管理与日志（v2）**：展示各 unit 运行状态，支持启动 / 停止 / 重启（动作后强制刷新 `/overview`）以及**按需展开日志**（点击才请求 `control` logs，支持 `unit` 切换与 `lines` 选择并区分 `stderr`）。
 - **升级（v2）**：当清单版本号大于节点已装版本且满足能力要求时展示升级按钮，抽屉内行内二次确认（不叠 Dialog），走 `manifest_upgrade` 任务并支持前置 `preUpgrade` 步骤。
 - **卸载**：v1 走 `recipe_uninstall`，v2 走 `manifest_uninstall`。若卸载前置步骤返回 `hook_failed` / `hook_extract_failed`，抽屉提供行内确认「跳过控制面步骤并强制卸载」（`skipHooks: true`），确保清理本机残留；卸载脚本仍须把 unit、二进制、状态/缓存清理干净（由 `scripts/manifest-uninstall-test.sh` 离线守门）。
+
+### 卸载必须清干净
+
+卸载脚本 `scripts.uninstall` 要求等于把 install 写下的东西**全部**清掉：停并删除 systemd unit（含 `default.target.wants` 链接）、二进制、登录凭据、数据/状态/缓存目录与 `KHC_APP_HOME` 残留；清完逐项复查，仍有残留就在 `KHC_RESULT` 里点名并 `exit 1`，不谎称「已卸载」。面板创建的系统账号由执行器管理，卸载不删。
+
+契约由 `scripts/manifest-uninstall-test.sh` 守住（已接入 `verify.sh`，离线可重复）：造出 install 会写的全部路径 → 跑清单下发的 uninstall → 断言逐项清理 → 连跑两次验幂等 → 确认没误删同目录其它应用。新增或改动任何清单的卸载脚本，都要让这个测试通过。
 
 ## 6. 现状与排障
 

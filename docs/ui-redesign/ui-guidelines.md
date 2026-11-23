@@ -1,6 +1,6 @@
 # 面板 UI 规范（ui-guidelines）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：[page-specs.md](page-specs.md)、[tokens.css](../../apps/web/src/styles/tokens.css)、[参考样例](examples/2026-11-05/demo.html)
 > 范围：`apps/web/src` 全部页面与后续 UI 改动
 > 总原则：**一页一套范式**。看状态用状态带/指标，看明细用一张对象表，所有详情与操作都进全页唯一的右侧抽屉。
 > 轻量约束：只复用 `apps/web/src/ui/` 现有组件（Card / Table / Drawer / Dialog / ConfirmDialog / Banner / Badge / Button / Segmented / KeyValue / Stat / Field / CodeBlock / InlineError / EmptyState / Skeleton / Toast / Menu），**不引入任何重型组件库**（不加 antd/MUI/echarts/xterm 等），不做多层弹窗与重动效。
