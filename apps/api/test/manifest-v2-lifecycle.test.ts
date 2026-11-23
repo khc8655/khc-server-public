@@ -705,7 +705,7 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
       ctx: ReturnType<typeof makeV2AppContext>,
       cookie: string,
       nodeId: string,
-      action: 'manifest_upgrade' | 'manifest_install',
+      action: 'manifest_upgrade' | 'manifest_install' | 'manifest_uninstall',
       values: Record<string, unknown>,
       key: string,
     ) {
@@ -754,12 +754,41 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
       expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', {}, 'up-key-replay')).toEqual({});
     });
 
-    it('install 行为不变：转发值仍合并清单默认值', async () => {
+    const preflightValues = (ctx: ReturnType<typeof makeV2AppContext>) =>
+      ctx.agent.requests
+        .filter((r) => r.path === '/apps/app-catalog/manifest_preflight')
+        .map((r) => (r.body as { params: { stage: string; values: Record<string, unknown> } }).params)
+        .at(-1);
+
+    it('install 行为不变：转发值与预检 values 仍合并清单默认值', async () => {
       const { ctx } = setup();
       const cookie = await loginAsAdmin(ctx as never);
       const { id: nodeId } = await createNode(ctx as never, cookie);
       await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
       expect(await call(ctx, cookie, nodeId, 'manifest_install', {}, 'in-key-0001')).toEqual({ port: 18080 });
+      expect(preflightValues(ctx)).toMatchObject({ stage: 'install', values: { port: 18080 } });
+    });
+
+    it('uninstall：任务参数与预检的 values 都是请求原值（不含默认值）', async () => {
+      const { ctx } = setup();
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
+      expect(await call(ctx, cookie, nodeId, 'manifest_uninstall', {}, 'un-key-0001')).toEqual({});
+      expect(preflightValues(ctx)).toMatchObject({ stage: 'uninstall', values: {} });
+      expect(await call(ctx, cookie, nodeId, 'manifest_uninstall', { port: 7000 }, 'un-key-0002')).toEqual({
+        port: 7000,
+      });
+      expect(preflightValues(ctx)).toMatchObject({ stage: 'uninstall', values: { port: 7000 } });
+    });
+
+    it('upgrade：预检 values 为请求原值', async () => {
+      const { ctx } = setup();
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
+      await call(ctx, cookie, nodeId, 'manifest_upgrade', {}, 'up-key-pf1');
+      expect(preflightValues(ctx)).toMatchObject({ stage: 'upgrade', values: {} });
     });
   });
 
