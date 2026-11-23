@@ -1,6 +1,6 @@
 # ADR-0022: 接入 D1 Read Replication 与读己之写书签
 
-- 状态：提议
+- 状态：已接受
 - 日期：2026-11-23
 - 决策者：主人
 - 关联：`docs/design-v3.md`、`docs/data-layering.md`、`docs/security-boundaries.md`、`apps/api/src/middleware/d1-session.ts`

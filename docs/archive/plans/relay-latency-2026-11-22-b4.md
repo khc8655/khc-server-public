@@ -1,6 +1,6 @@
 # B4 开工说明：Agent 单适配器截止时间
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/plans/relay-latency-2026-11-22.md` §4 B4、`agent/README.md`
+> 状态：已实施 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/relay-latency-2026-11-22.md` §4 B4、`agent/README.md`
 
 > **给开发 agent**：本文是 B4 的完整任务说明。开工前读 `AGENTS.md`、提案、`agent/README.md`、本文全文。偏离本文的地方在 PR 里写明原因；认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 

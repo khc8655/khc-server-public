@@ -1,6 +1,6 @@
 # B2 开工说明：工作区单一入口、运维分段缓存与写后精确刷新
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/plans/relay-latency-2026-11-22.md` §4 B2、`docs/data-layering.md` §7
+> 状态：已实施 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/relay-latency-2026-11-22.md` §4 B2、`docs/data-layering.md` §7
 
 > **给开发 agent**：本文是 B2 的完整任务说明。开工前读 `AGENTS.md`、提案 §1–§4、本文全文。偏离本文的地方在 PR 里写明原因；认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 

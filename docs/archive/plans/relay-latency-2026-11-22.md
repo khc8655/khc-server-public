@@ -1,6 +1,6 @@
 # 中转链路提速与刷新减负（提案）
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/data-layering.md`、ADR-0021、`docs/archive/plans/single-channel-perf-2026-11-22.md`
+> 状态：已实施 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/data-layering.md`、ADR-0021、ADR-0022、`docs/archive/plans/single-channel-perf-2026-11-22.md`
 
 > **执行者须知**：坚持 ADR-0021 单控制面通道（浏览器 → Worker → Agent），任何批次都不得恢复浏览器直连、不得改 HMAC 签名串、不得新增表/迁移、不得引入周期轮询 / Cron / KV / DO。一个批次一个 PR。**开发前先读对应批次的开工说明（§8）**，本文只写决策与验收口径。
 
