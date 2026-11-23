@@ -420,31 +420,76 @@ describe('manifest-v2: schema 交叉校验 1–10（每条一正一反）', () =
     }
   });
 
-  it('9. health(http) 仅允许 http://127.0.0.1: 与 http://[::1]: 回环前缀', () => {
-    const okV4 = appManifestDefinitionV2Schema.safeParse(
+  it('9. health(http) 仅允许回环前缀且端口位只允许固定端口或单个 integer {{params.<key>}}', () => {
+    const okFixed = appManifestDefinitionV2Schema.safeParse(
       minimalV2({
+        health: { type: 'http', url: 'http://127.0.0.1:7860/health', versionPointer: '/ver' },
+      }),
+    );
+    expect(okFixed.success).toBe(true);
+
+    const okV4Param = appManifestDefinitionV2Schema.safeParse(
+      minimalV2({
+        params: [{ key: 'port', type: 'integer', default: 7860 }],
         health: { type: 'http', url: 'http://127.0.0.1:{{params.port}}/health', versionPointer: '/ver' },
       }),
     );
-    expect(okV4.success).toBe(true);
+    expect(okV4Param.success).toBe(true);
 
-    const okV6 = appManifestDefinitionV2Schema.safeParse(
+    const okV6Param = appManifestDefinitionV2Schema.safeParse(
       minimalV2({
-        health: { type: 'http', url: 'http://[::1]:7860/readyz' },
+        params: [{ key: 'port', type: 'integer', default: 7860 }],
+        health: { type: 'http', url: 'http://[::1]:{{ params.port }}/readyz' },
       }),
     );
-    expect(okV6.success).toBe(true);
+    expect(okV6Param.success).toBe(true);
 
+    // 端口引用 string 参数 -> 拒绝且 path 指到 ['health', 'url']
+    const stringPortParam = appManifestDefinitionV2Schema.safeParse(
+      minimalV2({
+        params: [{ key: 'port', type: 'string', default: '80@169.254.169.254' }],
+        health: { type: 'http', url: 'http://127.0.0.1:{{params.port}}/health' },
+      }),
+    );
+    expect(stringPortParam.success).toBe(false);
+    if (!stringPortParam.success) {
+      expect(stringPortParam.error.issues[0]?.path).toEqual(['health', 'url']);
+    }
+
+    // 端口引用不存在的参数 -> 拒绝且 path 指到 ['health', 'url']
+    const missingPortParam = appManifestDefinitionV2Schema.safeParse(
+      minimalV2({
+        health: { type: 'http', url: 'http://127.0.0.1:{{params.port}}/health' },
+      }),
+    );
+    expect(missingPortParam.success).toBe(false);
+    if (!missingPortParam.success) {
+      expect(missingPortParam.error.issues[0]?.path).toEqual(['health', 'url']);
+    }
+
+    // 端口拼接字符（即使参数为 integer）或非回环前缀 -> 拒绝且 path 指到 ['health', 'url']
     for (const badUrl of [
+      'http://127.0.0.1:{{params.port}}0/health',
+      'http://127.0.0.1:8{{params.port}}/health',
+      'http://[::1]:{{params.port}}0/health',
+      'http://127.0.0.1:{{instance}}/health',
       'http://localhost:7860/health',
       'https://127.0.0.1:7860/health',
       'http://10.0.0.1:7860/health',
       'http://127.0.0.1:80@evil.com/health',
+      'http://127.0.0.1:0/health',
+      'http://127.0.0.1:70000/health',
     ]) {
       const bad = appManifestDefinitionV2Schema.safeParse(
-        minimalV2({ health: { type: 'http', url: badUrl } }),
+        minimalV2({
+          params: [{ key: 'port', type: 'integer', default: 7860 }],
+          health: { type: 'http', url: badUrl },
+        }),
       );
       expect(bad.success).toBe(false);
+      if (!bad.success) {
+        expect(bad.error.issues[0]?.path).toEqual(['health', 'url']);
+      }
     }
   });
 

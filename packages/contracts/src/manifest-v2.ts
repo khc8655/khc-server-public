@@ -154,6 +154,7 @@ const ENUM_VALUE_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/i;
 const COMMAND_NAME_RE = /^[a-z0-9][a-z0-9._+-]{0,63}$/;
 const UNIT_NAME_RESOLVED_RE = /^[a-z0-9][a-z0-9@._-]{0,62}$/;
 const DERIVE_RE = /^endpoint:([a-z][a-z0-9-]{0,31})\.publicUrl$/;
+const HEALTH_PORT_PARAM_RE = /^\{\{\s*params\.([a-z][a-z0-9_]*)\s*\}\}$/;
 const HOSTNAME_RE = /^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
 const HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
 /** RFC 6901 JSON Pointer，禁用空串（禁止直接引用根节点） */
@@ -759,9 +760,26 @@ export const appManifestDefinitionV2Schema = z
         const afterPortPrefix = url.slice(prefixLen);
         const slashIdx = afterPortPrefix.search(/[/?#]/);
         const portPart = slashIdx === -1 ? afterPortPrefix : afterPortPrefix.slice(0, slashIdx);
-        const dummyPort = portPart.replace(MANIFEST_TEMPLATE_VAR_REGEX, '8080');
-        if (portPart.includes('@') || /[\s\\]/.test(url) || !isValidPortString(dummyPort)) {
-          addIssue(ctx, ['health', 'url'], 'health.url 仅允许本机回环地址与合法端口');
+        if (/[\s\\]/.test(url.replace(MANIFEST_TEMPLATE_VAR_REGEX, 'x'))) {
+          addIssue(ctx, ['health', 'url'], 'health.url 不能包含空白或反斜杠');
+        } else if (!isValidPortString(portPart)) {
+          const portMatch = HEALTH_PORT_PARAM_RE.exec(portPart);
+          if (!portMatch) {
+            addIssue(
+              ctx,
+              ['health', 'url'],
+              'health.url 端口位置只允许固定端口或单个 {{params.<key>}} 整型参数',
+            );
+          } else {
+            const portParam = paramMap.get(portMatch[1]!);
+            if (!portParam || portParam.type !== 'integer') {
+              addIssue(
+                ctx,
+                ['health', 'url'],
+                `health.url 端口参数 ${portMatch[1]} 必须存在且 type 为 integer`,
+              );
+            }
+          }
         }
       }
     }
@@ -788,7 +806,7 @@ export const appManifestDefinitionV2Schema = z
             authority.length === 0 ||
             authority.includes('{{') ||
             authority.includes('}}') ||
-            /[\s\\]/.test(hook.url) ||
+            /[\s\\]/.test(hook.url.replace(MANIFEST_TEMPLATE_VAR_REGEX, 'val')) ||
             !isValidHookAuthority(authority)
           ) {
             addIssue(ctx, ['hooks', stage, 'url'], 'hook url 主机部分不合法或包含模板/@');
