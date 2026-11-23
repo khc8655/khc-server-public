@@ -89,6 +89,36 @@ async function checkManifestSecretHostWarnings(
   return warnings;
 }
 
+/** preUpgrade / preUninstall 引用 {{params.*}} 时：Worker 只拿得到清单默认值与本次填写的值。 */
+function checkManifestParamRefWarnings(v2: AppManifestDefinitionV2): string[] {
+  if (!v2.hooks) return [];
+  const warnings: string[] = [];
+  for (const stage of ['preUpgrade', 'preUninstall'] as const) {
+    const hook = v2.hooks[stage];
+    if (!hook) continue;
+    const texts: string[] = [hook.url, ...Object.values(hook.headers ?? {})];
+    if (hook.body !== undefined) collectLeafStrings(hook.body, texts);
+    const refs = new Set<string>();
+    for (const text of texts) {
+      let vars: string[];
+      try {
+        vars = listTemplateVars(text);
+      } catch {
+        continue;
+      }
+      for (const v of vars) {
+        if (v.startsWith('params.')) refs.add(v);
+      }
+    }
+    if (refs.size > 0) {
+      warnings.push(
+        `${stage} 引用了 ${Array.from(refs).sort().map((r) => `{{${r}}}`).join('、')}：升级 / 卸载时控制面步骤只能拿到清单默认值和本次填写的值，拿不到安装时填的值`,
+      );
+    }
+  }
+  return warnings;
+}
+
 function shaAuditFields(manifest: AppManifestAnyDefinition) {
   const sha = manifest.sha256 as { install: string; uninstall: string; upgrade?: string };
   return {
@@ -159,7 +189,11 @@ export function appManifestRoutes(deps: AppDeps): Hono<AppBindings> {
     if (await deps.appManifests.get(body.id)) {
       throw conflict(`应用 ${body.id} 已存在`);
     }
-    const warnings = await checkManifestSecretHostWarnings(deps, body.id, toManifestV2(body.manifest));
+    const v2Def = toManifestV2(body.manifest);
+    const warnings = [
+      ...(await checkManifestSecretHostWarnings(deps, body.id, v2Def)),
+      ...checkManifestParamRefWarnings(v2Def),
+    ];
     const appManifest = await deps.appManifests.create({
       id: body.id,
       manifest: body.manifest,
@@ -189,7 +223,11 @@ export function appManifestRoutes(deps: AppDeps): Hono<AppBindings> {
     if (!previous) throw notFound('应用不存在');
     const body = await parseJsonBody(c, updateAppManifestRequestSchema);
     await assertManifestSha256(body.manifest);
-    const warnings = await checkManifestSecretHostWarnings(deps, id, toManifestV2(body.manifest));
+    const v2Def = toManifestV2(body.manifest);
+    const warnings = [
+      ...(await checkManifestSecretHostWarnings(deps, id, v2Def)),
+      ...checkManifestParamRefWarnings(v2Def),
+    ];
     const appManifest = await deps.appManifests.update(id, {
       manifest: body.manifest,
       enabled: body.enabled,

@@ -4,6 +4,7 @@ import { ApiError } from './client';
 import {
   appStatus,
   canUpgrade,
+  effectiveSchema,
   installActionForSchema,
   installedCatalogState,
   manifestErrorView,
@@ -11,6 +12,7 @@ import {
   normalizeResultCards,
   toAppView,
   uninstallActionForSchema,
+  unitStatusView,
 } from './manifestApps';
 
 const validV1Manifest: AppManifest = {
@@ -126,7 +128,7 @@ describe('manifestApps 纯函数单测（V4）', () => {
           version: '1.9.0',
           schema: 2,
           source: 'manifest',
-          units: [{ name: 'demo-v2.service', scope: 'system', active: 'active' }],
+          units: [{ name: 'demo-v2.service', scope: 'system', active: true, state: 'active' }],
           lastHealth: { ok: true, checkedAt: '2026-11-23T00:00:00Z', version: '1.9.0' },
         },
         'legacy-recipe': {
@@ -146,6 +148,9 @@ describe('manifestApps 纯函数单测（V4）', () => {
       schema: 2,
       source: 'manifest',
     });
+    expect(parsed.entries[0]?.units).toEqual([
+      { name: 'demo-v2.service', scope: 'system', active: true, state: 'active' },
+    ]);
     expect(parsed.entries[1]).toMatchObject({
       manifestId: 'legacy-recipe',
       source: 'recipe',
@@ -162,7 +167,7 @@ describe('manifestApps 纯函数单测（V4）', () => {
       instance: 'demo-v2',
       version: '1.0.0',
       schema: 2 as const,
-      units: [{ name: 'u.service', scope: 'user' as const, active: 'active' }],
+      units: [{ name: 'u.service', scope: 'user' as const, active: true, state: 'active' }],
       endpoints: [],
       source: 'manifest',
     };
@@ -172,7 +177,10 @@ describe('manifestApps 纯函数单测（V4）', () => {
       label: '异常',
     });
     expect(
-      appStatus({ ...base, units: [{ name: 'u.service', scope: 'user', active: 'failed' }] }),
+      appStatus({
+        ...base,
+        units: [{ name: 'u.service', scope: 'user', active: false, state: 'failed' }],
+      }),
     ).toEqual({ tone: 'danger', label: '异常' });
     expect(appStatus({ ...base, units: [], lastHealth: undefined })).toEqual({
       tone: 'neutral',
@@ -329,5 +337,70 @@ describe('manifestApps 纯函数单测（V4）', () => {
     }
 
     expect(hits).toEqual([]);
+  });
+
+  it('parseUnits（经 installedCatalogState）：Agent 布尔形状 / 旧字符串 / 缺失三种', () => {
+    const state = makeState({
+      installedDetail: {
+        a: {
+          manifestId: 'a',
+          source: 'manifest',
+          schema: 2,
+          units: [
+            { name: 'bool.service', scope: 'user', active: true, state: 'active' },
+            { name: 'down.service', scope: 'user', active: false, state: 'failed' },
+            { name: 'legacy.service', scope: 'user', active: 'active' },
+            { name: 'legacy-off.service', scope: 'user', active: 'inactive' },
+            { name: 'none.service', scope: 'system' },
+          ],
+        },
+      },
+    });
+    expect(installedCatalogState(state).entries[0]?.units).toEqual([
+      { name: 'bool.service', scope: 'user', active: true, state: 'active' },
+      { name: 'down.service', scope: 'user', active: false, state: 'failed' },
+      { name: 'legacy.service', scope: 'user', active: true, state: 'active' },
+      { name: 'legacy-off.service', scope: 'user', active: false, state: 'inactive' },
+      { name: 'none.service', scope: 'system' },
+    ]);
+  });
+
+  it('unitStatusView：state 优先，其次布尔值，都没有才是未知；failed 为 danger', () => {
+    expect(unitStatusView({ active: true, state: 'active' })).toEqual({ tone: 'ok', label: 'active' });
+    expect(unitStatusView({ active: false, state: 'failed' })).toEqual({ tone: 'danger', label: 'failed' });
+    expect(unitStatusView({ active: false, state: 'inactive' })).toEqual({ tone: 'neutral', label: 'inactive' });
+    expect(unitStatusView({ active: true })).toEqual({ tone: 'ok', label: '运行中' });
+    expect(unitStatusView({ active: false })).toEqual({ tone: 'neutral', label: '未运行' });
+    expect(unitStatusView({})).toEqual({ tone: 'neutral', label: '未知' });
+  });
+
+  it('appStatus：布尔形状下单元 active=false 为异常，全部 active=true 为运行中', () => {
+    const base = {
+      manifestId: 'demo-v2',
+      instance: 'demo-v2',
+      version: '1.0.0',
+      schema: 2 as const,
+      endpoints: [],
+      source: 'manifest',
+    };
+    expect(
+      appStatus({ ...base, units: [{ name: 'u', scope: 'user', active: false, state: 'inactive' }] }),
+    ).toEqual({ tone: 'danger', label: '异常' });
+    expect(
+      appStatus({ ...base, units: [{ name: 'u', scope: 'user', active: true, state: 'active' }] }),
+    ).toEqual({ tone: 'ok', label: '运行中' });
+    expect(appStatus({ ...base, units: [{ name: 'u', scope: 'user' }] })).toEqual({
+      tone: 'neutral',
+      label: '已安装',
+    });
+  });
+
+  it('effectiveSchema：有清单取清单 schema，无清单退回安装记录', () => {
+    const v1View = toAppView(validV1Manifest);
+    const v2View = toAppView(validV2Manifest);
+    expect(effectiveSchema(v1View, { schema: 2 })).toBe(1);
+    expect(effectiveSchema(v2View, { schema: 1 })).toBe(2);
+    expect(effectiveSchema(undefined, { schema: 2 })).toBe(2);
+    expect(effectiveSchema(undefined, { schema: 1 })).toBe(1);
   });
 });

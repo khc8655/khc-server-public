@@ -73,7 +73,8 @@ curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
 「节点 → 应用 → 已安装的托管应用」卡片统一从 `/overview` 回填的 `/state` 读取 `app-catalog` 状态（不再请求 `recipe_installed`），支持 `stale` / `pending` / `error` 横幅与「未读取」状态提示。点击条目打开 `InstalledAppDrawer`：
 
 - **unit 管理与日志（v2）**：展示各 unit 运行状态，支持启动 / 停止 / 重启（动作后强制刷新 `/overview`）以及**按需展开日志**（点击才请求 `control` logs，支持 `unit` 切换与 `lines` 选择并区分 `stderr`）。
-- **升级（v2）**：当清单版本号大于节点已装版本且满足能力要求时展示升级按钮，抽屉内行内二次确认（不叠 Dialog），走 `manifest_upgrade` 任务并支持前置 `preUpgrade` 步骤。
+- **升级（v2）**：当清单版本号大于节点已装版本且满足能力要求时展示升级按钮，抽屉内行内二次确认（不叠 Dialog），走 `manifest_upgrade` 任务并支持前置 `preUpgrade` 步骤。升级时 Agent 按「本次值 > 安装值 > 清单默认值」合并参数（保存安装值需 Agent ≥ 0.8.1；更早的 Agent 不记得安装值）；Worker 转发请求里的原始 `values`，不预先合并默认值。确认里有折叠区「修改参数（可选）」，每项默认「保持原值」，只提交改动的键；任务失败且错误带 `details.field` 时自动展开并定位该字段。控制面步骤（`preUpgrade` / `preUninstall`）渲染 `{{params.*}}` 时只能拿到清单默认值和本次填写的值，保存清单时会提醒。
+- **v1 条目**：以「设置 → 应用管理」里的清单 schema 为准（Agent 0.8.0 会把 v1 记成 schema 2）：v1 清单显示 v1 徽标，没有启停、日志、升级，卸载走 `recipe_uninstall`。
 - **卸载**：v1 走 `recipe_uninstall`，v2 走 `manifest_uninstall`。若卸载前置步骤返回 `hook_failed` / `hook_extract_failed`，抽屉提供行内确认「跳过控制面步骤并强制卸载」（`skipHooks: true`），确保清理本机残留；卸载脚本仍须把 unit、二进制、状态/缓存清理干净（由 `scripts/manifest-uninstall-test.sh` 离线守门）。
 
 ### 卸载必须清干净

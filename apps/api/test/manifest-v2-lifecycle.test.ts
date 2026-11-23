@@ -664,4 +664,144 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
       }
     }
   });
+
+  describe('升级转发原始 values（V4.1）', () => {
+    const upgradeManifest = () =>
+      v2Manifest({
+        hooks: {
+          preUpgrade: {
+            method: 'POST',
+            url: 'https://issuer.example.com/upgrade',
+            body: { port: '{{params.port}}' },
+          },
+        },
+      });
+
+    function setup() {
+      const hookBodies: unknown[] = [];
+      const hookFetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        hookBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as unknown as typeof fetch;
+      const ctx = makeV2AppContext({ hookFetch });
+      ctx.agent.handler = async (_m, p) => {
+        if (p.includes('manifest_preflight')) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              capabilities: { schemas: [1, 2], features: [...AGENT_MANIFEST_FEATURES] },
+              checks: [],
+              installed: { version: '1.0.0', schema: 2, facts: {} },
+            },
+          };
+        }
+        return { status: 200, body: { ok: true, taskId: 'task-up' } };
+      };
+      return { ctx, hookBodies, hookFetch };
+    }
+
+    async function call(
+      ctx: ReturnType<typeof makeV2AppContext>,
+      cookie: string,
+      nodeId: string,
+      action: 'manifest_upgrade' | 'manifest_install',
+      values: Record<string, unknown>,
+      key: string,
+    ) {
+      const res = await ctx.app.request(
+        `/api/v1/nodes/${nodeId}/apps/app-catalog/${action}`,
+        {
+          method: 'POST',
+          headers: authHeaders(cookie),
+          body: JSON.stringify({ params: { manifestId: 'up-app', values }, idempotencyKey: key }),
+        },
+        ctx.env,
+      );
+      expect(res.status).toBe(200);
+      const forwarded = ctx.agent.requests.filter((r) => r.path === `/apps/app-catalog/${action}`).at(-1);
+      return (forwarded?.body as { params: { values: Record<string, unknown> } }).params.values;
+    }
+
+    it('upgrade：values 为空时转发 {}（不含默认值），有值时原样转发；hook 渲染仍合并默认值', async () => {
+      const { ctx, hookBodies } = setup();
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
+
+      expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', {}, 'up-key-0001')).toEqual({});
+      expect(hookBodies.at(-1)).toEqual({ port: '18080' });
+
+      expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', { port: 9000 }, 'up-key-0002')).toEqual({
+        port: 9000,
+      });
+      expect(hookBodies.at(-1)).toEqual({ port: '9000' });
+    });
+
+    it('upgrade 幂等重放分支同样转发原始 values，且不重复跑 hook', async () => {
+      const { ctx, hookFetch } = setup();
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
+
+      expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', { port: 9100 }, 'up-key-replay')).toEqual({
+        port: 9100,
+      });
+      expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', { port: 9100 }, 'up-key-replay')).toEqual({
+        port: 9100,
+      });
+      expect(hookFetch).toHaveBeenCalledTimes(1);
+      expect(await call(ctx, cookie, nodeId, 'manifest_upgrade', {}, 'up-key-replay')).toEqual({});
+    });
+
+    it('install 行为不变：转发值仍合并清单默认值', async () => {
+      const { ctx } = setup();
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      await ctx.appManifests.create({ id: 'up-app', enabled: true, manifest: upgradeManifest() });
+      expect(await call(ctx, cookie, nodeId, 'manifest_install', {}, 'in-key-0001')).toEqual({ port: 18080 });
+    });
+  });
+
+  it('保存提醒：preUpgrade / preUninstall 引用 params.* 时提示，仅 preInstall 或不引用时无此提醒', async () => {
+    const ctx = makeV2AppContext();
+    const cookie = await loginAsAdmin(ctx as never);
+    const post = async (id: string, hooks: Record<string, unknown>) => {
+      const res = await ctx.app.request(
+        '/api/v1/app-manifests',
+        {
+          method: 'POST',
+          headers: authHeaders(cookie),
+          body: JSON.stringify({ id, manifest: v2Manifest({ hooks }) }),
+        },
+        ctx.env,
+      );
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { warnings?: string[] }).warnings ?? [];
+    };
+
+    const upgradeWarn = await post('warn-up', {
+      preUpgrade: { method: 'POST', url: 'https://hub.example.com/u', body: { p: '{{params.port}}' } },
+    });
+    expect(upgradeWarn).toHaveLength(1);
+    expect(upgradeWarn[0]).toContain('preUpgrade');
+    expect(upgradeWarn[0]).toContain('{{params.port}}');
+    expect(upgradeWarn[0]).toContain('拿不到安装时填的值');
+
+    const uninstallWarn = await post('warn-un', {
+      preUninstall: { method: 'POST', url: 'https://hub.example.com/{{params.port}}' },
+    });
+    expect(uninstallWarn.join('\n')).toContain('preUninstall');
+
+    expect(
+      await post('warn-in', {
+        preInstall: { method: 'POST', url: 'https://hub.example.com/i', body: { p: '{{params.port}}' } },
+      }),
+    ).toEqual([]);
+    expect(
+      await post('warn-none', {
+        preUpgrade: { method: 'POST', url: 'https://hub.example.com/u', body: { p: '{{instance}}' } },
+      }),
+    ).toEqual([]);
+  });
 });
