@@ -98,6 +98,7 @@ from khc.util import (
     ValidationFailed,
     atomic_write,
     ensure_dir,
+    first_error_line,
     iso_utc,
     load_json,
     read_text,
@@ -2329,31 +2330,41 @@ class CaddySite(Adapter):
         if fallback.rc == 0:
             self._record_reload(ctx, ok=True, source="systemctl")
             return
-        unstuck = self._unstick_unit(ctx)
-        error = f"caddy reload rc={result.rc}: {tail(result.stderr, 500)}"
-        self._record_reload(ctx, ok=False, source="caddy", error=error)
-        raise CommandFailed(
-            "caddy reload 失败（证书/配置变更未生效，内核将回滚）",
-            details={
-                "reloadRc": result.rc,
-                "reloadStderr": tail(result.stderr),
-                "systemctlRc": fallback.rc,
-                "systemctlStderr": tail(fallback.stderr),
-                "unitRestarted": unstuck,
-            },
+        state_result = ctx.systemctl("is-active", CADDY_UNIT, check=False)
+        state_lines = (state_result.stdout or "").strip().splitlines()
+        unit_state = state_lines[0].strip() if state_lines else ""
+        restart_result = None
+        if state_result.rc != 0 or unit_state != "active":
+            restart_result = ctx.systemctl("restart", CADDY_UNIT, check=False)
+            if restart_result.rc == 0:
+                self._record_reload(ctx, ok=True, source="systemctl-restart")
+                return
+        hint = first_error_line(
+            restart_result.stderr if restart_result is not None else "",
+            fallback.stderr,
+            result.stderr,
         )
-
-    def _unstick_unit(self, ctx: Ctx) -> bool:
-        """reload 超时会把 unit 卡在 reloading，之后所有 reload 都不会生效。
-
-        systemd 在 reload 的控制进程被 kill 后不会自动复位，只能 restart。
-        """
-
-        state = ctx.systemctl("is-active", CADDY_UNIT, check=False)
-        current = (state.stdout or "").strip().splitlines()
-        if not current or current[0].strip() not in {"reloading", "activating", "deactivating"}:
-            return False
-        return ctx.systemctl("restart", CADDY_UNIT, check=False).rc == 0
+        error = f"caddy reload rc={result.rc}: {hint or tail(result.stderr, 500)}"
+        self._record_reload(ctx, ok=False, source="caddy", error=error)
+        details: dict[str, Any] = {
+            "reloadRc": result.rc,
+            "reloadStderr": tail(result.stderr),
+            "systemctlRc": fallback.rc,
+            "systemctlStderr": tail(fallback.stderr),
+            "unitState": unit_state or "unknown",
+            "unitRestarted": False,
+        }
+        if restart_result is not None:
+            details["restartRc"] = restart_result.rc
+            details["restartStderr"] = tail(restart_result.stderr)
+        raise CommandFailed(
+            (
+                f"caddy reload 失败（证书/配置变更未生效，内核将回滚）：{hint}"
+                if hint
+                else "caddy reload 失败（证书/配置变更未生效，内核将回滚）"
+            ),
+            details=details,
+        )
 
     def _record_reload(self, ctx: Ctx, *, ok: bool, source: str, error: Optional[str] = None) -> None:
         path = self.state_path(ctx)

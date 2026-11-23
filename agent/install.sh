@@ -37,6 +37,8 @@ ACME_DOMAIN=""
 ACME_DNS=""
 # 明文 HTTP 只允许监听回环地址；监听其它地址必须显式 --insecure-http（仅测试）。
 INSECURE_HTTP=0
+# ACME 占用 80/443 前若停过 Caddy，安装收尾时必须拉回。
+CADDY_WAS_STOPPED=0
 
 log()  { printf '[khc-agent] %s\n' "$*"; }
 fail() { printf '[khc-agent] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -678,6 +680,9 @@ acme_issue() {
   else
     # 443/80 需要独占：先停掉可能占用端口的 Agent 与 Caddy，签发完由安装流程重新启动。
     systemctl stop khc-agent.service 2>/dev/null || true
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+      CADDY_WAS_STOPPED=1
+    fi
     systemctl stop caddy 2>/dev/null || true
   fi
 
@@ -1022,6 +1027,9 @@ if [ "$START" = "1" ]; then
     sleep 0.5
     systemctl --no-pager --lines=0 status khc-agent.service || true
     health_check || fail "服务已安装但健康检查失败，请查看: journalctl -u khc-agent -n 100"
+    if [ "$CADDY_WAS_STOPPED" = "1" ] || { printf ' %s ' "$WITH_PKGS" | grep -q ' caddy ' && command -v caddy >/dev/null 2>&1; }; then
+      systemctl start caddy 2>/dev/null || true
+    fi
   else
     if systemctl --user show-environment >/dev/null 2>&1; then
       systemctl --user daemon-reload

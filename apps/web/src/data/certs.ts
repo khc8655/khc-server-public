@@ -145,20 +145,30 @@ export function certCoversDomain(domains: readonly string[], target: string): bo
   });
 }
 
-export function isCertExpired(cert: Certificate, nowSec = Math.floor(Date.now() / 1000)): boolean {
+export interface CertMatchCandidate {
+  id: string;
+  domains: readonly string[];
+  notAfter: number | null;
+  createdAt?: number;
+}
+
+export function isCertExpired(
+  cert: CertMatchCandidate,
+  nowSec = Math.floor(Date.now() / 1000),
+): boolean {
   return typeof cert.notAfter === 'number' && Number.isFinite(cert.notAfter) && cert.notAfter <= nowSec;
 }
 
-function hasExactDomain(cert: Certificate, host: string): boolean {
+function hasExactDomain(cert: CertMatchCandidate, host: string): boolean {
   return cert.domains.some((raw) => raw.trim().toLowerCase().replace(/\.$/, '') === host);
 }
 
 /** 找出覆盖目标域名的证书并按「未过期 > 精确域名 > 最新到期时间」排序。 */
-export function matchingCertsForDomain(
-  certs: readonly Certificate[],
+export function matchingCertsForDomain<T extends CertMatchCandidate>(
+  certs: readonly T[],
   domain: string,
   nowSec = Math.floor(Date.now() / 1000),
-): Certificate[] {
+): T[] {
   const host = domain.trim().toLowerCase().replace(/\.$/, '');
   if (!host) return [];
   return certs
@@ -173,22 +183,22 @@ export function matchingCertsForDomain(
       const aAfter = a.notAfter ?? Number.MAX_SAFE_INTEGER;
       const bAfter = b.notAfter ?? Number.MAX_SAFE_INTEGER;
       if (aAfter !== bAfter) return bAfter - aAfter;
-      return b.createdAt - a.createdAt;
+      return (b.createdAt ?? 0) - (a.createdAt ?? 0);
     });
 }
 
-export function findCoveringCert(
-  certs: readonly Certificate[],
+export function findCoveringCert<T extends CertMatchCandidate>(
+  certs: readonly T[],
   domain: string,
   nowSec = Math.floor(Date.now() / 1000),
-): Certificate | null {
+): T | null {
   const list = matchingCertsForDomain(certs, domain, nowSec);
   const valid = list.find((cert) => !isCertExpired(cert, nowSec));
   return valid ?? null;
 }
 
 export function pickPreferredCertId(
-  certs: readonly Certificate[],
+  certs: readonly CertMatchCandidate[],
   domain: string,
   preferredCertId?: string | null,
   nowSec = Math.floor(Date.now() / 1000),

@@ -5,12 +5,14 @@
 import { useState, type ReactNode } from 'react';
 import type { Node } from '@khc/contracts';
 import { DEFAULT_REDIRECT_CODE, parseList, type CaddySite } from '../../data/sites';
+import { pickPreferredCertId } from '../../data/certs';
 import { paths } from '../../registry/routes';
 import { AdvancedSection } from '../../patterns';
 import {
   Banner,
   Button,
   Card,
+  CodeBlock,
   Drawer,
   Field,
   InlineError,
@@ -173,11 +175,10 @@ export function SiteDrawer({
   onClose,
   onSave,
   onDelete: _onDelete,
-  onOpenInstallWizard,
 }: {
   form: SiteFormState;
   errors: SiteErrors;
-  saveError: string | null;
+  saveError: string | { message: string; details?: string | null; hint?: string | null } | null;
   saving: boolean;
   /** 保留可选签名，兼容旧调用方（实际安装走独立「安装并发布应用」向导） */
   hubId?: string;
@@ -193,7 +194,6 @@ export function SiteDrawer({
   onClose: () => void;
   onSave: (apply: boolean) => void;
   onDelete?: () => Promise<void>;
-  onOpenInstallWizard?: () => void;
 }) {
   const dirty = siteSignature(form) !== form.initial;
   const parsedUpstream = splitUpstream(form.upstreams);
@@ -294,6 +294,39 @@ export function SiteDrawer({
     const host = target === 'local' ? '127.0.0.1' : target;
     onChange({ upstreams: joinUpstream(host, upstreamPort) });
   };
+  const handleDomainsChange = (value: string) => {
+    const patch: Partial<SiteFormState> = { domains: value };
+    const nextDomains = parseList(value);
+    const primary = nextDomains[0] ?? '';
+    if (primary) {
+      const preferred = pickPreferredCertId(certificates, primary, form.certId || node?.tlsCertId);
+      if (preferred) {
+        if (form.mode === 'create' && form.tlsMode === 'auto') {
+          patch.tlsMode = 'manual';
+          patch.certId = preferred;
+        } else if (form.tlsMode === 'manual') {
+          const currentCert = certificates.find((cert) => cert.id === form.certId);
+          const coversAll =
+            currentCert !== undefined &&
+            nextDomains.every((domain) =>
+              currentCert.domains.some(
+                (certDomain) =>
+                  certDomain === domain ||
+                  (certDomain.startsWith('*.') && domain.endsWith(certDomain.slice(1))),
+              ),
+            );
+          if (!form.certId || !coversAll) {
+            patch.certId = preferred;
+          }
+        }
+      }
+    }
+    onChange(patch);
+  };
+  const resolvedSaveError =
+    typeof saveError === 'string'
+      ? { message: saveError, details: null, hint: null }
+      : saveError;
   return (
     <Drawer
       open
@@ -369,28 +402,21 @@ export function SiteDrawer({
               }
             />
           </Field>
-          {domainOptions.length > 0 ? (
-            <Field id="site-domain-pick" label={zh.sites.domainPick} help={zh.sites.domainPickHelp} optional>
-              <Select
-                id="site-domain-pick"
-                value={domainOptions.includes(form.domains.trim()) ? form.domains.trim() : ''}
-                options={[
-                  { value: '', label: zh.sites.domainPickCustom },
-                  ...domainOptions.map((domain) => ({ value: domain, label: domain })),
-                ]}
-                onChange={(value) => {
-                  if (value) onChange({ domains: value });
-                }}
-              />
-            </Field>
-          ) : null}
           <Field id="site-domains" label={zh.fields.domains} help={zh.sites.domainsHelp} error={errors.domains} required>
             <TextInput
               id="site-domains"
               value={form.domains}
               mono
-              onChange={(value) => onChange({ domains: value })}
+              list={domainOptions.length > 0 ? 'site-domain-options' : undefined}
+              onChange={handleDomainsChange}
             />
+            {domainOptions.length > 0 ? (
+              <datalist id="site-domain-options">
+                {domainOptions.map((domain) => (
+                  <option key={domain} value={domain} />
+                ))}
+              </datalist>
+            ) : null}
           </Field>
           <Field
             id="site-port"
@@ -430,13 +456,15 @@ export function SiteDrawer({
             )}
             appLabel={form.name.trim() || undefined}
           />
-          <Field id="site-enabled" label={zh.sites.enabled} variant="row">
-            <Toggle
-              checked={form.enabled}
-              label={zh.sites.enabled}
-              onChange={(checked) => onChange({ enabled: checked })}
-            />
-          </Field>
+          {form.mode === 'edit' ? (
+            <Field id="site-enabled" label={zh.sites.enabled} variant="row">
+              <Toggle
+                checked={form.enabled}
+                label={zh.sites.enabled}
+                onChange={(checked) => onChange({ enabled: checked })}
+              />
+            </Field>
+          ) : null}
         </GroupCard>
 
         {form.kind === 'proxy' ? (
@@ -470,24 +498,18 @@ export function SiteDrawer({
                 </div>
               </Field>
             ) : null}
-            {selectedTarget === 'local' && form.mode === 'create' && onOpenInstallWizard ? (
-              <Banner
-                tone="info"
-                title={zh.hosted.siteDrawerAppHint}
-                action={
-                  <Button
-                    label={zh.hosted.siteDrawerOpenWizard}
-                    size="sm"
-                    onClick={onOpenInstallWizard}
-                  />
-                }
-              />
-            ) : null}
             {selectedTarget !== 'custom' ? (
               <Field
                 id="site-target-port"
-                label={zh.sites.targetPort}
-                help={peers.length > 0 ? zh.sites.targetPortHelp : zh.sites.targetPortHelpNoPeers}
+                label={selectedTarget === 'local' ? zh.sites.localListenPort : zh.sites.targetPort}
+                help={
+                  selectedTarget === 'local'
+                    ? zh.sites.localListenPortHelp
+                    : peers.length > 0
+                      ? zh.sites.targetPortHelp
+                      : zh.sites.targetPortHelpNoPeers
+                }
+                error={errors.upstreams}
                 required
               >
                 <NumberInput
@@ -500,31 +522,22 @@ export function SiteDrawer({
                   }
                 />
               </Field>
-            ) : null}
-            <Field
-              id="site-upstreams"
-              label={zh.sites.upstreams}
-              help={zh.sites.upstreamsHelp}
-              error={errors.upstreams}
-              required
-            >
-              {selectedTarget === 'custom' ? (
+            ) : (
+              <Field
+                id="site-upstreams"
+                label={zh.sites.upstreams}
+                help={zh.sites.upstreamsHelp}
+                error={errors.upstreams}
+                required
+              >
                 <TextInput
                   id="site-upstreams"
                   value={form.upstreams}
                   mono
                   onChange={(value) => onChange({ upstreams: value })}
                 />
-              ) : (
-                <div className="ui-readonly-field mono">{form.upstreams || '—'}</div>
-              )}
-            </Field>
-            <Field id="site-path-routes" label={zh.sites.pathRoutes} help={zh.sites.pathRoutesHelp} error={errors.pathRoutes} optional>
-              <PathRouteRows
-                rows={form.pathRoutes}
-                onChange={(pathRoutes) => onChange({ pathRoutes })}
-              />
-            </Field>
+              </Field>
+            )}
           </GroupCard>
         ) : null}
 
@@ -675,7 +688,24 @@ export function SiteDrawer({
         </GroupCard>
 
         <AdvancedSection title={zh.common.advancedSection}>
-        <GroupCard title={zh.sites.groupSecurity}>
+          <Stack gap={4}>
+            {form.kind === 'proxy' ? (
+              <Card>
+                <Field
+                  id="site-path-routes"
+                  label={zh.sites.pathRoutes}
+                  help={zh.sites.pathRoutesHelp}
+                  error={errors.pathRoutes}
+                  optional
+                >
+                  <PathRouteRows
+                    rows={form.pathRoutes}
+                    onChange={(pathRoutes) => onChange({ pathRoutes })}
+                  />
+                </Field>
+              </Card>
+            ) : null}
+            <GroupCard title={zh.sites.groupSecurity}>
           <Field
             id="site-basic-user"
             label={zh.sites.username}
@@ -758,9 +788,18 @@ export function SiteDrawer({
             />
           </Field>
         </GroupCard>
+          </Stack>
         </AdvancedSection>
 
-        {saveError ? <InlineError message={saveError} /> : null}
+        {resolvedSaveError ? (
+          <Stack gap={2}>
+            <InlineError message={resolvedSaveError.message} />
+            {resolvedSaveError.hint ? <Banner tone="warn" title={resolvedSaveError.hint} /> : null}
+            {resolvedSaveError.details ? (
+              <CodeBlock code={resolvedSaveError.details} label={zh.sites.detailsTitle} />
+            ) : null}
+          </Stack>
+        ) : null}
       </Stack>
     </Drawer>
   );

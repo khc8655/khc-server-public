@@ -247,6 +247,9 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(screen.queryByLabelText('Caddy 发布后的对外地址（可选）')).toBeNull();
     const domainInput = screen.getByLabelText('发布域名') as HTMLInputElement;
     expect(domainInput.value).toBe('hk.example.com');
+    expect(domainInput.getAttribute('list')).toBe('wizard-domain-options');
+    expect(document.querySelector('#wizard-domain-options option[value="hk.example.com"]')).toBeTruthy();
+    expect(screen.queryByLabelText(/选择已有域名/)).toBeNull();
     const portInput = screen.getByLabelText('对外端口') as HTMLInputElement;
     expect(portInput.value).toBe('443');
 

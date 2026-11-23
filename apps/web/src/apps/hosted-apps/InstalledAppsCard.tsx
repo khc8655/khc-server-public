@@ -102,6 +102,7 @@ export function InstalledAppsCard({
       key: 'name',
       type: 'name',
       header: '应用',
+      width: '30%',
       value: (entry) => {
         const view = viewMap.get(entry.manifestId);
         const base = !view?.invalid && view?.def.name ? view.def.name : entry.manifestId;
@@ -113,6 +114,7 @@ export function InstalledAppsCard({
       key: 'version',
       type: 'mono',
       header: '版本',
+      width: '34%',
       value: (entry) => entry.version,
       render: (entry) => {
         const view = viewMap.get(entry.manifestId);
@@ -131,6 +133,7 @@ export function InstalledAppsCard({
       key: 'status',
       type: 'status',
       header: '状态',
+      width: '20%',
       value: (entry) => appStatus(entry, catalogState).label,
       status: (entry) => appStatus(entry, catalogState),
     },
@@ -138,8 +141,11 @@ export function InstalledAppsCard({
       key: 'detail',
       type: 'actions',
       header: '',
+      width: '16%',
       render: (entry) => (
-        <Button label="详情" size="sm" variant="ghost" onClick={() => openEntry(entry)} />
+        <span onClick={(event) => event.stopPropagation()}>
+          <Button label="详情" size="sm" variant="ghost" onClick={() => openEntry(entry)} />
+        </span>
       ),
     },
   ];

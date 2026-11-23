@@ -31,7 +31,7 @@ try:  # pragma: no cover - 非 Unix 平台没有 fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 # 版本协商（ADR-0013 / docs/engineering/release.md §1.1 兼容矩阵）：
 # 本 Agent 要求控制面面板最低版本。面板在每个 HMAC 请求里带 X-Khc-Panel-Version，
@@ -250,6 +250,18 @@ def tail(text: Optional[str], limit: int = 2000) -> str:
     if len(text) <= limit:
         return text
     return "..." + text[-limit:]
+
+
+def first_error_line(*texts: Optional[str], limit: int = 240) -> str:
+    """提取第一条非空错误摘要，避免对外只抛出无上下文的笼统失败。"""
+    for raw in texts:
+        if not raw:
+            continue
+        for line in str(raw).splitlines():
+            cleaned = line.strip()
+            if cleaned:
+                return cleaned[:limit]
+    return ""
 
 
 # ---------------------------------------------------------------------------

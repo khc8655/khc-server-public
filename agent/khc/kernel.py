@@ -50,6 +50,7 @@ from .util import (
     deep_get,
     ensure_dir,
     file_mode,
+    first_error_line,
     iso_utc,
     load_json,
     read_bytes,
@@ -1734,15 +1735,35 @@ class Kernel:
         systemctl_result = ctx.systemctl("reload", "caddy.service", check=False)
         if systemctl_result.rc == 0:
             return True
+        # caddy.service 未启动或卡死（如被 acme 流程停过、刚装包未拉起）时 reload 必然失败；
+        # 上游已经通过 caddy validate，此时直接 restart 把服务拉起来。
+        state_result = ctx.systemctl("is-active", "caddy.service", check=False)
+        state_lines = (state_result.stdout or "").strip().splitlines()
+        unit_state = state_lines[0].strip() if state_lines else ""
+        restart_result = None
+        if state_result.rc != 0 or unit_state != "active":
+            restart_result = ctx.systemctl("restart", "caddy.service", check=False)
+            if restart_result.rc == 0:
+                return True
         if required:
+            hint = first_error_line(
+                restart_result.stderr if restart_result is not None else "",
+                systemctl_result.stderr,
+                reload_result.stderr,
+            )
+            details: dict[str, Any] = {
+                "reloadRc": reload_result.rc,
+                "reloadStderr": tail(reload_result.stderr),
+                "systemctlRc": systemctl_result.rc,
+                "systemctlStderr": tail(systemctl_result.stderr),
+                "unitState": unit_state or "unknown",
+            }
+            if restart_result is not None:
+                details["restartRc"] = restart_result.rc
+                details["restartStderr"] = tail(restart_result.stderr)
             raise CommandFailed(
-                "caddy reload 失败",
-                details={
-                    "reloadRc": reload_result.rc,
-                    "reloadStderr": tail(reload_result.stderr),
-                    "systemctlRc": systemctl_result.rc,
-                    "systemctlStderr": tail(systemctl_result.stderr),
-                },
+                f"caddy reload 失败：{hint}" if hint else "caddy reload 失败",
+                details=details,
             )
         LOG.warning("caddy reload failed (best effort)")
         return False
