@@ -236,9 +236,20 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 
 | 批次 | 开工说明 | 状态 |
 |---|---|---|
-| V1 | `docs/plans/app-distribution-v2-2026-11-23-v1.md` | 可开工 |
-| V2 | `docs/plans/app-distribution-v2-2026-11-23-v2.md` | V1 合入后开工 |
-| V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | V1 合入后开工（与 V2 并行） |
-| V4–V6 | V1 合入后由设计任务按最终契约补写 | 待写 |
+| V1 | `docs/plans/app-distribution-v2-2026-11-23-v1.md` | 已合入（#151） |
+| V2 | `docs/plans/app-distribution-v2-2026-11-23-v2.md` | 已合入（#154） |
+| V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
+| V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 可开工 |
+| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR） |
+| V6 | `docs/plans/app-distribution-v2-2026-11-23-v6.md` | V5a、V5b 合入后开工 |
 
 开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 PR 不修改 `docs/plans/` 下的文件。
+
+## 14. 真机验证发现与处置（2026-11-23）
+
+| 发现（证据 §五） | 根因 | 处置 |
+|---|---|---|
+| 已装卡片卸载按钮被禁用 | 前端按记录键字符串匹配清单；测试时手工传了 `instance: "default"` | V4：前端不发送 `instance`，按条目的 `manifestId` / `instance` 字段定位；默认实例 = `manifestId` |
+| 首次建用户后 `systemctl --user` 报 bus 未就绪 | 执行器 enable-linger 后未等待 `user@<uid>.service`；create 模式自 R1 起即存在，非 0.8.0 回归 | V5b：Agent 0.8.1 等待总线就绪并注入 `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` |
+| `manifest_installed` 不传 `instance` 查不到 | 同第 1 行：记录是以 `default` 实例安装的，属测试口径 | 不改代码；默认实例约定写入 V4 与 `docs/hosted-apps.md` |
+| 第三轮升级后约 30s 显示不可达 | Worker `node-client` 对连接拒绝的冷却为 30s（超时才是 5s），`/state` 不绕过冷却；Agent 实际早已恢复 | 登记 backlog，不阻塞本提案 |
