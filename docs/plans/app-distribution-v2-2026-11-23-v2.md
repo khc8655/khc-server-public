@@ -70,10 +70,10 @@
    - 其余 `checks` 有失败（只在 install / upgrade 阶段检查）→ 422 `preflight_failed`，`details.checks` 原样返回。
    - upgrade / uninstall 时 `installed === null` → 409 `not_installed`。
    - `manifest_control` / `manifest_logs` / `manifest_installed` 不调用预检，版本判断改读 `/state` 缓存的 `agent.capabilities.appManifest`：Worker 侧先 `getNodeCached`，若已缓存的最近一次 `/state` 不可用，则直接转发，由 Agent 对未知动作返回 4xx，Worker 转成 409 `agent_upgrade_required`。
-3. **控制面步骤**：install → `hooks.preInstall`；upgrade → `hooks.preUpgrade ?? hooks.preInstall`；uninstall → `hooks.preUninstall`。变量见 V1 §3：`node.id`、`node.name`、`instance`、`params.*`（用户值合并参数默认值）、`secret.*`、`facts.*`（来自第 2 步 `installed.facts`）。
+3. **控制面步骤**：install → `hooks.preInstall`；upgrade → `hooks.preUpgrade`（未声明则不执行，不回退到 preInstall）；uninstall → `hooks.preUninstall`。变量见 V1 §3：`node.id`、`node.name`、`instance`、`params.*`（用户值合并参数默认值）、`secret.*`、`facts.*`（来自第 2 步 `installed.facts`）。
    - 仅 uninstall 接受 `skipHooks: true`：跳过 `preUninstall`，审计记 `app.hook.skipped`，任务结果卡片由 V3 提示「第三方需人工处理」（Worker 在转发参数里加 `hooksSkipped: true`）。
 4. **转发**：参数为 `{manifest: 归一化后的 v2, manifestId, instance, values, runtime*, hookOutputs, hookFacts, hooksSkipped?}`；`hookOutputs` 为全部提取值，`hookFacts` 为其中 `public` 子集。
-5. **保密通道**：`hookOutputs` 非空时，按 `assertSecureChannelForSecrets` 同一口径处理（明文通道拒绝，development 豁免）。即 IP 明文接入的节点不能安装带控制面步骤的应用；错误信息要写清原因与改法（换域名或 Tunnel 接入）。
+5. **保密通道**：本次要执行的控制面步骤声明了 `extract`（即会产生 `hookOutputs`）时，**在执行步骤之前**按 `assertSecureChannelForRawSecrets` 口径检查（明文通道拒绝，development 豁免），避免第三方已签发资源后才被拒绝。即 IP 明文接入的节点不能安装带控制面步骤的应用；错误信息要写清原因与改法（换域名或 Tunnel 接入）。
 
 ## 4. 控制面步骤执行器（`manifest-hooks.ts`）
 
