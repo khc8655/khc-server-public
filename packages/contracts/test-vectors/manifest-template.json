@@ -1,0 +1,142 @@
+[
+  {
+    "template": "https://hub.example.com/nodes/{{node.id}}/{{instance}}",
+    "vars": { "node": { "id": "nd_123" }, "instance": "default" },
+    "expect": "https://hub.example.com/nodes/nd_123/default"
+  },
+  {
+    "template": "{{node.name}}-{{instance}}",
+    "vars": { "node": { "name": "edge-hk" }, "instance": "prod" },
+    "expect": "edge-hk-prod"
+  },
+  {
+    "template": "Bearer {{secret.provision_key}}",
+    "vars": { "secret": { "provision_key": "sk_live_abc" } },
+    "expect": "Bearer sk_live_abc"
+  },
+  {
+    "template": "node={{facts.hub_node_id}}&p={{params.port}}&flag={{params.flag}}",
+    "vars": { "facts": { "hub_node_id": "hn_9" }, "params": { "port": 0, "flag": false } },
+    "expect": "node=hn_9&p=0&flag=false"
+  },
+  {
+    "template": "{{ instance }}",
+    "vars": { "instance": "main" },
+    "expect": "main"
+  },
+  {
+    "template": "preset={{   params.preset   }}!",
+    "vars": { "params": { "preset": "all_lite_api" } },
+    "expect": "preset=all_lite_api!"
+  },
+  {
+    "template": "https://hub.example.com/{{instance}}/{{node.name}}/{{instance}}",
+    "vars": { "instance": "s1", "node": { "name": "n1" } },
+    "expect": "https://hub.example.com/s1/n1/s1"
+  },
+  {
+    "template": "{{params.a}}-{{params.a}}-{{params.a}}",
+    "vars": { "params": { "a": "x" } },
+    "expect": "x-x-x"
+  },
+  {
+    "template": "http://127.0.0.1:{{params.port}}/health",
+    "vars": { "params": { "port": 7860 } },
+    "expect": "http://127.0.0.1:7860/health"
+  },
+  {
+    "template": "http://[::1]:{{ params.port }}/readyz?i={{instance}}",
+    "vars": { "params": { "port": 8080 }, "instance": "alpha" },
+    "expect": "http://[::1]:8080/readyz?i=alpha"
+  },
+  {
+    "template": "https://hub.example.com:{{params.port}}/v1/{{instance}}",
+    "vars": { "params": { "port": 8443 }, "instance": "v2" },
+    "expect": "https://hub.example.com:8443/v1/v2"
+  },
+  {
+    "template": "{{params.a}}{{params.b}}",
+    "vars": { "params": { "a": "foo", "b": "bar" } },
+    "expect": "foobar"
+  },
+  {
+    "template": "{{node.name}}{{instance}}",
+    "vars": { "node": { "name": "us1" }, "instance": "01" },
+    "expect": "us101"
+  },
+  {
+    "template": "节点 {{node.name}} 实例 {{instance}}（中文状态）",
+    "vars": { "node": { "name": "香港节点" }, "instance": "默认" },
+    "expect": "节点 香港节点 实例 默认（中文状态）"
+  },
+  {
+    "template": "https://api.example.com/msg?label=测试-{{params.label}}",
+    "vars": { "params": { "label": "中文参数" } },
+    "expect": "https://api.example.com/msg?label=测试-中文参数"
+  },
+  {
+    "template": "no-placeholders-here",
+    "vars": {},
+    "expect": "no-placeholders-here"
+  },
+  {
+    "template": "raw={{params.special}}",
+    "vars": { "params": { "special": "a&b=1\"'<>" } },
+    "expect": "raw=a&b=1\"'<>"
+  },
+  {
+    "template": "http://127.0.0.1:{{params.port}}/health",
+    "vars": { "params": {} },
+    "error": "template_missing_var"
+  },
+  {
+    "template": "Bearer {{secret.api_key}}",
+    "vars": { "secret": {} },
+    "error": "template_missing_var"
+  },
+  {
+    "template": "val={{facts.external_id}}",
+    "vars": { "facts": { "external_id": null } },
+    "error": "template_missing_var"
+  },
+  {
+    "template": "empty {{ }} brace",
+    "vars": {},
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "unknown {{foo}} var",
+    "vars": { "foo": "bar" },
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "unsupported {{node.ip}} field",
+    "vars": { "node": { "ip": "1.2.3.4" } },
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "bad param {{params.1bad}}",
+    "vars": {},
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "nested {{ {{instance}} }}",
+    "vars": { "instance": "a" },
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "triple {{{instance}}}",
+    "vars": { "instance": "a" },
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "unclosed {{instance",
+    "vars": { "instance": "a" },
+    "error": "template_invalid_syntax"
+  },
+  {
+    "template": "dangling }} close",
+    "vars": {},
+    "error": "template_invalid_syntax"
+  }
+]
