@@ -287,12 +287,12 @@ export interface TunnelRepo {
 
 export interface NewAppManifest {
   id: string;
-  manifest: import('@khc/contracts').AppManifestDefinition;
+  manifest: import('@khc/contracts').AppManifestAnyDefinition;
   enabled: boolean;
 }
 
 export interface AppManifestPatch {
-  manifest: import('@khc/contracts').AppManifestDefinition;
+  manifest: import('@khc/contracts').AppManifestAnyDefinition;
   enabled?: boolean;
 }
 

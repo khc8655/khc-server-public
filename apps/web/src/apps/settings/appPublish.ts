@@ -5,7 +5,11 @@
  * 这里把三方拼成一个可直接交给 `publishProxySite` 的计划，并给出不可发布的原因，
  * 免得 UI 各写一套判断，出现「按钮能点但必然失败」。
  */
-import type { AppManifest, Node } from '@khc/contracts';
+import {
+  toManifestV2,
+  type AppManifestAnyDefinition,
+  type Node,
+} from '@khc/contracts';
 import { buildDomainEndpoint, parseDomainEndpoint } from '../../data/endpoint';
 
 export interface AppPublishPlan {
@@ -53,30 +57,34 @@ export function nodeAgentPort(node: Node | undefined): number {
 
 /** 清单声明要发布的本机端口 → `host:port`；参数缺失或非法返回 null。 */
 export function appPublishUpstream(
-  manifest: AppManifest['manifest'],
+  manifest: AppManifestAnyDefinition,
   values: Record<string, unknown>,
 ): string | null {
-  const spec = manifest.publish;
-  if (!spec) return null;
-  const raw = spec.portParam ? values[spec.portParam] : spec.port;
+  const v2 = toManifestV2(manifest);
+  const endpoint = v2.endpoints?.find((ep) => ep.publish === 'caddy') ?? v2.endpoints?.[0];
+  if (!endpoint) return null;
+  const raw = endpoint.portParam ? values[endpoint.portParam] : endpoint.port;
   const port = typeof raw === 'number' ? raw : Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  const host = (spec.host ?? '127.0.0.1').trim() || '127.0.0.1';
+  const legacyHost = 'publish' in manifest ? manifest.publish?.host?.trim() : undefined;
+  const host = legacyHost || (endpoint.bind === 'any' ? '0.0.0.0' : '127.0.0.1');
   return `${host}:${port}`;
 }
 
 export function deriveAppPublishPlan(args: {
-  manifest: AppManifest['manifest'];
+  manifest: AppManifestAnyDefinition;
   node: Node | undefined;
   values: Record<string, unknown>;
   publishPort: number;
 }): AppPublishResult {
   const { manifest, node, values, publishPort } = args;
+  const v2 = toManifestV2(manifest);
+  const endpoint = v2.endpoints?.find((ep) => ep.publish === 'caddy') ?? v2.endpoints?.[0];
   const domain = nodePublishDomain(node);
   const agentPort = nodeAgentPort(node);
   const upstream = appPublishUpstream(manifest, values);
   const base = { domain, agentPort, upstream };
-  if (!manifest.publish) return { plan: null, issue: 'no-publish', ...base };
+  if (!endpoint) return { plan: null, issue: 'no-publish', ...base };
   if (!upstream) return { plan: null, issue: 'no-port', ...base };
   if (!domain) return { plan: null, issue: 'no-domain', ...base };
   const port = Number.isInteger(publishPort) && publishPort > 0 && publishPort < 65536 ? publishPort : 0;

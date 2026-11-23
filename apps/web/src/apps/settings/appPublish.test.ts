@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AppManifest, Node } from '@khc/contracts';
+import type { AppManifestDefinition, Node } from '@khc/contracts';
 import {
   appPublishTarget,
   appPublishUpstream,
@@ -31,12 +31,12 @@ function node(overrides: Partial<Node> = {}): Node {
   };
 }
 
-function manifest(publish: AppManifest['manifest']['publish'] = {
+function manifest(publish: AppManifestDefinition['publish'] = {
   label: 'Web 管理页',
   host: '127.0.0.1',
   portParam: 'web_port',
   port: 3430,
-}): AppManifest['manifest'] {
+}): AppManifestDefinition {
   return {
     name: 'magpie',
     version: '0.1.4265',

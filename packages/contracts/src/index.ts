@@ -1758,9 +1758,34 @@ export const appManifestDefinitionSchema = z
   .strict();
 export type AppManifestDefinition = z.infer<typeof appManifestDefinitionSchema>;
 
+export const MANIFEST_V2_MIN_AGENT = '0.8.0';
+
+export const appManifestSecretStatusSchema = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  hint: z.string().optional(),
+  configured: z.boolean(),
+  allowHosts: z.array(z.string()),
+  updatedAt: z.number().int().nonnegative().nullable(),
+});
+export type AppManifestSecretStatus = z.infer<typeof appManifestSecretStatusSchema>;
+
+export const appManifestSecretsResponseSchema = z.object({
+  secrets: z.array(appManifestSecretStatusSchema),
+});
+export type AppManifestSecretsResponse = z.infer<typeof appManifestSecretsResponseSchema>;
+
+export const appManifestAnyDefinitionSchema = z.union([
+  appManifestDefinitionSchema,
+  appManifestDefinitionV2Schema,
+]);
+export type AppManifestAnyDefinition = z.infer<typeof appManifestAnyDefinitionSchema>;
+
 export const appManifestSchema = z.object({
   id: z.string().min(1),
-  manifest: appManifestDefinitionSchema,
+  manifest: appManifestAnyDefinitionSchema.optional(),
+  invalid: z.boolean().optional(),
+  error: z.string().optional(),
   enabled: z.boolean(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -1776,7 +1801,7 @@ export const createAppManifestRequestSchema = z
       .min(1)
       .max(48)
       .regex(/^[a-z][a-z0-9-]*$/, '应用 id 必须是小写字母开头的 slug'),
-    manifest: appManifestDefinitionSchema,
+    manifest: appManifestAnyDefinitionSchema,
     enabled: z.boolean().default(true),
   })
   .strict();
@@ -1784,13 +1809,16 @@ export type CreateAppManifestRequest = z.infer<typeof createAppManifestRequestSc
 
 export const updateAppManifestRequestSchema = z
   .object({
-    manifest: appManifestDefinitionSchema,
+    manifest: appManifestAnyDefinitionSchema,
     enabled: z.boolean().optional(),
   })
   .strict();
 export type UpdateAppManifestRequest = z.infer<typeof updateAppManifestRequestSchema>;
 
-export const appManifestResponseSchema = z.object({ appManifest: appManifestSchema });
+export const appManifestResponseSchema = z.object({
+  appManifest: appManifestSchema,
+  warnings: z.array(z.string()).optional(),
+});
 export type AppManifestResponse = z.infer<typeof appManifestResponseSchema>;
 export const appManifestListResponseSchema = z.object({
   appManifests: z.array(appManifestSchema),
@@ -1823,18 +1851,9 @@ export const manifestActionParamsSchema = z
       .regex(/^[a-z][a-z0-9_-]*$/, '用户名必须是小写字母开头')
       .optional(),
     runtimePassword: z.string().min(1).max(128).optional(),
+    skipHooks: z.boolean().optional(),
   })
   .passthrough();
 export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;
-
-// ---------------------------------------------------------------------------
-// V2 清单契约联合与导出（V2 批次才接入路由，本批仅导出契约）
-// ---------------------------------------------------------------------------
-
-export const appManifestAnyDefinitionSchema = z.union([
-  appManifestDefinitionSchema,
-  appManifestDefinitionV2Schema,
-]);
-export type AppManifestAnyDefinition = z.infer<typeof appManifestAnyDefinitionSchema>;
 
 export * from './manifest-v2';

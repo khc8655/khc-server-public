@@ -1,6 +1,6 @@
 # khc-server v3：冻结核心 + 应用适配器 + 无损密钥轮换
 
-> 状态：现行 ｜ 最后核验：2026-11-20 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
 > 范围：架构与冻结契约（核心/适配器/连接/数据模型）
 > **取代**：`design-v1.md`（现 `docs/archive/2026-11/design-v1.md`）的连接层、插件包、transports 抽象；`design-v2-simple.md`（现 `docs/archive/2026-11/design-v2-simple.md`）的接口清单。v2 的原则（按需连接、无心跳、失败要快）继续有效。
 > **定位**：面板**不是监控面板**，是"替我安装 / 卸载 / 配置常用软件"的遥控器 + 配置仓库。一个月大约打开 10 次。
@@ -116,6 +116,8 @@
 | `GET/POST /ssh-keys`，`PATCH/DELETE /ssh-keys/:id` | 全局 SSH 公钥库（0009；只存公钥，Worker 侧规范化并计算 `SHA256:` 指纹，重复指纹 409） | `sshKeys.ts` |
 | `GET /nodes/:id/export`，`POST /nodes/:id/import` | 备份导出/导入（见 `docs/backup.md`） | `backup.ts` |
 | `GET /agent/releases`；`POST /nodes/:id/agent/install-command|upgrade-command|uninstall-command|upgrade` | Agent 生命周期命令与升级（见 `docs/agent-lifecycle.md`、`docs/agent-releases.md`） | `agent_lifecycle.ts`（命令组装在 `lib/agent-commands.ts`，发布包校验在 `lib/agent-releases.ts`） |
+| `GET/POST /app-manifests`，`PUT/DELETE /app-manifests/:id`，`GET /app-manifests/:id/secrets` | 应用清单 CRUD（支持 v1/v2、坏记录按条目返回 `invalid: true`）与凭据配置状态（不回显 value） | `appManifests.ts` |
+| `POST /nodes/:id/apps/app-catalog/manifest_*` | 清单 v2 生命周期编排：`manifest_preflight` / `manifest_install` / `manifest_upgrade` / `manifest_uninstall`（预检 + hooks + 版本协商 409）与 `manifest_control` / `manifest_logs` / `manifest_installed` | `apps.ts`（`lib/manifest-lifecycle.ts`、`lib/manifest-hooks.ts`） |
 
 `apply` 时 Worker 把 D1 里该应用最新的 `config` 和 `rev` 一起带给 Agent，前端不直接传配置给 Hub，保证"仓库是唯一事实来源"。
 
@@ -313,7 +315,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 | `wireguard` | 接口 + peers；自定义动作 `rotate_peer`、`confirm_rotation`、`cancel_rotation`、`client_config`（见 §5） |
 | `caddy-site` | 反代/静态站点，产出 Caddy 片段 |
 | `port-forward` | socat/nftables 转发单元 |
-| `app-catalog` | 应用目录：recipe 安装/卸载任务 + 已安装清单（§3.5） |
+| `app-catalog` | 应用目录：recipe 安装/卸载与清单 v2 动作（`manifest_preflight` / `manifest_install` / `manifest_upgrade` / `manifest_uninstall` / `manifest_control` / `manifest_logs` / `manifest_installed`） |
 | 其他常用软件 | 待定 |
 
 ---

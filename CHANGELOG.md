@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.40.0] - 2026-11-23
+### Added
+- 应用清单 v2 控制面编排：支持安装/升级/卸载前节点预检与版本协商（409 `agent_upgrade_required`）、HTTPS 出站步骤与 `app.*` 加密凭据及 `allowHosts` 校验，以及 `GET /app-manifests/:id/secrets`。
+
 ## [0.39.0] - 2026-11-23
 ### Added
 - 新增应用清单 v2 契约（声明式参数、控制面步骤、健康检查与多端点），尚未对外启用。

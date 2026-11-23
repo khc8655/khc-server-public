@@ -77,6 +77,7 @@ export async function ensureBuiltinAppManifests(
       }
       continue;
     }
+    if (!existing.manifest) continue;
     if (sameManifest(existing.manifest, item.manifest)) continue;
     const isBuiltinHistory = (item.priorManifests ?? []).some((prior) =>
       sameManifest(existing.manifest, prior),

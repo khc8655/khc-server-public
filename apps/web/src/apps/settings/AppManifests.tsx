@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AppManifest, AppManifestDefinition } from '@khc/contracts';
+import type { AppManifest, AppManifestAnyDefinition } from '@khc/contracts';
 import {
   appManifestsQueryOptions,
   createAppManifest,
@@ -84,18 +84,18 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
     setForm({
       mode: 'update',
       id: item.id,
-      definition: JSON.stringify(item.manifest, null, 2),
+      definition: item.manifest ? JSON.stringify(item.manifest, null, 2) : EMPTY_DEFINITION,
       enabled: item.enabled,
-      error: null,
+      error: item.invalid ? (item.error ?? '已有清单格式异常，保存后将覆盖') : null,
       busy: false,
     });
   };
 
   const save = async () => {
     if (!form) return;
-    let definition: AppManifestDefinition;
+    let definition: AppManifestAnyDefinition;
     try {
-      definition = JSON.parse(form.definition) as AppManifestDefinition;
+      definition = JSON.parse(form.definition) as AppManifestAnyDefinition;
     } catch {
       setForm((prev) => (prev ? { ...prev, error: 'JSON 解析失败，请检查格式' } : prev));
       return;
@@ -134,28 +134,30 @@ export function AppManifests({ createSignal = 0 }: { createSignal?: number }) {
       key: 'name',
       type: 'name',
       header: '应用',
-      value: (item) => item.manifest.name,
-      dot: (item) => (item.enabled ? 'ok' : 'neutral'),
+      value: (item) => item.manifest?.name ?? item.id,
+      dot: (item) => (item.invalid ? 'danger' : item.enabled ? 'ok' : 'neutral'),
     },
     { key: 'id', type: 'text', header: 'ID', value: (item) => item.id },
-    { key: 'version', type: 'text', header: '版本', value: (item) => item.manifest.version },
+    { key: 'version', type: 'text', header: '版本', value: (item) => item.manifest?.version ?? '—' },
     {
       key: 'user',
       type: 'text',
       header: '默认运行身份',
       value: (item) =>
-        item.manifest.runtime.mode === 'root'
-          ? 'root'
-          : (item.manifest.runtime.user ?? '新建用户（安装时填写）'),
+        item.invalid || !item.manifest
+          ? (item.error ?? '清单格式异常')
+          : item.manifest.runtime.mode === 'root'
+            ? 'root'
+            : (item.manifest.runtime.user ?? '新建用户（安装时填写）'),
     },
     {
       key: 'state',
       type: 'status',
       header: '状态',
-      value: (item) => (item.enabled ? '启用' : '停用'),
+      value: (item) => (item.invalid ? '格式异常' : item.enabled ? '启用' : '停用'),
       status: (item) => ({
-        tone: item.enabled ? 'ok' : 'neutral',
-        label: item.enabled ? '启用' : '停用',
+        tone: item.invalid ? 'danger' : item.enabled ? 'ok' : 'neutral',
+        label: item.invalid ? '格式异常' : item.enabled ? '启用' : '停用',
       }),
     },
     { key: 'actions', type: 'actions', header: '' },

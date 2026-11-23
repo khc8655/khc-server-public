@@ -366,6 +366,21 @@ export class MemorySshKeyRepo implements SshKeyRepo {
 export class MemoryAppManifestRepo implements AppManifestRepo {
   readonly rows = new Map<string, AppManifest>();
 
+  /** 模拟 D1 里已有坏掉的清单记录（测试列表容错与安装阻断）。 */
+  seedInvalid(id: string, error = 'schema: 清单格式已损坏', enabled = true): AppManifest {
+    const ts = now();
+    const record: AppManifest = {
+      id,
+      invalid: true,
+      error,
+      enabled,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    this.rows.set(id, record);
+    return record;
+  }
+
   async list(): Promise<AppManifest[]> {
     return [...this.rows.values()].sort((a, b) => b.createdAt - a.createdAt);
   }
