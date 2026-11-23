@@ -487,6 +487,18 @@ export const actions = {
     audit: 'appManifest.create',
     icon: 'plus',
   },
+  'appManifest.import': {
+    object: 'appManifest',
+    kind: 'create',
+    scope: 'global',
+    label: 'appManifest.import',
+    level: 'L1',
+    entry: '/settings',
+    form: 'drawer',
+    // 导入后按 ID 是否已存在落到 Worker 的 create / update，审计沿用它们
+    audit: 'appManifest.create',
+    icon: 'download',
+  },
   'appManifest.update': {
     object: 'appManifest',
     kind: 'update',

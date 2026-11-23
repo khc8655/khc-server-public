@@ -64,6 +64,7 @@ export default function SettingsPage() {
   const [certCreateSignal, setCertCreateSignal] = useState(0);
   const [tunnelCreateSignal, setTunnelCreateSignal] = useState(0);
   const [sshCreateSignal, setSshCreateSignal] = useState(0);
+  const [manifestImportSignal, setManifestImportSignal] = useState(0);
 
   const handleAction = (ref: ActionRef) => {
     if (ref.id === 'cfDns.account.create') {
@@ -80,6 +81,10 @@ export default function SettingsPage() {
     }
     if (ref.id === 'sshKey.create') {
       setSshCreateSignal((value) => value + 1);
+      return;
+    }
+    if (ref.id === 'appManifest.import') {
+      setManifestImportSignal((value) => value + 1);
     }
   };
 
@@ -97,7 +102,9 @@ export default function SettingsPage() {
                 ? action('tunnel.create')
                 : activeTab === 'keys'
                   ? action('sshKey.create')
-                  : undefined
+                  : activeTab === 'manifests'
+                    ? action('appManifest.import')
+                    : undefined
         }
         onAction={handleAction}
       />
@@ -128,7 +135,7 @@ export default function SettingsPage() {
       ) : activeTab === 'tunnels' ? (
         <Tunnels createSignal={tunnelCreateSignal} hideEmptyAction />
       ) : activeTab === 'manifests' ? (
-        <AppManifests />
+        <AppManifests importSignal={manifestImportSignal} />
       ) : (
         <SshKeys createSignal={sshCreateSignal} hideEmptyAction />
       )}

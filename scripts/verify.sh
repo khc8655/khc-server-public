@@ -35,7 +35,7 @@ echo "==> d1 migrations (local)"
 echo "==> installer lifecycle"
 ./scripts/install-lifecycle-test.sh
 echo "==> node script syntax"
-for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/relay-latency-baseline.mjs scripts/lib/relay-latency.mjs scripts/docs-lint.mjs scripts/verify-app-catalog.mjs scripts/d1-baseline.mjs; do node --check "$f"; done
+for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/relay-latency-baseline.mjs scripts/lib/relay-latency.mjs scripts/lib/admin-session.mjs scripts/lib/manifest-diff.mjs scripts/publish-app-manifest.mjs scripts/docs-lint.mjs scripts/verify-app-catalog.mjs scripts/d1-baseline.mjs; do node --check "$f"; done
 echo "==> docs lint"
 node scripts/docs-lint.mjs --strict
 echo "==> shell syntax"

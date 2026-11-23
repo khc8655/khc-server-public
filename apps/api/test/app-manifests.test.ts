@@ -65,43 +65,32 @@ describe('全局应用清单 /app-manifests（R1 架子）', () => {
     expect(body.appManifests.map((item) => item.id)).toContain('test-app');
   });
 
-  it('内置应用 magpie 开箱可见：首次访问自动补一行，重复访问不重复插', async () => {
+  it('列表是纯读取：空库返回空数组，不会补任何内置记录（去打包回归）', async () => {
     const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);
-    const body = (await (
-      await ctx.app.request('/api/v1/app-manifests', { headers: authHeaders(cookie) }, ctx.env)
-    ).json()) as {
-      appManifests: Array<{ id: string; manifest: { publish?: Record<string, unknown> } }>;
+    const created: string[] = [];
+    const updated: string[] = [];
+    const origCreate = ctx.appManifests.create.bind(ctx.appManifests);
+    const origUpdate = ctx.appManifests.update.bind(ctx.appManifests);
+    ctx.appManifests.create = async (input) => {
+      created.push(input.id);
+      return origCreate(input);
     };
-    const magpie = body.appManifests.find((item) => item.id === 'magpie');
-    expect(magpie).toBeTruthy();
-    // 发布声明随清单一起下发，面板据此建 Caddy 站点（上游 = 本机 Web 端口）。
-    expect(magpie?.manifest.publish).toMatchObject({ portParam: 'web_port', port: 3430 });
-
-    const again = (await (
-      await ctx.app.request('/api/v1/app-manifests', { headers: authHeaders(cookie) }, ctx.env)
-    ).json()) as { appManifests: Array<{ id: string }> };
-    expect(again.appManifests.filter((item) => item.id === 'magpie')).toHaveLength(1);
-  });
-
-  it('内置清单只补缺不覆盖：改过的 magpie 不会被下次列表刷回去', async () => {
-    const ctx = makeTestContext();
-    const cookie = await loginAsAdmin(ctx);
-    await ctx.app.request('/api/v1/app-manifests', { headers: authHeaders(cookie) }, ctx.env);
-    const renamed = definition({ name: 'magpie（改过）', version: '9.9.9' });
-    const put = await ctx.app.request(
-      '/api/v1/app-manifests/magpie',
-      { method: 'PUT', headers: authHeaders(cookie), body: JSON.stringify({ manifest: renamed }) },
-      ctx.env,
-    );
-    expect(put.status).toBe(200);
-
-    const listed = (await (
-      await ctx.app.request('/api/v1/app-manifests', { headers: authHeaders(cookie) }, ctx.env)
-    ).json()) as { appManifests: Array<{ id: string; manifest: { name: string } }> };
-    expect(listed.appManifests.find((item) => item.id === 'magpie')?.manifest.name).toBe(
-      'magpie（改过）',
-    );
+    ctx.appManifests.update = async (id, patch) => {
+      updated.push(id);
+      return origUpdate(id, patch);
+    };
+    for (let i = 0; i < 2; i += 1) {
+      const res = await ctx.app.request(
+        '/api/v1/app-manifests',
+        { headers: authHeaders(cookie) },
+        ctx.env,
+      );
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { appManifests: unknown[] }).appManifests).toEqual([]);
+    }
+    expect(created).toEqual([]);
+    expect(updated).toEqual([]);
   });
 
   it('脚本正文与 sha256 不一致时拒绝写入，不落库', async () => {

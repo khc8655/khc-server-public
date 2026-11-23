@@ -138,7 +138,9 @@ chmod 0600 "$UNIT"
 # ---- 4. 启动（降权用户自己的 user manager；执行器已 enable-linger）----
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 systemctl --user daemon-reload
-systemctl --user enable --now "$UNIT_NAME"
+# 一律 restart：升级会回退执行本脚本，enable --now 不会重启已在运行的服务，新版二进制 / 新 unit 不生效。
+systemctl --user enable "$UNIT_NAME"
+systemctl --user restart "$UNIT_NAME"
 
 # ---- 5. 等待两个端口就绪 ----
 for _ in $(seq 1 30); do
@@ -157,27 +159,15 @@ else
   LOGIN_URL="$LOGIN_LOCAL"
 fi
 
-python3 - "$LOGIN_URL" "$PORT" "$WEB_PORT" "$WEB_KEY" "$VER" "$PUBLIC_URL" <<'PY'
+python3 - "$LOGIN_URL" "$PORT" "$WEB_KEY" "$VER" <<'PY'
 import json, sys
-login, port, web_port, key, version, public = sys.argv[1:7]
-access = [
-    {"label": "Web 管理页（点击登录）", "value": login, "kind": "url", "copy": True},
-    {"label": "网关地址（供 Agent 使用）", "value": f"http://127.0.0.1:{port}", "kind": "url", "copy": True},
-    {"label": "Caddy 反代目标（发布本机端口）", "value": f"127.0.0.1:{web_port}", "kind": "text", "copy": True},
-    {"label": "Web 登录 Key", "value": key, "kind": "text", "copy": True},
+login, port, key, version = sys.argv[1:5]
+# 只输出 cards（kind 供面板决定展示与脱敏，primary 标出完成页主按钮）
+cards = [
+    {"title": "Web 管理页（点击登录）", "value": login, "kind": "url", "primary": True, "copy": True},
+    {"title": "Web 登录 Key", "value": key, "kind": "secret", "copy": True},
+    {"title": "网关地址（仅本机）", "value": f"http://127.0.0.1:{port}", "kind": "text", "copy": True},
+    {"title": "magpie 版本", "value": version, "kind": "text", "copy": False},
 ]
-if not public:
-    access.append({
-        "label": "说明",
-        "value": "当前只监听 127.0.0.1。到面板「发布本机端口」把上面端口发布出去，再回来点登录链接。",
-        "kind": "text", "copy": False,
-    })
-print("KHC_RESULT=" + json.dumps({
-    "access": access,
-    "cards": [
-        {"title": "magpie 版本", "value": version, "copy": False},
-        {"title": "Web 登录 Key", "value": key, "copy": True},
-        {"title": "监听", "value": f"127.0.0.1:{port} / 127.0.0.1:{web_port}", "copy": True},
-    ],
-}, ensure_ascii=False))
+print("KHC_RESULT=" + json.dumps({"cards": cards}, ensure_ascii=False))
 PY

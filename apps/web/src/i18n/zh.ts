@@ -160,6 +160,7 @@ export const zh = {
     'sshKey.update': '重命名',
     'sshKey.delete': '删除公钥',
     'appManifest.create': '添加应用',
+    'appManifest.import': '导入应用',
     'appManifest.update': '编辑应用',
     'appManifest.delete': '删除应用',
     'app.installPublish': '安装并发布应用',
