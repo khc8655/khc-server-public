@@ -359,6 +359,46 @@ class ManifestTests(unittest.TestCase):
             self.install(runner)
         self.assertIn("boom", caught.exception.details["stderr"])
 
+    def test_progress_markers_and_mirror_proxy_env(self):
+        runner = RecordingRunner(
+            stdout=(
+                "准备下载\n"
+                "KHC_PROGRESS=42 已下载 40.0 MB / ~91 MB（当前速率 512 KB/s）\n"
+                "KHC_PROGRESS=88 写入 systemd user unit\n"
+                "KHC_RESULT={}\n"
+            )
+        )
+        spec = manifest(
+            params=[
+                {"key": "download_mirror", "type": "string", "default": ""},
+                {"key": "http_proxy", "type": "string", "default": "", "secret": True},
+            ]
+        )
+        progress_events: list[int] = []
+        ctx = Ctx(self.paths, command_runner=runner, log=self.logs.append, progress=progress_events.append)
+        run_manifest(
+            ctx,
+            manifest=spec,
+            manifest_id="test-app",
+            action="install",
+            values={
+                "download_mirror": "https://mirror.example.com/",
+                "http_proxy": "http://u:secretpass@127.0.0.1:7890",
+            },
+            **CREDS,
+        )
+        for pct in (5, 10, 42, 88, 90):
+            self.assertIn(pct, progress_events)
+        self.assertEqual(progress_events, sorted(progress_events))
+        joined = "\n".join(self.logs)
+        self.assertIn("已下载 40.0 MB / ~91 MB（当前速率 512 KB/s）", joined)
+        self.assertNotIn("KHC_PROGRESS=42", joined)
+        self.assertNotIn("KHC_PROGRESS=88", joined)
+        self.assertNotIn("secretpass", joined)
+        env = runner.envs[-1] or {}
+        self.assertEqual(env["KHC_PARAM_DOWNLOAD_MIRROR"], "https://mirror.example.com/")
+        self.assertEqual(env["KHC_PARAM_HTTP_PROXY"], "http://u:secretpass@127.0.0.1:7890")
+
 
 if __name__ == "__main__":
     unittest.main()

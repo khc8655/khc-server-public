@@ -1,6 +1,6 @@
 # 节点接入 Runbook（node-onboarding）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
 > 范围：把一台干净 Linux 机器从零接入面板，直至节点 `/state` 上线的端到端步骤
 
 ## 1. 前置条件
@@ -24,9 +24,9 @@ sudo ./install.sh --check
 
 ## 3. 面板建节点、token 与安装验活
 
-1. 面板「节点」页 → [创建节点]，在统一接入抽屉（`AccessForm`，交互细节见 `docs/ui-redesign/page-specs.md` §1.3）中填节点名称并选定接入方式：**域名（ACME）** / **Tunnel** / **IP 直连**。域名模式支持选用已有解析记录、就地「+ 新建解析记录」（A/AAAA）或手动输入域名，并可在抽屉内直接点击 [检测解析]（DoH）。
-2. 创建成功后**同一抽屉**即时展示一次性节点 token（D1 只存 AES-GCM 密文，重装或换机时需保留）与安装命令（支持复制）。后续重发或修改接入方式可在节点设置「Agent 与接入」卡查看。
-3. 在目标机执行安装命令后，回到创建抽屉结果态点击 [我已完成安装]，自动探活 **Agent 在线 + Caddy 就绪态** 并给出失败排查提示，同时提供 [去发布应用]（直达 `/hubs/:id/sites`）与 [去节点设置] 入口。
+1. **前置准备域名与证书（推荐）**：在面板「设置 → 域名管理」新建 A/AAAA 解析记录时，默认同步通过 Cloudflare DNS-01 签发全局证书（推荐 `*.<主域名>` 泛域名，自动开启续期同步）；若已有泛域名证书覆盖则免重复签发。
+2. **添加节点**：面板「节点」页 → [添加节点]，在统一接入表单（`AccessForm`）中填名称并选定接入方式：**域名（HTTPS）** / **Tunnel** / **IP 直连**。域名模式可选已有解析记录或手动输入域名，自动匹配选中面板证书库证书（`tlsCertId`）；若尚未准备证书可跳转域名管理/证书库签发，或不绑定并由节点侧 ACME 兜底。
+3. **安装与验活**：创建后在同一抽屉（`NodeInstallPanel`）查看一次性 token 与自动生成的安装命令（域名模式默认带 `--with-caddy`，绑定了面板证书时带 `--tls-bootstrap-url` 零 `acme.sh` 导入）。目标机执行完毕后点 [我已完成安装]，自动检查 Agent 在线与 Caddy 就绪态并直达「去发布应用」。
 
 ## 4. 端口选择（8880 vs 8443，实测差异）
 
@@ -46,11 +46,10 @@ sudo ./install.sh --check
 
 **方案 A：https + 域名 + 公网可信证书直连。** 给节点签发**域名**证书（Let's Encrypt / ZeroSSL 等公网 CA；注意这些 CA **不签发裸 IP 证书**），`endpoint` 填 `https://<域名>:<端口>`——域名走 fetch 需选 Cloudflare HTTPS 白名单端口（443/8443/2053/2083/2087/2096）。**TLS 由平台校验证书**（fetch 与 TCP 两条通道都强制校验，无法跳过），Worker 侧零配置。没有证书的明文 `http://` 只有 HMAC 防请求篡改，**没有传输机密性**（凭据、WireGuard 私钥会过公网），仅限可信网络临时使用；裸 IP 若没有域名，请走方案 B（Tunnel），不要用自签或明文硬撑。
 
-**方案 A 证书准备（system 模式已自动化）。** 系统模式下，面板生成的安装命令会带
-`--acme <域名>`：证书缺失时 `install.sh` 自动安装 acme.sh 并用 **TLS-ALPN-01（只占用 443）**
-签发，失败再回退 **HTTP-01（80）**，最后写入 `--tls-cert/--tls-key` 的固定路径；已有证书则跳过。
-因此只需保证：**入站 443、出站 443**；若要用 HTTP-01 回退再加 **入站 80**；Cloudflare 记录必须是
-**「仅 DNS」（灰云）**，橙云会拦截 ACME 校验。`--with-caddy` 仍只安装 Caddy 软件包，不参与证书。
+**方案 A 证书准备（主路径：面板证书零 `acme.sh` 引导；兜底：`--acme`）。**
+
+- **主路径（绑定了面板证书 `tlsCertId`）**：控制面安装命令下发 `--tls-bootstrap-url <worker>/api/v1/nodes/<id>/bootstrap/tls`（不下发 `--acme`）。`install.sh` 使用刚写入 `/etc/khc-agent/token` 的节点 token 对 `GET|/api/v1/nodes/<id>/bootstrap/tls|ts|nonce|sha256` 计算 HMAC 签名并直接拉取全链证书与私钥，原子写入 `--tls-cert/--tls-key`（0644/0600）。**无需安装 `acme.sh`、无需入站 80/443、不依赖 GitHub**；到期时面板在登录探活发现剩余 ≤15 天自动续期，或手工一键续期并同步重装到在线节点。
+- **兜底路径（未绑定面板证书时）**：安装命令仍会回退下发 `--acme <域名>`，`install.sh` 带超时（15s 连接 / 60s 总耗时，失败输出明确错误日志）安装 acme.sh 并用 **TLS-ALPN-01（443）→ HTTP-01（80）** 签发（需灰云并放行入站 443/80）。`--with-caddy` 仅安装 Caddy 软件包，供后续应用发布使用。
 
 **入站 80/443 不可达的节点（境内未备案、只开非标端口）：加 `--acme-dns` 走 DNS-01。**
 DNS-01 只靠出站 443 + DNS 记录，不占用任何入站端口，因此也不需要停 Agent/Caddy、不需要 socat：
@@ -130,9 +129,7 @@ acme.sh 自带续期任务（依赖 cron，容器镜像里常装不上）；`--r
 直接粘贴面板 install-command。命令做了这些事（见 `apps/api/src/lib/agent-commands.ts`）：
 
 - `unset HISTFILE`（token 不进 shell 历史）→ 子 shell 内 `curl` 下载 → `sha256sum -c` 校验 → 解包；
-- **前置证书检查**（仅 `https://` 入口）：system + 域名的安装命令会带 `--acme <域名>`，证书缺失时由
-  `install.sh` 自动签发（TLS-ALPN-01:443，失败回退 HTTP-01:80），不再中止；裸 IP + HTTPS 仍会被明确阻断，
-  提示改用域名或 Tunnel；user 模式保留手动签发指引并在提示 token 前退出（见 §4.1）；
+- **证书导入与兜底检查**（仅 `https://` 入口）：节点绑定了面板证书（`tlsCertId`）时安装命令带 `--tls-bootstrap-url`（零 `acme.sh`，用刚写入的 token 拉取证书落盘）；仅未绑定面板证书时回退 `--acme <域名>` 节点侧签发；裸 IP + HTTPS 仍会被明确阻断。
 - **环境预检**：`install.sh --check`（root / python3.11 / systemd / 端口占用），不写系统、不消耗 token；
 - `IFS= read -rs KHC_TOKEN </dev/tty` **提示粘贴 token（不回显）**——必须从终端读，整段多行粘贴时不会把下一行误当 token；
 - `install -m 0600` 写 `/etc/khc-agent/token`（user 模式 `~/.config/khc-agent/token`）；

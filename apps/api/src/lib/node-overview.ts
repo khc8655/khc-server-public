@@ -193,6 +193,8 @@ export function collectExpiringCerts(
         name: cert.name,
         daysLeft,
         nodeId: cert.sourceNodeId ?? null,
+        ...(cert.renewable !== undefined ? { renewable: cert.renewable } : {}),
+        ...(cert.autoSync !== undefined ? { autoSync: cert.autoSync } : {}),
       });
     }
   }
@@ -499,7 +501,7 @@ function projectForwards(
 }
 
 function projectCerts(
-  node: Pick<StoredNode, 'id' | 'domain'>,
+  node: Pick<StoredNode, 'id' | 'domain'> & Partial<Pick<StoredNode, 'tlsCertId'>>,
   caddyRow: AppConfigLike | undefined,
   certs: readonly Certificate[],
   nowSec: number,
@@ -525,6 +527,7 @@ function projectCerts(
   }
 
   const matched = certs.filter((cert) => {
+    if (node.tlsCertId && cert.id === node.tlsCertId) return true;
     if (cert.sourceNodeId === node.id) return true;
     if (node.domain && certCoversDomain(node.domain, cert.domains)) return true;
     if (boundCertIds.has(cert.id)) return true;
@@ -551,7 +554,8 @@ function projectCerts(
 }
 
 function projectAccessCert(
-  node: Pick<StoredNode, 'domain' | 'endpoint' | 'accessMode'>,
+  node: Pick<StoredNode, 'domain' | 'endpoint' | 'accessMode'> &
+    Partial<Pick<StoredNode, 'tlsCertId'>>,
   certs: readonly Certificate[],
   state: AgentState | null,
   tls: TlsProbe | null,
@@ -598,7 +602,13 @@ function projectAccessCert(
     }
   }
 
-  // 3. D1 证书库中覆盖接入域名的证书
+  // 3. 节点显式绑定的全局证书，或证书库中覆盖接入域名的证书
+  if (node.tlsCertId) {
+    const boundCert = certs.find((cert) => cert.id === node.tlsCertId);
+    if (boundCert && typeof boundCert.notAfter === 'number' && Number.isFinite(boundCert.notAfter)) {
+      return { daysLeft: daysLeftFromNotAfter(boundCert.notAfter, nowSec), tlsState };
+    }
+  }
   const accessDomain = nullableString(node.domain) ?? extractHostname(node.endpoint);
   if (accessDomain) {
     const coveringDays: number[] = [];
@@ -695,7 +705,7 @@ export function daysLeftFromCalendarDate(
 
 export interface NodeProjectionInput {
   node: Pick<StoredNode, 'id' | 'domain' | 'endpoint' | 'accessMode'> &
-    Partial<Pick<StoredNode, 'expiresAt'>>;
+    Partial<Pick<StoredNode, 'expiresAt' | 'tlsCertId'>>;
   configs: readonly AppConfigLike[];
   certs: readonly Certificate[];
   state: AgentState | null;

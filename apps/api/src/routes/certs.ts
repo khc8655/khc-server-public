@@ -78,6 +78,9 @@ async function findCertUsages(deps: AppDeps, cert: Certificate): Promise<Certifi
   if (cert.sourceNodeId && nodeMap.has(cert.sourceNodeId)) {
     targetNodeIds.add(cert.sourceNodeId);
   }
+  for (const node of nodes) {
+    if (node.tlsCertId === cert.id) targetNodeIds.add(node.id);
+  }
 
   const usages: CertificateUsageItem[] = [];
   for (const nodeId of targetNodeIds) {
@@ -88,6 +91,7 @@ async function findCertUsages(deps: AppDeps, cert: Certificate): Promise<Certifi
       nodeName: node.name,
       apps: [...(appsByNode.get(nodeId) ?? [])].sort(),
       isSourceNode: cert.sourceNodeId === node.id,
+      isNodeTls: node.tlsCertId === cert.id,
     });
   }
   return usages.sort((a, b) => a.nodeName.localeCompare(b.nodeName));
@@ -209,7 +213,7 @@ async function syncCertificateToNodes(
         appliedApps.push(app);
       }
 
-      if (usage.isSourceNode) {
+      if (usage.isNodeTls || usage.isSourceNode) {
         const bind = await bindCertificateToNode(deps, env, node, material);
         if (!bind.ok) {
           throw new Error(bind.message ?? '安装节点 TLS 证书失败');
@@ -297,6 +301,7 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
       certPem: material.certPem,
       keyPem: material.keyPem,
       sourceNodeId: null,
+      autoSync: true,
       acme: {
         provider: 'cf-dns01',
         credentialKey: account.id,
@@ -449,6 +454,19 @@ export function certificateRoutes(deps: AppDeps): Hono<AppBindings> {
 
   router.delete('/certs/:id', async (c) => {
     const id = c.req.param('id');
+    const existing = await deps.certs.get(id);
+    if (!existing) throw notFound('证书不存在');
+    const usages = await findCertUsages(deps, existing);
+    const activeUsages = usages.filter((item) => item.isNodeTls || item.apps.length > 0);
+    if (activeUsages.length > 0) {
+      throw new AppError(
+        409,
+        'cert_in_use',
+        '该证书仍被节点或站点引用，请先解绑后再删除',
+        undefined,
+        { usages: activeUsages },
+      );
+    }
     const removed = await deps.certs.remove(id);
     if (!removed) throw notFound('证书不存在');
     await deps.audit.log({ actor: c.get('user').name, action: 'cert.delete', detail: { id } });

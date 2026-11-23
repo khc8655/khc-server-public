@@ -108,6 +108,89 @@ function randomNonce(): string {
   return bytesToHex(bytes);
 }
 
+const BOOTSTRAP_WINDOW_SEC = 60;
+const BOOTSTRAP_NONCE_TTL_MS = 120_000;
+const bootstrapNonceCache = new Map<string, number>();
+
+function pruneBootstrapNonces(nowMs: number): void {
+  if (bootstrapNonceCache.size < 256) return;
+  for (const [key, expiresAt] of bootstrapNonceCache) {
+    if (expiresAt <= nowMs) bootstrapNonceCache.delete(key);
+  }
+}
+
+export function resetBootstrapNonceCacheForTests(): void {
+  bootstrapNonceCache.clear();
+}
+
+function hexToBytes(hex: string): Uint8Array | null {
+  const cleaned = hex.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(cleaned)) return null;
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) {
+    out[i] = Number.parseInt(cleaned.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/**
+ * 校验节点发来的 HMAC-SHA256 请求签名（与 signAgentRequest / agent/khc/auth.py 同源）：
+ * - X-Khc-Ts 在 ±60s 时间窗内；
+ * - X-Khc-Nonce 非空、≤128 字符，120s 内不重复；
+ * - X-Khc-Sig = HMAC-SHA256(token, `${METHOD}|${canonicalPath}|${ts}|${nonce}|${sha256hex(body)}`)。
+ */
+export async function verifyAgentRequestSignature(input: {
+  scopeKey: string;
+  token: string;
+  method: string;
+  path: string;
+  bodyText: string;
+  ts: string | undefined;
+  nonce: string | undefined;
+  sig: string | undefined;
+  nowMs?: number;
+}): Promise<boolean> {
+  const nowMs = input.nowMs ?? Date.now();
+  const tsText = input.ts?.trim() ?? '';
+  if (!/^\d{1,12}$/.test(tsText)) return false;
+  const tsSec = Number(tsText);
+  const nowSec = Math.floor(nowMs / 1000);
+  if (!Number.isFinite(tsSec) || Math.abs(nowSec - tsSec) > BOOTSTRAP_WINDOW_SEC) return false;
+
+  const nonce = input.nonce?.trim() ?? '';
+  if (!nonce || nonce.length > 128) return false;
+
+  const sigBytes = hexToBytes(input.sig ?? '');
+  if (!sigBytes) return false;
+
+  const queryIdx = input.path.indexOf('?');
+  const canonicalPath = queryIdx >= 0 ? input.path.slice(0, queryIdx) : input.path;
+  const bodyHash = await sha256Hex(input.bodyText);
+  const canonical = `${input.method.toUpperCase()}|${canonicalPath}|${tsText}|${nonce}|${bodyHash}`;
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(input.token),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const ok = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    sigBytes as unknown as BufferSource,
+    new TextEncoder().encode(canonical) as unknown as BufferSource,
+  );
+  if (!ok) return false;
+
+  pruneBootstrapNonces(nowMs);
+  const cacheKey = `${input.scopeKey}:${nonce}`;
+  const existing = bootstrapNonceCache.get(cacheKey);
+  if (existing !== undefined && existing > nowMs) return false;
+  bootstrapNonceCache.set(cacheKey, nowMs + BOOTSTRAP_NONCE_TTL_MS);
+  return true;
+}
+
 /**
  * 生成 HMAC 头：X-Khc-Ts / X-Khc-Nonce / X-Khc-Sig
  *

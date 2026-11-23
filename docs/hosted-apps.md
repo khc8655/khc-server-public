@@ -1,6 +1,6 @@
 # 托管应用（应用清单 · 面板安装 · 一键发布）
 
-> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`apps/manifests/`、`apps/web/src/data/manifestApps.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`
+> 状态：现行 ｜ 最后核验：2026-11-24 ｜ 关联：`apps/manifests/`、`apps/web/src/data/manifestApps.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`
 
 ## 1. 是什么
 
@@ -42,25 +42,29 @@
 2. **声明式参数与发布配置**：按参数定义渲染输入；跳过 `derive` 字段并在提交前由选定发布端点推导赋值；`mode="create"` 新建账号不填密码。发布域名默认预填节点域名（排除关闭 TLS 的站点），对外端口自动避开 Agent 端口与同域名已占端口；对开启 `host-ops` 且非 Tunnel 的节点内联核对 `fw.show`，`bind=any` 端口未放行时给出一键放行提示。
 3. **执行与完成**：v2 应用走 `POST /nodes/:id/apps/app-catalog/manifest_install`（v1 走 `recipe_install`，它是 `manifest_install` 的别名，不带 `manifest` 返回 400 `manifest_required`），控制面先按需执行 `hooks.preInstall` 再下发 Agent 任务；向导轮询任务进度与日志，结束后逐一发布已勾选 Caddy 的端点并 `apply`，完成页通过 `ResultCardsView` 渲染 `KHC_RESULT.cards`（主链接按钮 + 复制/下载，v1 兼容转卡片）；错误由 `ManifestErrorAlert` 映射结构化错误码与修复入口（如跳转 `?manifest=<id>` 补凭据）。
 
-### 3.1 脚本里的下载必须自带超时
+### 3.1 脚本里的下载必须自带超时、错误可见与国内镜像支持
 
-清单脚本里的 `curl` 若只写 `-fsSL`，在网络差的机器上会一直挂着不报错，只能等任务 900 秒上限，现象是**面板进度停在 1%，日志一行不出**。所以脚本统一这样下载（无论是否在 `sources[]` 里声明了 `pinned` 校验）：
+清单脚本里的 `curl` 若不配速度下限和总超时，在网络差的机器上会挂死到任务 900 秒上限；而直接用 `-fL` 的 TTY `\r` 进度表在低版本 Agent 中易丢日志、失败时也不一定留清具体原因。所以脚本统一用以下方式下载：
 
 ```bash
-curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
-     --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL"
+curl -fsSL --connect-timeout 10 --max-time 300 \
+     --speed-limit 16384 --speed-time 20 -o "$TMP" "$URL" 2>"$ERR_FILE"
 ```
 
-- `--connect-timeout` 管连不上；`--max-time` 管总时长；
-- `--speed-limit/--speed-time` 管「连着但几乎不动」（连续 60 秒低于 8KB/s 主动放弃）；
-- 下载到 `mktemp` 文件，失败时打印**已下载多少字节**并给出排查命令，不能只 `exit 1`；
+- `--connect-timeout` 管连不上；`--max-time` 管单次总时长；
+- `--speed-limit/--speed-time` 管「连着但几乎不动」（连续 20 秒低于 16KB/s 主动放弃），避免无谓等到 900 秒；
+- 用 `-fsSL` + 单独捕获 stderr，配合后台每秒采样文件体积、每约 3 秒输出一行 `KHC_PROGRESS=<pct> 已下载 X MB ...`；这样既不刷 `\r` 表格乱码，也能实时看到速率和卡点；
+- 下载大体积 GitHub Release 产物时，在清单参数中提供可选 `download_mirror`（代理前缀）与 `http_proxy`（建议标 `secret: true` 防止认证信息进日志），方便境内或受限节点按需填写；
+- 下载到 `mktemp` 文件，失败时打印具体 stderr 与**已下载多少字节**并给出排查命令（如更换节点网络、配置代理或镜像前缀），不能只 `exit 1`；
 - 固定来源的 sha256 必须与清单一致，否则执行器拒绝。
 
-写新清单时照抄这一段。拉不动外网的机器，可先给节点配代理，或手工把文件放到清单声明的位置。向导对安装任务的等待上限约 920 秒（Agent 脚本超时 900 秒加余量），超时后转为失败并提示查看任务日志。
+拉不动 GitHub 的机器可在安装表单填写镜像前缀或节点代理，也可手工把文件放到清单声明的位置。向导对安装任务的等待上限约 920 秒（Agent 脚本超时 900 秒加余量），超时后转为失败并提示查看任务日志。
 
-### 3.2 执行器：慢脚本要边跑边出日志
+### 3.2 执行器：慢脚本要边跑边出日志与进度
 
-清单脚本（安装、升级、卸载）走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行回写任务日志，运行中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。不得改回 `subprocess.run(capture_output=True)`：整段缓冲会让脚本不退出就一行日志都没有，卡住时看不出卡在哪。超时与取消必须能真的杀掉进程，实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**。
+清单脚本（安装、升级、卸载）走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行与 `\r` 进度帧节流回写任务日志，运行中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。不得改回 `subprocess.run(capture_output=True)`：整段缓冲会让脚本不退出就一行日志都没有，卡住时看不出卡在哪。超时与取消必须能真的杀掉进程，实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**。
+
+执行器还会拦截脚本输出中形如 `KHC_PROGRESS=<1..99>[ 说明]` 的行，自动更新任务进度百分比并把说明文本写入日志，使面板进度条不再一直停在 `1%`。
 
 ### 3.3 实例约定
 

@@ -36,6 +36,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
       '0013_app_manifests.sql',
       '0014_node_expires_at.sql',
       '0015_cert_auto_sync.sql',
+      '0016_node_tls_cert.sql',
     ]);
     const raw = openRawDatabase();
     const { applied, skipped } = applyMigrations(raw);
@@ -70,6 +71,7 @@ describe('migrations: 顺序与幂等（批次 F）', () => {
     expect(columnNames(raw, 'nodes')).toContain('tunnel_id');
     expect(columnNames(raw, 'nodes')).toContain('allow_insecure');
     expect(columnNames(raw, 'nodes')).toContain('expires_at');
+    expect(columnNames(raw, 'nodes')).toContain('tls_cert_id');
     expect(columnNames(raw, 'tunnels')).toEqual(
       expect.arrayContaining(['id', 'name', 'hostname', 'origin_port', 'token_enc']),
     );

@@ -130,6 +130,80 @@ export function extractInspectResult(envelope: CertActionEnvelope): InspectResul
   return { notAfter, domains };
 }
 
+export function certCoversDomain(domains: readonly string[], target: string): boolean {
+  const host = target.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return false;
+  return domains.some((raw) => {
+    const pattern = raw.trim().toLowerCase().replace(/\.$/, '');
+    if (!pattern) return false;
+    if (pattern === host) return true;
+    if (!pattern.startsWith('*.')) return false;
+    const base = pattern.slice(2);
+    if (!base || !host.endsWith(`.${base}`)) return false;
+    const prefix = host.slice(0, host.length - base.length - 1);
+    return prefix.length > 0 && !prefix.includes('.');
+  });
+}
+
+export function isCertExpired(cert: Certificate, nowSec = Math.floor(Date.now() / 1000)): boolean {
+  return typeof cert.notAfter === 'number' && Number.isFinite(cert.notAfter) && cert.notAfter <= nowSec;
+}
+
+function hasExactDomain(cert: Certificate, host: string): boolean {
+  return cert.domains.some((raw) => raw.trim().toLowerCase().replace(/\.$/, '') === host);
+}
+
+/** 找出覆盖目标域名的证书并按「未过期 > 精确域名 > 最新到期时间」排序。 */
+export function matchingCertsForDomain(
+  certs: readonly Certificate[],
+  domain: string,
+  nowSec = Math.floor(Date.now() / 1000),
+): Certificate[] {
+  const host = domain.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return [];
+  return certs
+    .filter((cert) => certCoversDomain(cert.domains, host))
+    .sort((a, b) => {
+      const aExp = isCertExpired(a, nowSec) ? 1 : 0;
+      const bExp = isCertExpired(b, nowSec) ? 1 : 0;
+      if (aExp !== bExp) return aExp - bExp;
+      const aExact = hasExactDomain(a, host) ? 0 : 1;
+      const bExact = hasExactDomain(b, host) ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      const aAfter = a.notAfter ?? Number.MAX_SAFE_INTEGER;
+      const bAfter = b.notAfter ?? Number.MAX_SAFE_INTEGER;
+      if (aAfter !== bAfter) return bAfter - aAfter;
+      return b.createdAt - a.createdAt;
+    });
+}
+
+export function findCoveringCert(
+  certs: readonly Certificate[],
+  domain: string,
+  nowSec = Math.floor(Date.now() / 1000),
+): Certificate | null {
+  const list = matchingCertsForDomain(certs, domain, nowSec);
+  const valid = list.find((cert) => !isCertExpired(cert, nowSec));
+  return valid ?? null;
+}
+
+export function pickPreferredCertId(
+  certs: readonly Certificate[],
+  domain: string,
+  preferredCertId?: string | null,
+  nowSec = Math.floor(Date.now() / 1000),
+): string {
+  const host = domain.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return '';
+  if (preferredCertId) {
+    const preferred = certs.find((cert) => cert.id === preferredCertId);
+    if (preferred && certCoversDomain(preferred.domains, host) && !isCertExpired(preferred, nowSec)) {
+      return preferred.id;
+    }
+  }
+  return findCoveringCert(certs, host, nowSec)?.id ?? '';
+}
+
 export async function fetchCertificates(): Promise<Certificate[]> {
   const body = await apiRequest('/api/v1/certs');
   return certificateListResponseSchema.parse(body).certificates;

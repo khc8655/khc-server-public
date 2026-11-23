@@ -65,6 +65,7 @@ function backupFile() {
 
 let requests: { url: string; init?: RequestInit }[] = [];
 let currentNode: Record<string, unknown> = { ...node };
+let certsMock: Array<Record<string, unknown>> = [];
 let stateReachable = true;
 let cleanupRemaining: { item: string; reason: string }[] = [];
 let cfDnsDeleteResult: unknown = null;
@@ -100,6 +101,27 @@ function mockApi() {
         return json({ node: currentNode });
       }
       if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
+      if (url === '/api/v1/certs') return json({ certificates: certsMock });
+      if (/^\/api\/v1\/certs\/[^/]+\/bind$/.test(url) && init?.method === 'POST') {
+        return json({
+          ok: true,
+          nodeId: 'tyo-1',
+          certPath: '/etc/khc-agent/tls/fullchain.pem',
+          keyPath: '/etc/khc-agent/tls/key.pem',
+          notAfter: NOW + 80 * 86400,
+          reloaded: true,
+          restartRequired: false,
+          message: null,
+        });
+      }
+      if (url === '/api/v1/agent/releases') {
+        return json({
+          releases: [{ version: '0.9.0', url: 'https://example.com/agent.tgz', sha256: 'a'.repeat(64) }],
+        });
+      }
+      if (url === '/api/v1/nodes/tyo-1/agent/install-command' && init?.method === 'POST') {
+        return json({ command: 'curl ... && sudo ./install.sh --tls-bootstrap-url ...', mode: 'system' });
+      }
       if (url === '/api/v1/tunnels') return json({ tunnels: [] });
       if (url === '/api/v1/cf-dns/zones') {
         return json({
@@ -204,6 +226,7 @@ beforeEach(() => {
   pickMock.mockReset();
   pickMock.mockResolvedValue(null);
   cfDnsDeleteResult = null;
+  certsMock = [];
   hostOpsAdapterInstalled = true;
   URL.createObjectURL = vi.fn(() => 'blob:backup');
   URL.revokeObjectURL = vi.fn();
@@ -389,5 +412,102 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     await renderRoute('/hubs/tyo-1/settings?tab=mode');
     expect(await screen.findByText('节点模式')).toBeTruthy();
     expect(await screen.findByRole('button', { name: '安装 Agent' })).toBeTruthy();
+  });
+
+  it('AccessCard：在线仅更换控制通道证书直接 bind 热重载并关闭抽屉', async () => {
+    certsMock = [
+      {
+        id: 'cert-1',
+        name: 'cert-old',
+        domains: ['*.example.com'],
+        issuer: 'acme',
+        notAfter: NOW + 30 * 86400,
+        sourceNodeId: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 'cert-2',
+        name: 'cert-new',
+        domains: ['agent.example.com'],
+        issuer: 'acme',
+        notAfter: NOW + 80 * 86400,
+        sourceNodeId: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ];
+    mockApi();
+    currentNode = {
+      ...node,
+      accessMode: 'domain',
+      domain: 'agent.example.com',
+      endpoint: 'https://agent.example.com:2053',
+      tlsCertId: 'cert-1',
+    };
+    stateReachable = true;
+
+    await renderRoute('/hubs/tyo-1/settings');
+    expect(await screen.findByText(/cert-old/)).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: '修改接入方式' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.selectOptions(await within(dialog).findByLabelText('控制通道证书'), 'cert-2');
+    await userEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (item) => item.url === '/api/v1/certs/cert-2/bind' && item.init?.method === 'POST',
+        ),
+      ).toBe(true);
+    });
+    expect(await screen.findByText('已更换证书并热重载节点 TLS')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('AccessCard：离线更换证书停留在抽屉并展示重装面板', async () => {
+    certsMock = [
+      {
+        id: 'cert-1',
+        name: 'cert-old',
+        domains: ['*.example.com'],
+        issuer: 'acme',
+        notAfter: NOW + 30 * 86400,
+        sourceNodeId: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: 'cert-2',
+        name: 'cert-new',
+        domains: ['agent.example.com'],
+        issuer: 'acme',
+        notAfter: NOW + 80 * 86400,
+        sourceNodeId: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ];
+    mockApi();
+    currentNode = {
+      ...node,
+      accessMode: 'domain',
+      domain: 'agent.example.com',
+      endpoint: 'https://agent.example.com:2053',
+      tlsCertId: 'cert-2',
+    };
+    stateReachable = false;
+
+    await renderRoute('/hubs/tyo-1/settings');
+    await userEvent.click(await screen.findByRole('button', { name: '修改接入方式' }));
+    const offlineDialog = await screen.findByRole('dialog');
+    await userEvent.selectOptions(
+      await within(offlineDialog).findByLabelText('控制通道证书'),
+      'cert-1',
+    );
+    await userEvent.click(within(offlineDialog).getByRole('button', { name: '保存' }));
+    expect(await within(offlineDialog).findByText(/接入参数或证书已变更/)).toBeTruthy();
+    expect(await within(offlineDialog).findByRole('button', { name: '我已完成安装' })).toBeTruthy();
+    expect(requests.some((item) => item.url.includes('/bind'))).toBe(false);
   });
 });

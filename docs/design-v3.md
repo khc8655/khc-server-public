@@ -89,7 +89,7 @@
 
 | 路由 | 说明 |
 |---|---|
-| `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`allowInsecure`、固定到期日期 `expiresAt`（YYYY-MM-DD）、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
+| `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`tlsCertId`（控制通道面板证书，0016）、`allowInsecure`、固定到期日期 `expiresAt`（YYYY-MM-DD）、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
 | `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），另附 `projection`（含 `expiresAt` / `expiresDaysLeft`）与顶层 `expiringCerts`（`lib/node-overview.ts` 同源派生，含 502/503/504 应用判定）；`/state` 超时或结构不合法时对应运行态缺失，不影响 `reachable` |
 | `GET /nodes/:id/state` | 转发 Agent `/state`（3s） |
 | `GET /nodes/:id/apps` | 已安装应用 + Agent 上可用适配器列表（含版本） |
@@ -112,10 +112,10 @@
 | `GET /cf-dns/zones`，`GET /cf-dns/records?zoneId=`，`POST /cf-dns/records`，`POST /cf-dns/records/:zoneId`，`PATCH/DELETE /cf-dns/records/:zoneId/:recordId`，`DELETE /cf-dns/records/:nodeId` | 跨凭据启用 Zone 汇总；列出现有 A/AAAA/CNAME；全局域名管理可新增/改/删单条记录（设置页）；按 Zone+子域名代建记录并写 `nodes.domain`；按节点联动删除 | `cfDns.ts` |
 | `GET/POST /tunnels`，`PATCH/DELETE /tunnels/:id` | 全局隧道配置（名称、对外域名、源站端口、cloudflared Token 密文）。面板只存配置，不做 Cloudflare Tunnel CRUD；被节点引用时禁止删除 | `tunnels.ts` |
 | `GET/PUT /cf-dns`，`POST /cf-dns/test` | 旧版单 Token + 单 Zone 端点（兼容保留，首次多凭据写入时迁移） | `cfDns.ts` |
-| `GET/POST /certs`，`POST /certs/issue-dns01`，`POST /certs/:id/renew`，`GET /certs/:id/usages`，`POST /certs/:id/sync`，`PATCH/PUT/DELETE /certs/:id`，`GET /certs/:id/material`，`POST /certs/:id/bind` | 全局证书库（0002、0015）；`issue-dns01` / `renew` 支持控制面 CF DNS-01 签发与续期（零节点 `acme.sh`），`PATCH` 切换 `autoSync`，`usages` / `sync` 自动或手动下发到引用该证书的关联 Hub | `certs.ts` |
+| `GET/POST /certs`，`POST /certs/issue-dns01`，`POST /certs/:id/renew`，`GET /certs/:id/usages`，`POST /certs/:id/sync`，`PATCH/PUT/DELETE /certs/:id`，`GET /certs/:id/material`，`POST /certs/:id/bind` | 全局证书库（0002、0015）；`issue-dns01` 默认开启 `autoSync=true`，`sync`/`renew` 覆盖绑定 `tlsCertId` 的节点（热重载控制通道 TLS）、`sourceNodeId` 与引用 `$cert` 的 Caddy 站点；被节点或站点引用时 `DELETE /certs/:id` 返回 `409 cert_in_use` | `certs.ts` |
 | `GET/POST /ssh-keys`，`PATCH/DELETE /ssh-keys/:id` | 全局 SSH 公钥库（0009；只存公钥，Worker 侧规范化并计算 `SHA256:` 指纹，重复指纹 409） | `sshKeys.ts` |
 | `GET /nodes/:id/export`，`POST /nodes/:id/import` | 备份导出/导入（见 `docs/backup.md`） | `backup.ts` |
-| `GET /agent/releases`；`POST /nodes/:id/agent/install-command|upgrade-command|uninstall-command|upgrade` | Agent 生命周期命令与升级（见 `docs/agent-lifecycle.md`、`docs/agent-releases.md`） | `agent_lifecycle.ts`（命令组装在 `lib/agent-commands.ts`，发布包校验在 `lib/agent-releases.ts`） |
+| `GET /agent/releases`；`GET /nodes/:id/bootstrap/tls`；`POST /nodes/:id/agent/install-command\|upgrade-command\|uninstall-command\|upgrade` | Agent 生命周期命令与升级（见 `docs/agent-lifecycle.md`）；`bootstrap/tls` 走节点 token HMAC 鉴权、限流与 `no-store`，用于 `install.sh --tls-bootstrap-url` 零 `acme.sh` 拉取控制通道证书 | `agent_lifecycle.ts`（`lib/agent-commands.ts`、`lib/agent-releases.ts`） |
 | `GET/POST /app-manifests`，`PUT/DELETE /app-manifests/:id`，`GET /app-manifests/:id/secrets` | 应用清单 CRUD（支持 v1/v2、坏记录按条目返回 `invalid: true`）与凭据配置状态（不回显 value） | `appManifests.ts` |
 | `POST /nodes/:id/apps/app-catalog/manifest_*` | 清单 v2 生命周期编排：`manifest_preflight` / `manifest_install` / `manifest_upgrade` / `manifest_uninstall`（预检 + hooks + 版本协商 409）与 `manifest_control` / `manifest_logs` / `manifest_installed` | `apps.ts`（`lib/manifest-lifecycle.ts`、`lib/manifest-hooks.ts`） |
 
@@ -215,6 +215,8 @@ Peers、反代站点、端口转发不再单独建表，都是各自应用 `conf
 | `0013_app_manifests.sql` | 新增 `app_manifests`（全局应用清单：脚本正文 + 元数据，只存配置） |
 | `0012_app_configs_summary.sql` | `app_configs` 加可空 `summary_json`（明文摘要，只含模式与计数），让 `GET /nodes` 摘要派生零解密；旧行 NULL 时读取路径回退解密，一次性回填后不再发生 |
 | `0014_node_expires_at.sql` | `nodes` 加可空 `expires_at`（固定公历到期日期 `YYYY-MM-DD`，不自动顺延） |
+| `0015_cert_auto_sync.sql` | `certificates` 加 `auto_sync` 列（默认开启续期自动同步关联节点与 Caddy） |
+| `0016_node_tls_cert.sql` | `nodes` 加可空 `tls_cert_id`（控制通道绑定的面板证书 ID，用于安装引导拉取与续期同步） |
 
 **rev 语义（冻结）**：`PUT` 配置时 Worker 将 `rev = max+1`；`apply` 必须带 `expectRev`，Agent 成功返回 `appliedRev`，不匹配返回 `409 conflict`；`rollback` = 用旧 config 生成**新 rev** 再 apply，不直接改 `applied_rev`。节点重建/恢复后 rev 从低重新计数时，由 `rev_epoch` 纪元判定旧纪元并自动重置 Agent 的 `appliedRev` 基线（§2.2），`409 conflict` 不再永久卡死恢复流程。
 

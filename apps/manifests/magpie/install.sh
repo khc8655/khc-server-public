@@ -17,6 +17,8 @@ PORT="${KHC_PARAM_PORT:-3425}"
 WEB_PORT="${KHC_PARAM_WEB_PORT:-3430}"
 PUBLIC_URL="${KHC_PARAM_PUBLIC_URL:-}"
 WEB_KEY="${KHC_PARAM_WEB_KEY:-}"
+DOWNLOAD_MIRROR="${KHC_PARAM_DOWNLOAD_MIRROR:-}"
+HTTP_PROXY_URL="${KHC_PARAM_HTTP_PROXY:-}"
 
 APP_HOME="${KHC_APP_HOME:?缺少 KHC_APP_HOME}"
 INSTANCE="${KHC_INSTANCE:-default}"
@@ -51,39 +53,156 @@ case "$(uname -m)" in
   *) echo "不支持的 CPU 架构: $(uname -m)" >&2; exit 1 ;;
 esac
 URL="https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-cli-linux-${ARCH}"
+DOWNLOAD_URL="$URL"
+if [ -n "$DOWNLOAD_MIRROR" ]; then
+  if [[ ! "$DOWNLOAD_MIRROR" =~ ^https?://[^[:space:]]+$ ]]; then
+    echo "download_mirror 必须是 http:// 或 https:// 开头的地址" >&2
+    exit 1
+  fi
+  if [[ "$DOWNLOAD_MIRROR" == */magpie-cli-linux-${ARCH} ]]; then
+    DOWNLOAD_URL="$DOWNLOAD_MIRROR"
+  else
+    DOWNLOAD_URL="${DOWNLOAD_MIRROR%/}/${URL}"
+  fi
+fi
+if [ -n "$HTTP_PROXY_URL" ]; then
+  if [[ ! "$HTTP_PROXY_URL" =~ ^(https?|socks4a?|socks5h?)://[^[:space:]]+$ ]]; then
+    echo "http_proxy 仅支持 http/https/socks4/socks5(h):// 地址" >&2
+    exit 1
+  fi
+fi
 
 if [ ! -x "$BIN" ]; then
   TMP="$(mktemp "${TMPDIR:-/tmp}/khc-magpie.XXXXXX")"
-  trap 'rm -f -- "$TMP"' EXIT
-  # 91MB 的 GitHub release：不限连接/总时长就会一直挂着不出错（国内出站尤其明显），
-  # 面板那边只能看到进度停在 1%。这里给足三道闸：连接超时、总时长、低速率判死。
-  DL_MAX="${KHC_DL_MAX_TIME:-600}"
-  echo "下载 $URL（约 90MB，最长等 ${DL_MAX}s）"
+  ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/khc-magpie-err.XXXXXX")"
+  WATCHER_PID=""
+  stop_watcher() {
+    if [ -n "${WATCHER_PID:-}" ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      wait "$WATCHER_PID" 2>/dev/null || true
+      WATCHER_PID=""
+    fi
+  }
+  cleanup_dl() {
+    stop_watcher
+    rm -f -- "${TMP:-}" "${ERR_FILE:-}"
+  }
+  trap cleanup_dl EXIT
+
+  DL_MAX="${KHC_DL_MAX_TIME:-300}"
+  echo "KHC_PROGRESS=12 开始下载 ${DOWNLOAD_URL}（约 91MB，连接超时 10s，低速 <16KB/s 持续 20s 中止，总上限 ${DL_MAX}s）"
+  if [ -n "$DOWNLOAD_MIRROR" ]; then
+    echo "已配置下载镜像/直链覆盖默认 GitHub 地址"
+  fi
+  if [ -n "$HTTP_PROXY_URL" ]; then
+    echo "已配置下载代理"
+  fi
+
   dl_fail() {
-    local got
-    got="$(wc -c < "$TMP" 2>/dev/null || echo 0)"
-    echo "下载失败：$1；已下载 ${got} 字节（完整文件应为 91MB 级别）" >&2
-    echo "排查：在该机器执行 curl -I $URL 看能否出站；拉不动就给节点配代理，" >&2
-    echo "      或手工把二进制放到 $BIN（sha256 须为 ${SHA}）" >&2
+    stop_watcher
+    local got=0
+    [ -f "$TMP" ] && got="$(wc -c < "$TMP" 2>/dev/null || echo 0)"
+    echo "下载失败：$1；已下载 ${got} 字节（完整文件应约 91MB）" >&2
+    echo "排查（国内 VM 常因直连 GitHub 阻断/限速失败）：" >&2
+    echo "  1) 安装参数填写 download_mirror（如 https://gh-proxy.org/ ）或 http_proxy（如 http://127.0.0.1:7890）；" >&2
+    echo "  2) 或在机器测试：curl -I --connect-timeout 10 $DOWNLOAD_URL" >&2
+    echo "  3) 或手工下载二进制到 $BIN（chmod 0755，sha256=${SHA}）后重试。" >&2
     exit 1
   }
+
+  # 每 3 秒输出一次可读字节进度（不依赖 curl \r 进度表；同时兼容旧版与 0.9+ Agent）。
+  (
+    prev=0
+    while sleep 3; do
+      got=0
+      if [ -f "$TMP" ]; then
+        got="$(wc -c < "$TMP" 2>/dev/null || echo 0)"
+        got="${got//[[:space:]]/}"
+        [ -n "$got" ] || got=0
+      fi
+      delta=$((got - prev))
+      prev="$got"
+      rate_kbs=$((delta / 3 / 1024))
+      mb=$((got / 1048576))
+      mb_tenths=$(((got % 1048576) * 10 / 1048576))
+      pct=$((15 + got * 65 / 95000000))
+      [ "$pct" -lt 15 ] && pct=15
+      [ "$pct" -gt 80 ] && pct=80
+      printf 'KHC_PROGRESS=%s 已下载 %s.%s MB / ~91 MB（当前速率 %s KB/s）\n' \
+        "$pct" "$mb" "$mb_tenths" "$rate_kbs"
+    done
+  ) &
+  WATCHER_PID=$!
+
   if command -v curl >/dev/null 2>&1; then
-    # --speed-limit 8KB + --speed-time 60：连续 60 秒低于 8KB/s 视为卡死，主动放弃
-    curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time "$DL_MAX" \
-      --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL" || dl_fail "curl 失败"
+    CURL_PROXY_ARGS=()
+    [ -n "$HTTP_PROXY_URL" ] && CURL_PROXY_ARGS=(--proxy "$HTTP_PROXY_URL")
+    MAX_TRIES=2
+    attempt=1
+    dl_ok=0
+    last_rc=1
+    while [ "$attempt" -le "$MAX_TRIES" ]; do
+      rm -f -- "$TMP"
+      : > "$ERR_FILE"
+      set +e
+      curl -fsSL \
+        --connect-timeout 10 \
+        --max-time "$DL_MAX" \
+        --speed-limit 16384 \
+        --speed-time 20 \
+        "${CURL_PROXY_ARGS[@]}" \
+        -o "$TMP" "$DOWNLOAD_URL" 2>"$ERR_FILE"
+      last_rc=$?
+      set -e
+      if [ "$last_rc" -eq 0 ] && [ -s "$TMP" ]; then
+        dl_ok=1
+        break
+      fi
+      got=0
+      [ -f "$TMP" ] && got="$(wc -c < "$TMP" 2>/dev/null || echo 0)"
+      err_tail="$(tail -n 5 "$ERR_FILE" 2>/dev/null | tr '\r' ' ' || true)"
+      echo "第 ${attempt}/${MAX_TRIES} 次下载失败（curl rc=${last_rc}，已收 ${got} 字节）：${err_tail:-无详细错误输出}" >&2
+      # HTTP 错误（如 404/403）不再重复重试
+      if [ "$last_rc" -eq 22 ]; then
+        break
+      fi
+      attempt=$((attempt + 1))
+      if [ "$attempt" -le "$MAX_TRIES" ]; then
+        sleep 2
+      fi
+    done
+    stop_watcher
+    [ "$dl_ok" -eq 1 ] || dl_fail "curl 退出码 ${last_rc}"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q --tries=3 --timeout=30 --read-timeout=60 -O "$TMP" "$URL" || dl_fail "wget 失败"
+    WGET_ENV=()
+    if [ -n "$HTTP_PROXY_URL" ]; then
+      WGET_ENV=(env "http_proxy=$HTTP_PROXY_URL" "https_proxy=$HTTP_PROXY_URL")
+    fi
+    : > "$ERR_FILE"
+    set +e
+    "${WGET_ENV[@]}" wget -q --tries=2 --timeout=15 --read-timeout=20 -O "$TMP" "$DOWNLOAD_URL" 2>"$ERR_FILE"
+    last_rc=$?
+    set -e
+    stop_watcher
+    if [ "$last_rc" -ne 0 ]; then
+      err_tail="$(tail -n 5 "$ERR_FILE" 2>/dev/null | tr '\r' ' ' || true)"
+      echo "wget 下载失败（rc=${last_rc}）：${err_tail:-无详细错误输出}" >&2
+      dl_fail "wget 失败（rc=${last_rc}）"
+    fi
   else
+    stop_watcher
     echo "需要 curl 或 wget" >&2; exit 1
   fi
+
   [ -s "$TMP" ] || dl_fail "下载到的是空文件"
+  echo "KHC_PROGRESS=85 下载完成，校验 sha256..."
   ACTUAL="$(sha256sum "$TMP" | awk '{print $1}')"
   if [ "$ACTUAL" != "$SHA" ]; then
     echo "sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装" >&2
     exit 1
   fi
   install -m 0755 "$TMP" "$BIN"
-  rm -f -- "$TMP"
+  cleanup_dl
   trap - EXIT
   echo "二进制已就位：$BIN"
 fi
@@ -136,6 +255,7 @@ EOF
 chmod 0600 "$UNIT"
 
 # ---- 4. 启动（降权用户自己的 user manager；执行器已 enable-linger）----
+echo "KHC_PROGRESS=90 写入 unit 并启动服务..."
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 systemctl --user daemon-reload
 # 一律 restart：升级会回退执行本脚本，enable --now 不会重启已在运行的服务，新版二进制 / 新 unit 不生效。
@@ -143,6 +263,7 @@ systemctl --user enable "$UNIT_NAME"
 systemctl --user restart "$UNIT_NAME"
 
 # ---- 5. 等待两个端口就绪 ----
+echo "KHC_PROGRESS=95 等待端口 ${WEB_PORT} / ${PORT} 就绪..."
 for _ in $(seq 1 30); do
   if curl -s -o /dev/null -m 2 "http://127.0.0.1:$WEB_PORT/" && \
      curl -s -o /dev/null -m 2 "http://127.0.0.1:$PORT/v1/models"; then

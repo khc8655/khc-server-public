@@ -25,6 +25,7 @@ import { AppError, badRequest, misconfigured, notFound } from '../lib/errors';
 import { nowSec } from '../lib/ids';
 import {
   collectExpiringCerts,
+  certCoversDomain,
   projectNodeOverview,
   projectNodeProbe,
 } from '../lib/node-overview';
@@ -123,6 +124,33 @@ function assertDomainMatchesEndpoint(
     `域名模式下接入地址的主机（${host}）必须与节点域名（${expected}）一致；请同时修改两者或改为「手动输入域名」重新生成`,
     { endpoint: `主机应为 ${expected}`, domain: `应与 ${host} 一致` },
   );
+}
+
+/**
+ * 校验节点绑定的全局证书（仅 domain 模式有效）：
+ * - 非 domain 模式强制置 null；
+ * - 显式传 null/undefined 保持解绑或未绑定；
+ * - 传入 certId 时校验存在性及域名覆盖（精确或泛域名）。
+ */
+async function resolveTlsCertId(
+  deps: AppDeps,
+  accessMode: NodeAccessMode,
+  endpoint: string,
+  domain: string | null | undefined,
+  tlsCertId: string | null | undefined,
+): Promise<string | null> {
+  if (accessMode !== 'domain' || !tlsCertId) return null;
+  const cert = await deps.certs.get(tlsCertId);
+  if (!cert) {
+    throw badRequest('所选证书不存在或已被删除', { tlsCertId: '证书不存在' });
+  }
+  const targetDomain = domain?.trim() || endpointHostname(endpoint) || '';
+  if (targetDomain && !certCoversDomain(targetDomain, cert.domains)) {
+    throw badRequest(`所选证书未覆盖当前域名 ${targetDomain}`, {
+      tlsCertId: `证书域名（${cert.domains.join(', ')}）不覆盖 ${targetDomain}`,
+    });
+  }
+  return cert.id;
 }
 
 /**
@@ -374,6 +402,13 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       allowInsecure: body.allowInsecure ?? false,
     });
     assertDomainMatchesEndpoint(accessMode, access.endpoint, body.domain);
+    const tlsCertId = await resolveTlsCertId(
+      deps,
+      accessMode,
+      access.endpoint,
+      body.domain ?? null,
+      body.tlsCertId ?? null,
+    );
     // §3.2：新建节点一律按 production 强制 TLS 校验；仅显式允许明文（IP 直连）时放行。
     assertProductionTls(
       c.env,
@@ -397,6 +432,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       preferredRoute:
         body.preferredRoute ?? (accessMode === 'tunnel' ? 'tunnel' : 'direct'),
       expiresAt: body.expiresAt ?? null,
+      tlsCertId,
       tokenEnc,
     });
     await deps.audit.log({
@@ -456,16 +492,34 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       );
     }
     // 同上：只有本次显式改入口 / 改域名 / 切接入方式时才校验一致性，改名等请求完全不触发。
+    const nextDomain = patch.domain !== undefined ? patch.domain : current.domain;
     if (
       patch.endpoint !== undefined ||
       patch.domain !== undefined ||
       accessMode !== current.accessMode
     ) {
-      assertDomainMatchesEndpoint(
+      assertDomainMatchesEndpoint(accessMode, access.endpoint, nextDomain);
+    }
+    let nextTlsCertId: string | null | undefined;
+    if (patch.tlsCertId !== undefined) {
+      nextTlsCertId = await resolveTlsCertId(
+        deps,
         accessMode,
         access.endpoint,
-        patch.domain !== undefined ? patch.domain : current.domain,
+        nextDomain,
+        patch.tlsCertId,
       );
+    } else if (accessMode !== 'domain') {
+      if (current.tlsCertId !== null) nextTlsCertId = null;
+    } else if (
+      current.tlsCertId &&
+      (patch.endpoint !== undefined || patch.domain !== undefined || accessMode !== current.accessMode)
+    ) {
+      const bound = await deps.certs.get(current.tlsCertId);
+      const targetDomain = nextDomain?.trim() || endpointHostname(access.endpoint) || '';
+      if (!bound || (targetDomain && !certCoversDomain(targetDomain, bound.domains))) {
+        nextTlsCertId = null;
+      }
     }
     // F-3：token 显式支持轮换（加密写入 tokenEnc），不再被 zod 静默剥离；
     // 审计只记 tokenRotated，明文 token 零落库零回显。
@@ -501,6 +555,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
       ...(preferredRoute !== undefined && preferredRoute !== current.preferredRoute
         ? { preferredRoute }
         : {}),
+      ...(nextTlsCertId !== undefined ? { tlsCertId: nextTlsCertId } : {}),
       ...(tokenEnc !== undefined ? { tokenEnc } : {}),
     });
     if (!node) throw notFound('节点不存在');
@@ -577,7 +632,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
 
-    const expiringCerts = collectExpiringCerts(certs, probedAt);
+    const expiringCerts = collectExpiringCerts(certs, probedAt, 15);
     return c.json(nodeProbeResponseSchema.parse({ probedAt, nodes: results, expiringCerts }));
   });
 

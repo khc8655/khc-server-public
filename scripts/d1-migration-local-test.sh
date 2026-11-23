@@ -93,7 +93,7 @@ for table in nodes app_configs revisions audit certificates settings rate_limit 
   contains "$TABLES" "\"name\": \"$table\"" && ok "表存在 $table" || bad "缺少表 $table"
 done
 NODE_COLS="$(query "$FULL" "PRAGMA table_info(nodes)")"
-for col in live_endpoint rev_epoch domain access_mode tunnel_id allow_insecure expires_at; do
+for col in live_endpoint rev_epoch domain access_mode tunnel_id allow_insecure expires_at tls_cert_id; do
   contains "$NODE_COLS" "\"name\": \"$col\"" && ok "nodes.$col 存在" || bad "缺少 nodes.$col"
 done
 APP_COLS="$(query "$FULL" "PRAGMA table_info(app_configs)")"
@@ -110,11 +110,11 @@ for f in 0001_init.sql 0002_c3.sql 0003_live_endpoint.sql 0004_last_apply_error.
 done
 INSERT="INSERT INTO nodes (id, name, endpoint, tunnel_endpoint, live_endpoint, preferred_route, token_enc, last_seen_at, last_state_json, created_at, updated_at) VALUES ('nd_legacy1', 'a', 'https://a.example.com', NULL, NULL, 'direct', 'enc-a', NULL, '{\"x\":1}', 1, 1), ('nd_legacy2', 'b', 'https://b.example.com', NULL, NULL, 'direct', 'enc-b', NULL, '{\"x\":2}', 1, 1)"
 query "$LEGACY" "$INSERT" >/dev/null 2>&1 && ok "写入旧节点（含 last_state_json）" || bad "写入旧节点失败"
-for f in 0005_clear_runtime_state.sql 0006_rate_limit.sql 0007_rev_epoch.sql 0008_node_domain.sql 0009_ssh_keys.sql 0010_node_access.sql 0011_cert_acme_meta.sql 0012_app_configs_summary.sql 0013_app_manifests.sql 0014_node_expires_at.sql 0015_cert_auto_sync.sql; do
+for f in 0005_clear_runtime_state.sql 0006_rate_limit.sql 0007_rev_epoch.sql 0008_node_domain.sql 0009_ssh_keys.sql 0010_node_access.sql 0011_cert_acme_meta.sql 0012_app_configs_summary.sql 0013_app_manifests.sql 0014_node_expires_at.sql 0015_cert_auto_sync.sql 0016_node_tls_cert.sql; do
   apply_file "$LEGACY" "migrations/$f" || bad "应用 $f 失败"
 done
-ROWS_JSON="$(query "$LEGACY" "SELECT id, rev_epoch, access_mode, allow_insecure, domain, last_state_json, expires_at FROM nodes ORDER BY id")"
-ROWS="$(json_values "id,rev_epoch,access_mode,allow_insecure,domain,last_state_json,expires_at" "$ROWS_JSON")"
+ROWS_JSON="$(query "$LEGACY" "SELECT id, rev_epoch, access_mode, allow_insecure, domain, last_state_json, expires_at, tls_cert_id FROM nodes ORDER BY id")"
+ROWS="$(json_values "id,rev_epoch,access_mode,allow_insecure,domain,last_state_json,expires_at,tls_cert_id" "$ROWS_JSON")"
 EPOCHS="$(printf '%s\n' "$ROWS" | cut -f2)"
 COUNT="$(printf '%s\n' "$EPOCHS" | wc -l | tr -d ' ')"
 UNIQUE="$(printf '%s\n' "$EPOCHS" | sort -u | wc -l | tr -d ' ')"
@@ -134,10 +134,10 @@ if printf '%s\n' "$ROWS" | cut -f4 | grep -Eqv '^0$'; then
 else
   ok "0010 allow_insecure 默认 0"
 fi
-if printf '%s\n' "$ROWS" | cut -f3 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | cut -f5 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | cut -f7 | grep -Eqv '^$'; then
-  bad "0010/0008/0014 新列默认值不是 NULL"
+if printf '%s\n' "$ROWS" | cut -f3 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | cut -f5 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | cut -f7 | grep -Eqv '^$' || printf '%s\n' "$ROWS" | cut -f8 | grep -Eqv '^$'; then
+  bad "0010/0008/0014/0016 新列默认值不是 NULL"
 else
-  ok "0010/0008/0014 新列默认 NULL（兼容旧节点）"
+  ok "0010/0008/0014/0016 新列默认 NULL（兼容旧节点）"
 fi
 
 section "4) scripts/d1-baseline.mjs 基线演练（真本地 wrangler D1）"

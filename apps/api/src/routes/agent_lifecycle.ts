@@ -18,6 +18,7 @@ import {
   agentUninstallCommandRequestSchema,
   agentUpgradeRequestSchema,
   agentUpgradeResponseSchema,
+  nodeBootstrapTlsResponseSchema,
 } from '@khc/contracts';
 import type { AppBindings, AppDeps } from '../types';
 import { requireAuth } from '../middleware/auth';
@@ -27,13 +28,14 @@ import {
   buildAgentUninstallCommand,
   buildAgentUpgradeCommand,
 } from '../lib/agent-commands';
-import { HubUnreachableError } from '../lib/node-client';
+import { HubUnreachableError, verifyAgentRequestSignature } from '../lib/node-client';
+import { allowRequest } from '../lib/rate-limit';
 import {
   assertAgentReleaseAllowed,
   loadAgentReleaseManifest,
   loadAgentReleases,
 } from '../lib/agent-releases';
-import { AppError } from '../lib/errors';
+import { AppError, notFound, unauthorized } from '../lib/errors';
 import { decryptSecret } from '../lib/crypto';
 import { throwAgentError } from './nodes';
 import { nodeToken, requireNode } from './helpers';
@@ -129,6 +131,70 @@ async function commandTarget(
   };
 }
 
+/**
+ * 节点安装引导拉取控制通道证书：自带节点 HMAC-SHA256 鉴权，必须在带 `requireAuth` 的
+ * `/nodes/*` 子路由之前挂载，否则兄弟路由的 `router.use('/nodes/*', requireAuth)` 会先返回 401。
+ */
+export function nodeBootstrapRoutes(deps: AppDeps): Hono<AppBindings> {
+  const router = new Hono<AppBindings>();
+
+  router.get('/nodes/:id/bootstrap/tls', async (c) => {
+    const nodeId = c.req.param('id');
+    const allowed = await allowRequest(
+      { db: c.env.DB, kv: c.env.KV },
+      `bootstrap-tls:${nodeId}`,
+      20,
+      60,
+    );
+    if (!allowed) {
+      throw new AppError(429, 'too_many_attempts', '证书引导拉取过于频繁，请稍后再试');
+    }
+    const node = await deps.nodes.get(nodeId);
+    if (!node) throw unauthorized('节点鉴权失败');
+    const token = await nodeToken(c.env, node);
+    const requestPath = new URL(c.req.url).pathname;
+    const ok = await verifyAgentRequestSignature({
+      scopeKey: `bootstrap-tls:${node.id}`,
+      token,
+      method: 'GET',
+      path: requestPath,
+      bodyText: '',
+      ts: c.req.header('x-khc-ts'),
+      nonce: c.req.header('x-khc-nonce'),
+      sig: c.req.header('x-khc-sig'),
+    });
+    if (!ok) throw unauthorized('节点 HMAC 签名无效或已过期');
+    if (node.accessMode !== 'domain' || !node.tlsCertId) {
+      throw notFound('节点尚未绑定面板证书');
+    }
+    const [cert, material] = await Promise.all([
+      deps.certs.get(node.tlsCertId),
+      deps.certs.material(node.tlsCertId),
+    ]);
+    if (!cert || !material) {
+      throw notFound('节点绑定的证书不存在或已被删除');
+    }
+    await deps.audit.log({
+      actor: `node:${node.id}`,
+      nodeId: node.id,
+      action: 'node.bootstrap_tls',
+      detail: { certId: cert.id },
+    });
+    return c.json(
+      nodeBootstrapTlsResponseSchema.parse({
+        certPem: material.certPem,
+        keyPem: material.keyPem,
+        domains: material.domains,
+        notAfter: cert.notAfter,
+      }),
+      200,
+      NO_STORE,
+    );
+  });
+
+  return router;
+}
+
 export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
   const router = new Hono<AppBindings>();
 
@@ -151,6 +217,11 @@ export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
       origin: new URL(c.req.url).origin,
     });
     const target = await commandTarget(deps, c.env, node);
+    const origin = new URL(c.req.url).origin;
+    const tlsBootstrapUrl =
+      node.accessMode === 'domain' && node.tlsCertId
+        ? `${origin}/api/v1/nodes/${encodeURIComponent(node.id)}/bootstrap/tls`
+        : undefined;
     const command = buildAgentInstallCommand({
       mode: body.mode,
       packageUrl: body.packageUrl,
@@ -161,6 +232,7 @@ export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
       endpointScheme: target.scheme,
       endpointHost: target.hostName,
       tunnelToken: target.tunnelToken,
+      tlsBootstrapUrl,
       nodeId: node.id,
     });
     await deps.audit.log({

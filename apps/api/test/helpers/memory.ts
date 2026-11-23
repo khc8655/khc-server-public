@@ -35,6 +35,7 @@ export class MemoryNodeRepo implements NodeRepo {
       allowInsecure: input.allowInsecure ?? accessMode === 'ip',
       preferredRoute: input.preferredRoute ?? (accessMode === 'tunnel' ? 'tunnel' : 'direct'),
       expiresAt: input.expiresAt ?? null,
+      tlsCertId: input.tlsCertId ?? null,
       tokenEnc: input.tokenEnc,
       revEpoch: newEpoch(),
       lastSeenAt: null,

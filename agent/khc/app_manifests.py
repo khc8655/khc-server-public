@@ -64,6 +64,7 @@ SCRIPT_TIMEOUT = 900.0
 #: 新建应用用户后等待 /run/user/<uid>/bus 就绪的上限（秒）
 BUS_WAIT_SEC = 15.0
 RESULT_PREFIX = "KHC_RESULT="
+PROGRESS_RE = re.compile(r"^KHC_PROGRESS=(\d{1,3})(?:\s+(.*))?\Z")
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SCRIPT_BYTES = 64 * 1024
 MAX_CARDS = 16
@@ -1006,6 +1007,7 @@ def _run_as_root(
     script_path: str,
     env: Mapping[str, str],
     redact: Optional[Callable[[str], str]] = None,
+    on_line: Optional[Callable[[str], None]] = None,
 ) -> Any:
     """root 模式：经 systemd-run 一次性单元在 Agent 沙箱外执行。
 
@@ -1033,7 +1035,9 @@ def _run_as_root(
         script_path,
     ]
     try:
-        result = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT + 10, redact=redact)
+        result = ctx.run_streaming(
+            cmd, timeout=SCRIPT_TIMEOUT + 10, redact=redact, on_line=on_line
+        )
         if getattr(result, "rc", 0) == 124:
             ctx.run(["systemctl", "stop", unit], check=False, timeout=15)
         return result
@@ -1681,13 +1685,33 @@ def run_manifest(
     def redact_line(text: str) -> str:
         return _redact(text, secrets)
 
+    def handle_script_line(line: str) -> None:
+        match = PROGRESS_RE.match(line.strip())
+        if match:
+            pct = max(1, min(99, int(match.group(1))))
+            ctx.set_progress(pct)
+            msg = (match.group(2) or "").strip()
+            if msg:
+                ctx.log(msg)
+            return
+        ctx.log(line)
+
+    ctx.set_progress(5)
     ctx.log(f"manifest {manifest_id}/{name} {action} 开始（mode={mode} user={user}）")
+    ctx.set_progress(10)
     if mode == "root":
-        proc = _run_as_root(ctx, directory, action, script_path, env, redact=redact_line)
+        proc = _run_as_root(
+            ctx, directory, action, script_path, env, redact=redact_line, on_line=handle_script_line
+        )
     else:
         cmd = ["runuser", "-u", user, "--", "bash", script_path]
         proc = ctx.run_streaming(
-            cmd, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory, redact=redact_line
+            cmd,
+            timeout=SCRIPT_TIMEOUT,
+            env=env,
+            cwd=directory,
+            redact=redact_line,
+            on_line=handle_script_line,
         )
     raw_stdout = proc.stdout or ""
     stdout = _redact(raw_stdout, secrets)
@@ -1697,6 +1721,7 @@ def run_manifest(
             f"脚本执行失败（rc={proc.rc}）",
             details={"rc": proc.rc, "stdout": tail(stdout, 1200), "stderr": tail(stderr, 1200)},
         )
+    ctx.set_progress(90)
 
     # 结果卡片本就是给用户看的（含 kind=secret 的登录 Key），所以从未遮罩的输出里解析；
     # 日志、错误详情与健康检查输出仍一律遮罩。

@@ -154,6 +154,7 @@ def default_streaming_runner(
     max_lines: int = 400,
     tail_chars: int = 8000,
     cancel_event: Optional[threading.Event] = None,
+    cr_throttle_sec: float = 2.0,
 ) -> RunResult:
     """逐行读取子进程输出并实时回调，供长任务（下载/解包/安装）使用。
 
@@ -162,7 +163,8 @@ def default_streaming_runner(
 
     注意：**不能用 ``stream.readline()``** —— 它会在没有换行时阻塞，超时与取消的检查
     就永远轮不到（实测：``bash -c "echo x; sleep 5"`` 在 0.8s 超时下依然 rc=0）。
-    这里用 select 轮询 + os.read 分片读，保证 timeout / cancel 到点就能真的杀进程。
+    同时支持 ``\\r`` 进度条刷新（按 ``cr_throttle_sec`` 节流输出，避免 curl/wget 等
+    只写 ``\\r`` 时进程不退出就一行进度都没有）。
     """
     argv = [str(part) for part in cmd]
     try:
@@ -184,13 +186,19 @@ def default_streaming_runner(
     extra_err: list[str] = []
     emitted = 0
     pending = ""
+    deferred_cr_line = ""
+    last_cr_emit_at = 0.0
+    last_emitted_cr = ""
     deadline = time.monotonic() + float(timeout)
 
-    def emit(line: str) -> None:
-        nonlocal emitted
+    def emit(line: str, *, is_cr: bool = False) -> None:
+        nonlocal emitted, last_cr_emit_at, last_emitted_cr
         text = line.rstrip()
         if not text:
             return
+        if is_cr:
+            last_cr_emit_at = time.monotonic()
+            last_emitted_cr = text
         if emitted < max_lines:
             if on_line is not None:
                 on_line(text)
@@ -211,6 +219,13 @@ def default_streaming_runner(
             # 最多等 0.2s，保证取消/超时能被及时响应
             ready, _, _ = select.select([fd] if fd >= 0 else [], [], [], min(0.2, remaining))
             if not ready:
+                if (
+                    deferred_cr_line
+                    and deferred_cr_line != last_emitted_cr
+                    and cr_throttle_sec > 0
+                    and time.monotonic() - last_cr_emit_at >= cr_throttle_sec
+                ):
+                    emit(deferred_cr_line, is_cr=True)
                 continue
             try:
                 data = os.read(fd, 1 << 16)
@@ -222,8 +237,35 @@ def default_streaming_runner(
             chunks.append(text)
             pending += text
             while "\n" in pending:
-                line, pending = pending.split("\n", 1)
-                emit(line)
+                raw_line, pending = pending.split("\n", 1)
+                if raw_line == "" and deferred_cr_line:
+                    if deferred_cr_line != last_emitted_cr:
+                        emit(deferred_cr_line)
+                    deferred_cr_line = ""
+                    last_emitted_cr = ""
+                    continue
+                deferred_cr_line = ""
+                last_emitted_cr = ""
+                cleaned = raw_line.rstrip("\r")
+                if "\r" in cleaned:
+                    parts = [seg for seg in cleaned.split("\r") if seg.strip()]
+                    if parts:
+                        emit(parts[-1])
+                else:
+                    emit(cleaned)
+            if "\r" in pending:
+                cr_parts = pending.split("\r")
+                pending = cr_parts[-1]
+                for seg in cr_parts[:-1]:
+                    stripped = seg.rstrip()
+                    if stripped:
+                        deferred_cr_line = stripped
+                if deferred_cr_line:
+                    now = time.monotonic()
+                    if deferred_cr_line != last_emitted_cr and (
+                        cr_throttle_sec <= 0 or now - last_cr_emit_at >= cr_throttle_sec
+                    ):
+                        emit(deferred_cr_line, is_cr=True)
     finally:
         try:
             if proc.stdout is not None:
@@ -240,6 +282,8 @@ def default_streaming_runner(
         else:
             rc = proc.returncode
 
+    if deferred_cr_line and deferred_cr_line != last_emitted_cr:
+        emit(deferred_cr_line)
     if pending.strip():
         emit(pending)
 
@@ -407,17 +451,18 @@ class Ctx:
         max_lines: int = 400,
         tail_chars: int = 8000,
         redact: Optional[Callable[[str], str]] = None,
+        on_line: Optional[Callable[[str], None]] = None,
     ) -> RunResult:
         """边跑边把输出写进任务日志（长任务专用）。
 
         普通 ``run`` 走 subprocess.run(capture_output)，脚本进程不退出就一行日志都没有：
         装 magpie 这类要下载 90MB 的步骤，面板上只能看到进度停在 1%，卡住也看不出卡在哪。
-        这里改成逐行读取 + 每行立刻 ctx.log，让「正在下载/校验/启动」这类进度可见。
+        这里改成逐行读取 + 每行立刻回调（默认 ``ctx.log``），让「正在下载/校验/启动」这类进度可见。
 
         输出仍然完整收集（受 tail_chars 限制），返回的 RunResult 与 run() 同形，
         调用方按原有方式判断 rc / stdout。
 
-        ``redact`` 在每一行写入任务日志之前调用（用于遮罩 secret 参数值）；返回的 RunResult
+        ``redact`` 在每一行写入回调之前调用（用于遮罩 secret 参数值）；返回的 RunResult
         不经它处理，调用方自行对 stdout / stderr 遮罩。
         """
         self.check_cancel()
@@ -435,9 +480,17 @@ class Ctx:
                 )
             timeout = min(float(timeout), max(1.0, remaining))
 
+        line_cb = on_line if on_line is not None else self.log
+
         if self._streaming_runner is None:
-            # 注入了 runner：沿用普通 run，保持测试与演练的可注入性。
-            return self.run(argv, check=False, timeout=timeout, env=env, cwd=cwd)
+            # 注入了 runner：沿用普通 run，保持测试与演练的可注入性；若显式传了 on_line，补做行级回放。
+            result = self.run(argv, check=False, timeout=timeout, env=env, cwd=cwd)
+            if on_line is not None and result.stdout:
+                for line in result.stdout.splitlines():
+                    stripped = line.rstrip()
+                    if stripped:
+                        line_cb(redact(stripped) if redact is not None else stripped)
+            return result
 
         merged_env = None
         if env is not None:
@@ -448,7 +501,7 @@ class Ctx:
             timeout=timeout,
             env=merged_env,
             cwd=cwd,
-            on_line=(lambda line: self.log(redact(line))) if redact is not None else self.log,
+            on_line=(lambda line: line_cb(redact(line))) if redact is not None else line_cb,
             max_lines=max_lines,
             tail_chars=tail_chars,
             cancel_event=self._cancel_event,

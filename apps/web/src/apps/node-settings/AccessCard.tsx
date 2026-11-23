@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Node } from '@khc/contracts';
+import { bindCertificate, certificatesQueryOptions } from '../../data/certs';
 import { updateHub } from '../../data/hubs';
 import { listTunnels } from '../../data/tunnels';
 import { ApiError } from '../../data/client';
@@ -13,6 +14,7 @@ import {
   toPatchPayload,
   type NodeAccessDraft,
 } from './AccessForm';
+import { NodeInstallPanel } from './NodeInstallPanel';
 import {
   Banner,
   Button,
@@ -25,7 +27,7 @@ import {
   Tag,
   useToast,
 } from '../../ui';
-import { zh } from '../../i18n/zh';
+import { zh, fmt } from '../../i18n/zh';
 
 function sameDraft(got: NodeAccessDraft, base: NodeAccessDraft): boolean {
   return (
@@ -33,6 +35,7 @@ function sameDraft(got: NodeAccessDraft, base: NodeAccessDraft): boolean {
     got.accessMode === base.accessMode &&
     got.domain === base.domain &&
     got.domainPort === base.domainPort &&
+    got.tlsCertId === base.tlsCertId &&
     got.tunnelId === base.tunnelId &&
     got.ipHost === base.ipHost &&
     got.ipPort === base.ipPort &&
@@ -40,16 +43,22 @@ function sameDraft(got: NodeAccessDraft, base: NodeAccessDraft): boolean {
   );
 }
 
+interface ReinstallState {
+  hub: Node;
+  notice: { tone: 'info' | 'warn'; title: string; description?: string };
+}
+
 /**
  * 节点设置页「接入方式」卡片（C 单对象详情里的可编辑区块）：
  * 徽章按 node.accessMode 显示域名 / Tunnel / IP 直连；点「修改接入方式」打开唯一抽屉，
- * 复用与添加节点相同的 AccessForm；保存 L1，立即生效。
+ * 复用与添加节点相同的 AccessForm；仅在线更换控制通道证书时直接热重载，其余接入或离线改证留在抽屉生成重装命令。
  */
-export function AccessCard({ hub }: { hub: Node }) {
+export function AccessCard({ hub, online = false }: { hub: Node; online?: boolean }) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const base = initialAccessDraft(hub);
   const [form, setForm] = useState<NodeAccessDraft | null>(null);
+  const [reinstall, setReinstall] = useState<ReinstallState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const legacyTunnel = hub.accessMode === 'tunnel' && !hub.tunnelId;
@@ -60,16 +69,28 @@ export function AccessCard({ hub }: { hub: Node }) {
     retry: false,
     enabled: hub.accessMode === 'tunnel' && Boolean(hub.tunnelId),
   });
+  const certsQuery = useQuery({
+    ...certificatesQueryOptions(),
+    enabled: hub.accessMode === 'domain' && Boolean(hub.tlsCertId),
+  });
   const tunnel = (tunnelsQuery.data ?? []).find((item) => item.id === hub.tunnelId);
+  const boundCert = hub.tlsCertId
+    ? (certsQuery.data ?? []).find((item) => item.id === hub.tlsCertId)
+    : undefined;
 
   const open = () => {
     setForm(initialAccessDraft(hub));
+    setReinstall(null);
     setError(null);
   };
 
-  const close = () => setForm(null);
+  const close = () => {
+    setForm(null);
+    setReinstall(null);
+    setError(null);
+  };
 
-  const issue = form ? accessDraftIssue(form, { requireName: true }) : null;
+  const issue = form && !reinstall ? accessDraftIssue(form, { requireName: true }) : null;
 
   const save = async () => {
     if (!form) return;
@@ -78,21 +99,73 @@ export function AccessCard({ hub }: { hub: Node }) {
       setError(currentIssue);
       return;
     }
-    if (sameDraft(form, initialAccessDraft(hub))) {
+    const snapshotBase = initialAccessDraft(hub);
+    if (sameDraft(form, snapshotBase)) {
       toast.show({ message: zh.nodeSettings.accessNoChange });
       close();
       return;
     }
+    const sameEndpointParams =
+      form.accessMode === snapshotBase.accessMode &&
+      form.domain === snapshotBase.domain &&
+      form.domainPort === snapshotBase.domainPort &&
+      form.tunnelId === snapshotBase.tunnelId &&
+      form.ipHost === snapshotBase.ipHost &&
+      form.ipPort === snapshotBase.ipPort &&
+      form.insecureConfirmed === snapshotBase.insecureConfirmed;
+    const certChanged = form.tlsCertId !== snapshotBase.tlsCertId;
+
     setBusy(true);
     setError(null);
     try {
       const patch = toPatchPayload(form);
       const name = form.name.trim();
       if (name !== hub.name) patch.name = name;
-      await updateHub(hub.id, patch);
+      const updated = await updateHub(hub.id, patch);
       await queryClient.invalidateQueries({ queryKey: ['hubs'] });
-      toast.show({ message: zh.nodeSettings.accessSaved });
-      close();
+
+      if (sameEndpointParams && !certChanged) {
+        toast.show({ message: zh.nodeSettings.accessSaved });
+        close();
+        return;
+      }
+
+      if (
+        sameEndpointParams &&
+        certChanged &&
+        form.tlsCertId &&
+        online &&
+        updated.accessMode === 'domain'
+      ) {
+        try {
+          await bindCertificate(form.tlsCertId, updated.id);
+          await queryClient.invalidateQueries({ queryKey: ['hubs', hub.id, 'overview'] });
+          toast.show({ message: zh.nodeSettings.accessCertBoundToast });
+          close();
+          return;
+        } catch (bindErr) {
+          setReinstall({
+            hub: updated,
+            notice: {
+              tone: 'warn',
+              title: zh.nodeSettings.accessSaved,
+              description: fmt(zh.nodeSettings.accessBindFallbackHint, {
+                error: bindErr instanceof Error ? bindErr.message : String(bindErr),
+              }),
+            },
+          });
+          return;
+        }
+      }
+
+      setReinstall({
+        hub: updated,
+        notice: {
+          tone: 'info',
+          title: zh.nodeSettings.accessSaved,
+          description: zh.nodeSettings.accessReinstallHint,
+        },
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : zh.nodeSettings.accessSaveFailed);
     } finally {
@@ -104,6 +177,19 @@ export function AccessCard({ hub }: { hub: Node }) {
     { key: zh.nodeSettings.accessCurrent, value: hub.endpoint, mono: true, copyValue: hub.endpoint },
     ...(hub.accessMode === 'domain' && hub.domain
       ? [{ key: zh.nodeSettings.accessDomain, value: hub.domain, mono: true }]
+      : []),
+    ...(hub.accessMode === 'domain'
+      ? [
+          {
+            key: zh.nodeSettings.accessCert,
+            value: boundCert
+              ? `${boundCert.name}（${boundCert.domains.join(', ')}）`
+              : hub.tlsCertId
+                ? hub.tlsCertId
+                : zh.nodeSettings.accessCertUnbound,
+            mono: Boolean(hub.tlsCertId && !boundCert),
+          },
+        ]
       : []),
     ...(hub.accessMode === 'tunnel'
       ? [
@@ -139,36 +225,52 @@ export function AccessCard({ hub }: { hub: Node }) {
         </Stack>
       </Card>
 
-      {form ? (
+      {form || reinstall ? (
         <Drawer
           open
           title={zh.nodeSettings.accessDrawerTitle}
           context={zh.nodeSettings.accessContext.replace('{hub}', hub.name)}
-          dirty={!sameDraft(form, base)}
+          dirty={Boolean(!reinstall && form && !sameDraft(form, base))}
           onClose={close}
           footer={
-            <Row gap={2} wrap>
-              <Button label={zh.common.cancel} onClick={close} />
-              <Button
-                label={zh.common.save}
-                variant="primary"
-                loading={busy}
-                disabled={Boolean(issue)}
-                disabledReason={issue ?? undefined}
-                onClick={() => void save()}
-              />
-            </Row>
+            reinstall ? (
+              <Button label={zh.common.close} onClick={close} />
+            ) : (
+              <Row gap={2} wrap>
+                <Button label={zh.common.cancel} onClick={close} />
+                <Button
+                  label={zh.common.save}
+                  variant="primary"
+                  loading={busy}
+                  disabled={Boolean(issue)}
+                  disabledReason={issue ?? undefined}
+                  onClick={() => void save()}
+                />
+              </Row>
+            )
           }
         >
-          <Stack gap={4}>
-            <Banner
-              tone="info"
-              title={zh.nodeSettings.accessWarningTitle}
-              description={zh.nodeSettings.accessWarning}
+          {reinstall ? (
+            <NodeInstallPanel
+              hubId={reinstall.hub.id}
+              hubName={reinstall.hub.name}
+              accessMode={reinstall.hub.accessMode}
+              endpoint={reinstall.hub.endpoint}
+              domain={reinstall.hub.domain}
+              tlsCertId={reinstall.hub.tlsCertId}
+              notice={reinstall.notice}
             />
-            <AccessForm draft={form} onChange={setForm} mode="edit" />
-            {error ? <InlineError message={error} /> : null}
-          </Stack>
+          ) : form ? (
+            <Stack gap={4}>
+              <Banner
+                tone="info"
+                title={zh.nodeSettings.accessWarningTitle}
+                description={zh.nodeSettings.accessWarning}
+              />
+              <AccessForm draft={form} onChange={setForm} mode="edit" />
+              {error ? <InlineError message={error} /> : null}
+            </Stack>
+          ) : null}
         </Drawer>
       ) : null}
     </>

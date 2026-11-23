@@ -25,6 +25,8 @@ const zones = [
 
 let accounts: Array<Record<string, unknown>> = [];
 let records: Array<Record<string, unknown>> = [];
+let certs: Array<Record<string, unknown>> = [];
+let issueCertFails = false;
 let requests: { url: string; init?: RequestInit }[] = [];
 
 function defaultRecords(): Array<Record<string, unknown>> {
@@ -51,7 +53,29 @@ function mockApi() {
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
       if (url === '/api/v1/settings') return json({ settings: [] });
       if (url === '/api/v1/nodes') return json({ nodes: [] });
-      if (url === '/api/v1/certs') return json({ certificates: [] });
+      if (url === '/api/v1/certs') return json({ certificates: certs });
+      if (url === '/api/v1/certs/issue-dns01' && init?.method === 'POST') {
+        if (issueCertFails) {
+          return json({ error: { code: 'acme_failed', message: 'CF DNS-01 鉴权超时' } }, 502);
+        }
+        const payload = JSON.parse(String(init.body)) as { name: string; domains: string[] };
+        const issued = {
+          id: `cert-${certs.length + 1}`,
+          name: payload.name,
+          domains: payload.domains,
+          issuer: 'acme',
+          acmeProvider: 'cf-dns01',
+          acmeCa: 'letsencrypt',
+          autoSync: true,
+          renewable: true,
+          notAfter: Math.floor(Date.now() / 1000) + 90 * 86400,
+          sourceNodeId: null,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        certs = [issued, ...certs];
+        return json({ certificate: issued }, 201);
+      }
       if (url === '/api/v1/cf-dns/resolve-check' && init?.method === 'POST') {
         const payload = JSON.parse(String(init.body)) as { name: string; type?: string };
         return json({
@@ -114,6 +138,8 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   accounts = [];
   records = defaultRecords();
+  certs = [];
+  issueCertFails = false;
   mockApi();
 });
 
@@ -383,5 +409,73 @@ describe('设置页：账号与域名管理分离（S1）', () => {
     const followUps = requests.slice(beforeCount).map((item) => item.url);
     expect(followUps).toContain('/api/v1/cf-dns/records?zoneId=z1');
     expect(followUps).not.toContain('/api/v1/cf-dns/records?zoneId=z2');
+  });
+
+  it('添加 A 记录默认同时签发 DNS-01 泛域名证书；失败不回滚 DNS 并支持重试', async () => {
+    accounts = [
+      {
+        id: 'acc-1',
+        name: '主账号',
+        accountName: '示例账号',
+        hasToken: true,
+        enabled: true,
+        zones,
+        enabledZoneIds: ['z1'],
+      },
+    ];
+    issueCertFails = true;
+    await renderSettings('/settings?tab=domain');
+    await userEvent.click(await screen.findByRole('button', { name: '管理记录' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('manual.example.com');
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '添加记录' }));
+    const certCheckbox = within(dialog).getByRole('checkbox', {
+      name: /同时签发 HTTPS 证书/,
+    }) as HTMLInputElement;
+    expect(certCheckbox.checked).toBe(true);
+
+    await userEvent.type(within(dialog).getByLabelText('记录名'), 'vm1');
+    await userEvent.type(within(dialog).getByLabelText('内容'), '198.51.100.40');
+    await userEvent.click(within(dialog).getByRole('button', { name: '添加' }));
+
+    // 证书签发失败：DNS 记录不回滚且保留在列表，抽屉顶部展示重试横幅
+    expect(await within(dialog).findByText('vm1.example.com')).toBeTruthy();
+    expect(await within(dialog).findByText(/解析已添加，但证书签发失败：CF DNS-01 鉴权超时/)).toBeTruthy();
+
+    issueCertFails = false;
+    await userEvent.click(within(dialog).getByRole('button', { name: '重试签发证书' }));
+    await waitFor(() => {
+      expect(within(dialog).queryByText(/解析已添加，但证书签发失败/)).toBeNull();
+    });
+    const issueReq = requests.find((item) => item.url === '/api/v1/certs/issue-dns01');
+    expect(JSON.parse(String(issueReq?.init?.body))).toMatchObject({
+      accountId: 'acc-1',
+      domains: ['*.example.com'],
+    });
+  });
+
+  it('已有有效泛域名证书时提示免签且列表显示证书就绪标签；无证行支持补签', async () => {
+    accounts = [
+      {
+        id: 'acc-1',
+        name: '主账号',
+        accountName: '示例账号',
+        hasToken: true,
+        enabled: true,
+        zones,
+        enabledZoneIds: ['z1'],
+      },
+    ];
+    await renderSettings('/settings?tab=domain');
+    await userEvent.click(await screen.findByRole('button', { name: '管理记录' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('无证书')).toBeTruthy();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '签发证书' }));
+    expect(await within(dialog).findByText('证书就绪：*.example.com')).toBeTruthy();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '添加记录' }));
+    expect(await within(dialog).findByText(/已被有效证书「\*\.example\.com」覆盖/)).toBeTruthy();
   });
 });
