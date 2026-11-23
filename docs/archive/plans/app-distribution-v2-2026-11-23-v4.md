@@ -1,6 +1,6 @@
 # V4 开工说明：前端通用化——声明驱动的安装、已装应用与应用管理
 
-> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §5–§7、§11 V4；`docs/verification/2026-11-23/manifest-v2-live.md`
+> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/app-distribution-v2-2026-11-23.md` §5–§7、§11 V4；`docs/verification/2026-11-23/manifest-v2-live.md`
 
 > **给开发 agent**：开工前提：V1–V3 已合入（#151、#154、#152）。先读 `AGENTS.md`、提案、`docs/ui-redesign/ui-guidelines.md`、`docs/ui-redesign/page-specs.md` 与本文全文。本批只改前端与文档，**不改 Worker、契约、Agent**。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 

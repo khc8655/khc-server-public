@@ -1,6 +1,6 @@
 # 应用分发 v2：声明式应用包与免发版适配（提案）
 
-> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/hosted-apps.md`、`docs/plans/app-manifests-2026-11-15.md`、ADR-0006
+> 状态：已完成（V6 放弃） ｜ 最后核验：2026-11-23 ｜ 关联：`docs/hosted-apps.md`、`docs/plans/app-manifests-2026-11-15.md`、ADR-0006
 
 > **执行者须知**：§12 已全部拍板。开发只按 §13 列出的批次开工说明施工，一个批次一个 PR；本文只写决策与验收口径。
 
@@ -236,14 +236,14 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 
 | 批次 | 开工说明 | 状态 |
 |---|---|---|
-| V1 | `docs/plans/app-distribution-v2-2026-11-23-v1.md` | 已合入（#151） |
-| V2 | `docs/plans/app-distribution-v2-2026-11-23-v2.md` | 已合入（#154） |
-| V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
-| V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 已合入（#158，v0.41.0），真机证据 `docs/verification/2026-11-23/manifest-v2-web.md`（#160） |
-| V4.1 | `docs/plans/app-distribution-v2-2026-11-23-v4.1.md` | 已合入（#162，v0.41.1），真机证据 `docs/verification/2026-11-23/manifest-upgrade-values.md`（#164） |
-| V4.2 | `docs/plans/app-distribution-v2-2026-11-23-v4.2.md` | 开发中（Worker + 前端小改，0.41.2；见 §15.3；轻流程） |
-| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md`（含 §12 开工前推演） | 可与 V4.2 并行开发；V4.2 合入且全部节点 ≥ 0.8.0 后合入 V5a（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
-| V6 | `docs/plans/app-distribution-v2-2026-11-23-v6.md` | V5a、V5b 合入后开工 |
+| V1 | `docs/archive/plans/app-distribution-v2-2026-11-23-v1.md` | 已合入（#151） |
+| V2 | `docs/archive/plans/app-distribution-v2-2026-11-23-v2.md` | 已合入（#154） |
+| V3 | `docs/archive/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
+| V4 | `docs/archive/plans/app-distribution-v2-2026-11-23-v4.md` | 已合入（#158，v0.41.0），真机证据 `docs/verification/2026-11-23/manifest-v2-web.md`（#160） |
+| V4.1 | `docs/archive/plans/app-distribution-v2-2026-11-23-v4.1.md` | 已合入（#162，v0.41.1），真机证据 `docs/verification/2026-11-23/manifest-upgrade-values.md`（#164） |
+| V4.2 | `docs/archive/plans/app-distribution-v2-2026-11-23-v4.2.md` | 已合入（#165，v0.41.2） |
+| V5 | `docs/archive/plans/app-distribution-v2-2026-11-23-v5.md`（含 §12 开工前推演） | 已合入（#166、#167） |
+| V6 | `docs/archive/plans/app-distribution-v2-2026-11-23-v6.md` | 已放弃（§16） |
 
 开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 agent 不自行修改 `docs/plans/`。
 
@@ -294,3 +294,9 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 
 preUpgrade / preUninstall 在 Worker 渲染，拿不到安装值。引用无默认值参数时，升级需用户每次补填，卸载则在 Worker 直接失败且不能强制卸载（应用卸不掉）。决定：**保存时拒绝**这类清单（只针对 preUpgrade / preUninstall + 无默认值参数；有默认值仍只提醒），执行时对旧清单兜底返回 `param_invalid` + `details.field`。V4.2（0.41.2）实施，不改契约。khcsearch（V6）不声明 preUpgrade / preUninstall，不受影响。
 
+## 16. 收尾（主人 2026-11-23 拍板）
+
+- **V6（khcsearch 接入）放弃**。原因：控制面步骤、应用凭据、动态来源主要为 khcsearch 的外部票据流程而设，复杂度与收益不成比例；主人要求以后添加应用保持简单。
+- **以后的应用只做自包含**（脚本自装、自起服务），按 `docs/hosted-apps.md` §6「添加一个新应用」5 步接入，不改面板代码、不发版。`hooks` / `secrets` / 非固定 `sources` 能力保留在代码里不删，但不再推荐使用；确需对接外部服务时另行立项。
+- 本提案以 V5（V5a #166 0.42.0、V5b #167 0.42.1 / Agent 0.8.1）结束，整组文档归档到 `docs/archive/plans/`。
+- 非阻塞遗留（记入 backlog）：`verify-app-manifests.mjs` 64KB 上限按字符数计；任务日志中 `KHC_RESULT` 行可能含脚本自动生成的 Key；hooks 引用未声明参数时保存不拦；应用管理抽屉错误只定位到 JSON 整体。

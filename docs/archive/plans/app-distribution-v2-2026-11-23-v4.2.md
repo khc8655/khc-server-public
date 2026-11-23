@@ -1,6 +1,6 @@
 # V4.2 开工说明：升级 / 卸载的控制面步骤引用无默认值参数
 
-> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §15.3；`docs/plans/app-distribution-v2-2026-11-23-v4.1.md`；`docs/verification/2026-11-23/manifest-upgrade-values.md` §四
+> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/app-distribution-v2-2026-11-23.md` §15.3；`docs/archive/plans/app-distribution-v2-2026-11-23-v4.1.md`；`docs/verification/2026-11-23/manifest-upgrade-values.md` §四
 
 > **给开发 agent**：开工前提：V4.1 已合入（#162），其真机证据已合入（#164）。本批只改 **Worker + 一处前端文案布局 + 文档**，不改契约与 Agent。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 
