@@ -94,7 +94,7 @@ R1 的两种做法单列对比（§8 待拍板第 1 项）：
 | `params[]` | 增 `type: enum`（`options[{value,label,requires?}]`）；已有的 `secret: true` 语义扩展到输入框掩码与 hooks 抹除；`derive: "endpoint:<id>.publicUrl"` 由面板推导、不进表单 | 前端 + Agent | G3、G7、R4 |
 | `requires` | `arch[]`、`os[]`（debian / ubuntu / rhel 家族）、`memMB`、`diskMB`、`commands[]`；enum 选项可追加。所需的 Agent 能力由 Worker 按清单用到的字段自动推导，作者不写 | Agent 预检 + Worker 版本协商 | R4 |
 | `runtime` | 不变（`root` / `create`） | Agent | R3 |
-| `hooks` | 控制面 HTTP 步骤：`preInstall`、`preUpgrade`（默认同 preInstall）、`preUninstall`；见 §6 | Worker | R1、R7 |
+| `hooks` | 控制面 HTTP 步骤：`preInstall`、`preUpgrade`（不声明则升级时不执行控制面步骤，**不回退**到 preInstall，避免重复创建第三方资源；2026-11-23 V2 审核修订）、`preUninstall`；见 §6 | Worker | R1、R7 |
 | `scripts` | `install`（必填）、`upgrade`（缺省用 install 并置 `KHC_ACTION=upgrade`）、`uninstall` | Agent | G2 |
 | `units[]` | 声明本应用的 systemd 单元：`{name, scope: system\|user}`，名称可含 `{{instance}}`。平台据此通用实现启动 / 停止 / 重启 / 日志 / 运行状态 | Agent | G2、G6 |
 | `health` | `{type: http\|tcp\|unit, url / port, expect, versionPointer?, graceSec, timeoutMs}`；只允许探测本机回环；安装后在宽限期内等它通过才报完成 | Agent | R5、G6 |
