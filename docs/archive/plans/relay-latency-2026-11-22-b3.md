@@ -1,6 +1,6 @@
 # B3 开工说明：Worker 降延迟
 
-> 状态：已拍板 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/plans/relay-latency-2026-11-22.md` §4 B3、B1 基线证据
+> 状态：已实施 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/relay-latency-2026-11-22.md` §4 B3、ADR-0022
 
 > **给开发 agent**：本文是 B3 的完整任务说明。**开工前提：B1 已合入并部署，`docs/verification/<日期>/relay-latency-baseline.md` 已合入。** 先读 `AGENTS.md`、提案、B1 基线证据和本文全文。哪几项要做由 §1 的门槛决定，门槛不满足的项不做，在 PR 里写明数据。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 
