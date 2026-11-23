@@ -973,7 +973,7 @@ export function upsertSite(config: CaddyConfig, site: CaddySite, previousName?: 
 }
 
 export interface PublishSitePlan {
-  /** 可选站点名称（如 magpie / llmproxy）；留空默认取域名，同域名不同端口会自动消歧后缀。 */
+  /** 可选站点名称（如 my-app / llmproxy）；留空默认取域名，同域名不同端口会自动消歧后缀。 */
   name?: string;
   /** 站点域名 */
   domain: string;

@@ -1,88 +1,58 @@
 # 托管应用（应用清单 · 面板安装 · 一键发布）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`apps/manifests/`、`apps/api/src/lib/builtin-manifests.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`、`docs/cf-dns.md`
-> 范围：应用清单的数据来源与字段、从面板安装到节点上的流程、清单里的 `publish` 声明如何变成 Caddy 站点
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`apps/manifests/`、`apps/web/src/data/manifestApps.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`
 
 ## 1. 是什么
 
-「应用」是装在节点上、以独立 systemd user unit 常驻的服务（magpie、sing-box 之类）。面板只负责**下发清单 → 起后台安装任务 → 展示结果**，脚本本身在节点上执行，密码类参数不进 D1、不进日志。
+「应用」是装在节点上、以独立 systemd unit 常驻的服务。面板只负责**下发清单 → 执行前置控制面步骤 → 起后台安装/升级任务 → 展示结果**，脚本本身在节点上执行，凭据类数据不进入日志、控制面凭据不进入节点磁盘。
 
 三者分工：
 
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 仓内清单 | `apps/manifests/<id>/manifest.json` | 唯一的可评审来源，`scripts/verify-app-manifests.mjs` 校验脚本 sha256 与字段 |
-| D1 记录 | 表 `app_manifests`（`migrations/0013_app_manifests.sql`） | 控制面运行时读的那份，可在「设置 → 应用管理」改 |
-| 节点目录 | `/opt/khc-agent/recipes/catalog.json` | 旧的自带 recipe，应用目录已改为读 D1，不再依赖它 |
+| D1 记录 | 表 `app_manifests`（`migrations/0013_app_manifests.sql`） | 控制面运行时读的那份，可在「设置 → 应用管理」维护 |
+| 节点执行器 | `agent/khc/app_manifests.py` | 支持 schema v1/v2 执行、预检、启停/日志与健康检查 |
 
-内置清单由 `apps/api/src/lib/builtin-manifests.ts` 在 Worker 打包时把仓内 JSON 一起打进去，`GET /api/v1/app-manifests` 首次访问时**缺就补一行、已有记录不动**——所以 magpie 装完即见，而改过的 magpie 不会被下次列表刷回仓内版本。删仓内定义也不会删 D1 记录。
+内置清单由 `apps/api/src/lib/builtin-manifests.ts` 在 Worker 打包时打入，`GET /api/v1/app-manifests` 首次访问时**缺就补一行、已有记录不动**。
 
-## 2. 清单字段
+## 2. 清单字段（v1 与 schema=2）
 
-`appManifestDefinitionSchema`（`packages/contracts`，`.strict()`）要求：
+`appManifestDefinitionSchema`（`packages/contracts`，v1 与 v2 `.strict()` 联合契约）包含：
 
-- `name` / `version`：展示用；改动版本要同步 `sha256`。
-- `runtime`：`{mode: 'root' | 'create', user?, linger?}`。`create` 会在节点上新建 `khc-app-*` 专用账号，脚本以该账号运行。
-- `params[]`：安装表单字段（`string` / `integer` / `boolean`），`default` 有值即非必填；执行器把它注入成 `KHC_PARAM_<KEY>`。
-- `scripts` / `sha256`：安装与卸载脚本正文及其摘要；写库前逐字校验，填错当场 400。
-- `writes[]`：脚本会写的目录，只作说明与审计。
-- `publish`（可选）：声明「装完之后哪个本机端口要发出去」，见 §4。
+- `schema`：可选 `1`（默认，前端经 `toManifestV2` 归一口径）或 `2`。
+- `name` / `version`：展示与升级比对；改动版本需同步 `sha256`。
+- `runtime`：`{mode: 'root' | 'create', user?, linger?}`。`create` 在节点新建 `khc-app-*` 专用账号运行。
+- `params[]`：声明式表单字段（`string` / `integer` / `boolean` / `enum`）。支持 `secret: true`（遮罩与显隐）、`enum` 选项 `requires` 资源提示，以及 `derive`（如 `endpoint:<id>.publicUrl`，表单隐藏并由发布地址自动推导，提交时注入 `values`）。
+- `secrets[]` / `hooks` / `sources[]`（v2）：分别声明控制面加密凭据（`app.<id>.<name>` + `allowHosts`）、控制面前置 HTTPS 步骤（`preInstall` / `preUpgrade` / `preUninstall`）与外部下载来源（`pinned` 标识是否固定校验，无固定校验会触发「动态脚本」徽标与保存提醒 `warnings[]`）。
+- `endpoints[]`（v2，替代 v1 `publish`）：多端点声明，每个端点定义 `protocol`（`http`/`tcp`）、`port` / `portParam`、`bind`（`loopback`/`any`）与 `publish`（`caddy`/`direct`/`none`）。
+- `units[]` / `health` / `requires` / `scripts.upgrade`（v2）：声明式 systemd 单元管理、本机健康检查、节点预检门槛与升级脚本。
 
-## 3. 安装只在发布流程里（节点作用域）
+「设置 → 应用管理」（`?tab=manifests`，支持 `?manifest=<id>` 直达编辑抽屉）列表展示 `v2` 与 `动态脚本` 徽标；保存返回 `warnings[]` 时在抽屉顶部给出提醒；编辑抽屉下方分三区展示 **凭据**（只写不读，支持设置/替换/删除，预填来自 `hooks` 的 `allowHosts` 建议）、**控制面步骤**（只读 `stage · method · host`）与 **外部来源**（`固定`/`动态`）。
 
-设置 →「应用管理」（`?tab=manifests`，旧 `?tab=catalog` 兼容回落至此）维护控制面应用清单：可查看并编辑适配应用的安装/卸载脚本、参数默认值与 `publish` 声明，但**不在此直接安装**——全局设置没有「装到哪台机器」的上下文，安装必须落在一台具体的 VM 上。
+## 3. 安装与能力协商（节点作用域）
 
-安装主入口在**节点 → 应用 → 安装并发布应用**三步向导（选应用 → 配置与发布 → 安装并发布）：列出「应用管理」已启用的适配应用并标注安装状态（从 Agent `recipe_installed` 合并读取）；`mode="create"` 新建受限 `nologin` 应用账号不再要求填写密码；发布域名下拉排除已关闭 TLS 的站点，对外端口默认 `2083`（自动避开 `443` 与节点 Agent 监听端口），并强校验拦截 `publishPort` / 应用内部端口与 Agent 端口碰撞；TLS 支持「Caddy 自动签发」「全局证书库」「关闭 TLS」三选；填写 `public_url` 无需手填，由面板根据协议/域名/端口自动推导；第 2/3 步对启用 `host-ops` 且非 Tunnel 的节点内联核对宿主防火墙放行状态（`fw.show`），未放行时可原地 [一键放行 TCP `<port>`]（`fw.apply` + `fw.confirm`）。安装结束后读取清单声明端口，自动写入 Caddy 站点配置并执行 `apply`，完成页直接渲染可点击的带密钥访问链接。手工「添加站点」抽屉仅保留本机端口 / Peer / 自定义上游与前往向导的引导链接。
+安装主入口在**节点 → 应用 → 安装并发布应用**三步向导（选择应用 → 配置与发布 → 安装并发布）：
 
-技术上是 `POST /nodes/:id/apps/app-catalog/recipe_install`（带 `manifestId`，Worker 从 D1 取出正文附在请求里），返回 `taskId`；向导轮询安装任务至 `done` 并展示实时日志，再写入 Caddy 站点——应用没起来之前建站点只会得到 502。安装结束的 `KHC_RESULT` 可以有 `access`（登录链接、Key、端口等），面板只展示、不落库。
+1. **选择应用与能力协商**：读取「应用管理」中已启用的清单及 `/overview` 回填的 `/state`（已装按 `manifestId`/`instance` 字段定位）。依据节点 `agent.capabilities.appManifest` 检查 schema 与必需特性（如 `schema2`、`units`、`health.http`、`params.enum`、`hookEnv`、`preflight`、`upgrade`），不满足时禁用按钮并提示「去升级」。
+2. **声明式参数与发布配置**：按参数定义渲染输入；跳过 `derive` 字段并在提交前由选定发布端点推导赋值；`mode="create"` 新建账号不填密码。发布域名默认预填节点域名（排除关闭 TLS 的站点），对外端口自动避开 Agent 端口与同域名已占端口；对开启 `host-ops` 且非 Tunnel 的节点内联核对 `fw.show`，`bind=any` 端口未放行时给出一键放行提示。
+3. **执行与完成**：v2 应用走 `POST /nodes/:id/apps/app-catalog/manifest_install`（v1 走 `recipe_install`），控制面先按需执行 `hooks.preInstall` 再下发 Agent 任务；向导轮询任务进度与日志，结束后逐一发布已勾选 Caddy 的端点并 `apply`，完成页通过 `ResultCardsView` 渲染 `KHC_RESULT.cards`（主链接按钮 + 复制/下载，v1 兼容转卡片）；错误由 `ManifestErrorAlert` 映射结构化错误码与修复入口（如跳转 `?manifest=<id>` 补凭据）。
 
-装载方式目前只有一种：二进制（下载 + 固定 sha256 校验 + systemd user unit）。清单的 `runtime` 决定用新建应用账号还是 root，`scripts` 决定装什么；将来适配 Docker 等方式时，在这一层加声明并在执行器侧渲染成对应的 unit/容器，面板流程不变。
+## 4. 多端点发布（`endpoints[]`）
 
-### 3.1 脚本里的下载必须自带超时
+- `publish: 'caddy'`：向导默认勾选首个 Caddy 端点，其余可自由勾选或改配对外端口；每个已勾端点独立写入一条 `caddy-site`（名称为 `<manifestId>` 或 `<manifestId>-<endpointId>`），任一步失败自动回滚站点配置并保留重发入口。
+- `publish: 'direct'` / `'none'`：不创建 Caddy 站点；`bind: 'any'` 的直连/未反代端口在向导第 2 步内联展示宿主防火墙放行状态并支持原地放行 TCP。
+- Agent 监听端口与对外发布端口/应用内部端口撞端口时表单即拦截并给出推荐端口。
 
-magpie 的二进制是 **91MB** 的 GitHub release。清单脚本里的 `curl` 若只写 `-fsSL`，在国内机器上会一直挂着不报错，只能等任务 900 秒上限——现象就是**面板进度停在 1%，日志一行不出**。所以脚本里统一这么写：
+## 5. 生命周期、日志、升级与卸载
 
-```bash
-curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
-     --speed-limit 8192 --speed-time 60 -o "$TMP" "$URL"
-```
+「节点 → 应用 → 已安装的托管应用」卡片统一从 `/overview` 回填的 `/state` 读取 `app-catalog` 状态（不再请求 `recipe_installed`），支持 `stale` / `pending` / `error` 横幅与「未读取」状态提示。点击条目打开 `InstalledAppDrawer`：
 
-- `--connect-timeout` 管连不上；`--max-time` 管总时长；
-- `--speed-limit/--speed-time` 管「连着但几乎不动」（连续 60 秒低于 8KB/s 主动放弃）；
-- 失败时要打印**已下载多少字节**并给出排查命令，不能只 `exit 1`。
-
-写新清单时照抄这一段。拉不动 GitHub 的机器，可先给节点配代理，或手工把二进制放到清单声明的位置（sha256 必须与清单一致，否则执行器拒绝）。
-
-### 3.2 执行器：慢脚本要边跑边出日志
-
-清单脚本走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行回写任务日志，跑的过程中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。此前的 `subprocess.run(capture_output=True)` 会整段缓冲，脚本不退出就一行日志都没有，卡住时完全看不出卡在哪。超时与取消也必须能真的杀掉进程——实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**（实测那样 0.8 秒超时对 `sleep 5` 不生效）。
-
-## 4. 一键发布（清单里的 `publish`）
-
-`publish` 只声明一件事：哪个本机端口对外发。域名来自节点，发布端口由用户选。
-
-```json
-"publish": { "label": "Web 管理页", "host": "127.0.0.1", "portParam": "web_port", "port": 3430 }
-```
-
-- `portParam` 与 `port` 二选一：前者取安装参数的值（推荐，用户能改端口），后者是固定端口。
-- `host` 默认 `127.0.0.1`——node 上的应用只监听回环，不直接暴露。
-
-面板据此推导发布计划（`apps/web/src/apps/settings/appPublish.ts`）：`https://<节点域名>:<发布端口>` → `<host>:<端口>`。站点保存后走 `publishProxySite`（`apps/web/src/data/sites.ts`）：写配置 → apply → 任一步失败把站点配置回滚成发布前；手动建站与「装完再发布」是同一条路径。
-
-**两条端口不能相同。** Agent 占着 `<域名>:<Agent 端口>`（默认 2053），Caddy 要监听发布端口（默认 2083）——一条端口只能一个进程，撞了表单会挡住提交并给换端口的出口，写入站点前还有一层拦截。443 刻意留空，理由与端口白名单见 `docs/cf-dns.md`。
-
-清单声明了 `public_url` 参数时，面板在提交安装时自动由发布协议、域名与对外端口推导 `public_url`（不再要求表单手工填写），使 magpie 回传的登录链接可直接作为完成页一键打开按钮使用（例如 `https://<域名>:<发布端口>/?k=…`）。
-
-## 5. 卸载（必须清干净）
-
-「节点 → 应用 → 已安装的托管应用」只做查看与卸载。卸载跑清单自带的 `scripts.uninstall`，要求等于把 install 写下的东西**全部**清掉：停并删除 systemd user unit（含 `default.target.wants` 链接）、二进制、登录 key、数据/状态/缓存目录与 `KHC_APP_HOME` 残留；清完逐项复查，仍有残留就在 `KHC_RESULT` 里点名并 `exit 1`，不谎称「已卸载」。面板创建的系统账号由执行器管理，卸载不删。
-
-契约由 `scripts/manifest-uninstall-test.sh` 守住（已接入 `verify.sh`，离线可重复）：造出 install 会写的全部路径 → 跑清单下发的 uninstall → 断言逐项清理 → 连跑两次验幂等 → 确认没误删同目录其它应用。新增或改动任何清单的卸载脚本，都要让这个测试通过。
+- **unit 管理与日志（v2）**：展示各 unit 运行状态，支持启动 / 停止 / 重启（动作后强制刷新 `/overview`）以及**按需展开日志**（点击才请求 `control` logs，支持 `unit` 切换与 `lines` 选择并区分 `stderr`）。
+- **升级（v2）**：当清单版本号大于节点已装版本且满足能力要求时展示升级按钮，抽屉内行内二次确认（不叠 Dialog），走 `manifest_upgrade` 任务并支持前置 `preUpgrade` 步骤。
+- **卸载**：v1 走 `recipe_uninstall`，v2 走 `manifest_uninstall`。若卸载前置步骤返回 `hook_failed` / `hook_extract_failed`，抽屉提供行内确认「跳过控制面步骤并强制卸载」（`skipHooks: true`），确保清理本机残留；卸载脚本仍须把 unit、二进制、状态/缓存清理干净（由 `scripts/manifest-uninstall-test.sh` 离线守门）。
 
 ## 6. 现状与排障
 
-- 内置应用：`magpie`（AI 模型网关 + Web 管理页，默认网关 `127.0.0.1:3425`、Web `127.0.0.1:3430`）。
-- 发布成功只代表**站点已应用**，不代表证书已签发：证书由 Caddy 首次访问时申请，报证书错误等几秒再刷新。控制面的 TLS 探测打的是节点接入地址（Agent），与发布出去的应用是两回事，不能互相冒充。
-- 节点没有域名时不能发布（应用只监听回环，装也没处发）：先去节点设置「接入」填域名，再走发布流程。
-- 发布失败不吞错并回滚站点配置，向导内明确提示已安装应用与站点错误，可直接重试发布或去清理；安装失败在「安装并发布应用」向导内给原文，可改了参数重试。
+- 仓内内置应用清单与前端实现严格解耦：面板不硬编码任何具体应用名或字段逻辑，全部由清单契约与 Agent 上报能力驱动。
+- 发布成功只代表**站点已应用**，不代表证书已签发：Caddy 自动 TLS 证书在首次访问时申请；节点没有域名时无法发布 Caddy 站点，需先到节点设置「接入」配置域名。

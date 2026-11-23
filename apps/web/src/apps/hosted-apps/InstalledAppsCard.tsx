@@ -1,177 +1,223 @@
 /**
- * 节点 → 应用 → 「已安装的托管应用」（只读 + 卸载）。
+ * 节点 → 应用 → 「已安装的托管应用」（V4）。
  *
- * 安装只发生在「发布应用」流程里；这里负责看得见、删得掉。
- * 卸载走清单自带的 uninstall 脚本（等于把 install 写下的 unit / 二进制 / 配置 / 数据全清掉），
- * 不是简单停服务，所以失败信息原样给出，不做「已卸载」的乐观提示。
+ * 数据源：读 `/overview` 回填的 `state.adapters[app-catalog]` 聚合状态。
+ * 条目定位：按 `manifestId` 与 `instance` 字段，不解析键字符串。
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
+import type { AgentState } from '@khc/contracts';
 import { appManifestsQueryOptions } from '../../data/appManifests';
-import { refreshHubRuntime } from '../../data/queries';
-import { action } from '../../registry/actions';
-import { ConfirmAction } from '../../patterns';
-import { Button, Card, InlineError, Row, Skeleton, Stack, useToast } from '../../ui';
-import { zh, fmt } from '../../i18n/zh';
 import {
-  hostedAppsInstalledQueryKey,
-  installedTime,
-  parseInstalledRecipes,
-  toCatalogRecipe,
-  type CatalogRecipe,
-} from './recipes';
+  appStatus,
+  canUpgrade,
+  installedCatalogState,
+  toAppView,
+  type InstalledApp,
+} from '../../data/manifestApps';
+import { hubStateQueryOptions, refreshHubRuntime } from '../../data/queries';
+import { zh } from '../../i18n/zh';
+import { Badge, Banner, Button, Card, InlineError, Row, Stack, Table, type ColumnDef } from '../../ui';
+import { InstalledAppDrawer } from './InstalledAppDrawer';
+
+function entryIdentity(entry: Pick<InstalledApp, 'manifestId' | 'instance'>): string {
+  return `${entry.manifestId}::${entry.instance}`;
+}
 
 export function InstalledAppsCard({
   hubId,
+  hubName,
+  state: stateProp,
+  stateLoading: stateLoadingProp,
+  offlineReason,
   pollIntervalMs = 800,
+  selectedKey: controlledKey,
+  onSelectEntry,
+  onCloseDrawer,
 }: {
   hubId: string;
+  hubName?: string;
+  state?: AgentState | null;
+  stateLoading?: boolean;
+  offlineReason?: string;
   /** 测试可注入更短轮询间隔，生产默认 800ms */
   pollIntervalMs?: number;
+  selectedKey?: string | null;
+  onSelectEntry?: (key: string) => void;
+  onCloseDrawer?: () => void;
 }) {
-  const toast = useToast();
   const queryClient = useQueryClient();
   const manifestsQuery = useQuery(appManifestsQueryOptions());
-  const installedQuery = useQuery({
-    queryKey: hostedAppsInstalledQueryKey(hubId),
-    retry: false,
-    queryFn: async () => {
-      const envelope = await runAppAction(hubId, 'app-catalog', 'recipe_installed');
-      if (!envelope.ok) {
-        throw new Error(
-          friendlyAgentError(envelope.error?.message) ?? zh.catalog.installedLoadFailed,
-        );
-      }
-      return parseInstalledRecipes(envelope);
-    },
+  const fallbackStateQuery = useQuery({
+    ...hubStateQueryOptions(hubId),
+    enabled: stateProp === undefined && !stateLoadingProp,
   });
-  const [target, setTarget] = useState<CatalogRecipe | null>(null);
-  const [uninstallingId, setUninstallingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  const recipes = (manifestsQuery.data ?? []).filter((item) => item.enabled).map(toCatalogRecipe);
-  const installed = Object.entries(installedQuery.data ?? {});
+  const effectiveState = stateProp !== undefined ? stateProp : fallbackStateQuery.data?.state;
+  const effectiveLoading =
+    stateLoadingProp !== undefined ? stateLoadingProp : fallbackStateQuery.isLoading;
 
-  // 没有已安装托管应用时隐藏占位卡，避免把「应用表」和「本机监听端口」隔开。
+  const appViews = useMemo(
+    () => (manifestsQuery.data ?? []).map(toAppView),
+    [manifestsQuery.data],
+  );
+  const viewMap = useMemo(() => new Map(appViews.map((v) => [v.id, v])), [appViews]);
+
+  const catalogState = useMemo(() => installedCatalogState(effectiveState), [effectiveState]);
+  const [internalSelectedKey, setInternalSelectedKey] = useState<string | null>(null);
+
+  const isControlled = controlledKey !== undefined;
+  const activeKey = isControlled ? controlledKey : internalSelectedKey;
+
+  const selectedEntry = useMemo(
+    () =>
+      activeKey
+        ? (catalogState.entries.find((e) => entryIdentity(e) === activeKey) ?? null)
+        : null,
+    [activeKey, catalogState.entries],
+  );
+
+  const openEntry = (entry: InstalledApp) => {
+    const key = entryIdentity(entry);
+    if (onSelectEntry) {
+      onSelectEntry(key);
+    } else {
+      setInternalSelectedKey(key);
+    }
+  };
+
+  const closeDrawer = () => {
+    if (onCloseDrawer) {
+      onCloseDrawer();
+    } else {
+      setInternalSelectedKey(null);
+    }
+  };
+
   if (
-    !installedQuery.isLoading &&
-    !installedQuery.error &&
-    !error &&
-    uninstallingId === null &&
-    installed.length === 0
+    !effectiveLoading &&
+    !catalogState.stale &&
+    !catalogState.pending &&
+    !catalogState.error &&
+    catalogState.entries.length === 0
   ) {
     return null;
   }
 
-  const uninstall = async () => {
-    if (!target) return;
-    const recipeToRemove = target;
-    setTarget(null);
-    setUninstallingId(recipeToRemove.id);
-    setError(null);
-    try {
-      const envelope = await runAppAction(hubId, 'app-catalog', 'recipe_uninstall', {
-        manifestId: recipeToRemove.id,
-        values: {},
-      });
-      if (!envelope.ok) {
-        throw new Error(friendlyAgentError(envelope.error?.message) ?? zh.catalog.uninstallFailed);
-      }
-      if (envelope.taskId) {
-        let current = await fetchTask(hubId, envelope.taskId);
-        const maxPolls = Math.ceil(60_000 / Math.max(pollIntervalMs, 5));
-        for (
-          let i = 0;
-          i < maxPolls && (current.task.state === 'pending' || current.task.state === 'running');
-          i += 1
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-          current = await fetchTask(hubId, envelope.taskId);
-        }
-        if (current.task.state !== 'done') {
-          throw new Error(
-            friendlyAgentError(current.task.error?.message) ?? zh.catalog.uninstallFailed,
-          );
-        }
-      }
-      toast.show({ message: zh.catalog.uninstallSubmitted });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: hostedAppsInstalledQueryKey(hubId) }),
-        refreshHubRuntime(queryClient, hubId),
-      ]);
-    } catch (cause) {
-      setError(
-        friendlyAgentError(cause instanceof Error ? cause.message : null) ?? zh.catalog.uninstallFailed,
-      );
-    } finally {
-      setUninstallingId(null);
-    }
-  };
+  const columns: ColumnDef<InstalledApp>[] = [
+    {
+      key: 'name',
+      type: 'name',
+      header: '应用',
+      value: (entry) => {
+        const view = viewMap.get(entry.manifestId);
+        const base = !view?.invalid && view?.def.name ? view.def.name : entry.manifestId;
+        return entry.instance !== entry.manifestId ? `${base} (${entry.instance})` : base;
+      },
+      dot: (entry) => appStatus(entry, catalogState).tone,
+    },
+    {
+      key: 'version',
+      type: 'mono',
+      header: '版本',
+      value: (entry) => entry.version,
+      render: (entry) => {
+        const view = viewMap.get(entry.manifestId);
+        const upgradeable = canUpgrade(view, entry, effectiveState);
+        return (
+          <Row gap={1} align="center">
+            <span className="ui-text-mono">{entry.version}</span>
+            {upgradeable && view ? (
+              <Badge tone="info" label={`→ ${view.def.version}`} />
+            ) : null}
+          </Row>
+        );
+      },
+    },
+    {
+      key: 'status',
+      type: 'status',
+      header: '状态',
+      value: (entry) => appStatus(entry, catalogState).label,
+      status: (entry) => appStatus(entry, catalogState),
+    },
+    {
+      key: 'detail',
+      type: 'actions',
+      header: '',
+      render: (entry) => (
+        <Button label="详情" size="sm" variant="ghost" onClick={() => openEntry(entry)} />
+      ),
+    },
+  ];
 
   return (
-    <Card title={zh.hosted.installedTitle}>
-      <Stack gap={3}>
-        <p className="ui-text-caption">{zh.hosted.installedDesc}</p>
-        {error ? <InlineError message={error} /> : null}
-        {installedQuery.error ? (
-          <Stack gap={2}>
-            <InlineError
-              message={
-                friendlyAgentError((installedQuery.error as Error).message) ??
-                zh.catalog.installedLoadFailed
+    <>
+      <Card
+        title={zh.hosted.installedTitle}
+        action={
+          catalogState.stale || catalogState.pending ? (
+            <Button
+              label="刷新"
+              size="sm"
+              onClick={() => void refreshHubRuntime(queryClient, hubId, { force: true })}
+            />
+          ) : undefined
+        }
+      >
+        <Stack gap={3}>
+          <p className="ui-text-caption">{zh.hosted.installedDesc}</p>
+          {catalogState.stale ? (
+            <Banner
+              tone="warn"
+              title="状态可能不是最新"
+              description="节点采集超时，展示最近一次成功缓存。"
+              action={
+                <Button
+                  label="刷新"
+                  size="sm"
+                  onClick={() => void refreshHubRuntime(queryClient, hubId, { force: true })}
+                />
               }
             />
-            <Button label={zh.common.retry} size="sm" onClick={() => void installedQuery.refetch()} />
-          </Stack>
-        ) : installedQuery.isLoading ? (
-          <Stack gap={2}>
-            <Skeleton height={20} />
-            <Skeleton height={20} />
-          </Stack>
-        ) : installed.length === 0 ? (
-          <p className="ui-text-caption">{zh.hosted.installedEmpty}</p>
-        ) : (
-          installed.map(([id, entry]) => {
-            const recipe = recipes.find((item) => item.id === id);
-            return (
-              <Row key={id} justify="between">
-                <Stack gap={1}>
-                  <span>{recipe?.name ?? id}</span>
-                  <span className="ui-text-caption">
-                    {fmt(zh.catalog.installedMeta, {
-                      version: entry.version ?? '—',
-                      time: installedTime(entry.installedAt),
-                    })}
-                  </span>
-                </Stack>
-                <Button
-                  label={zh.catalog.uninstall}
-                  size="sm"
-                  loading={uninstallingId === id}
-                  disabled={!recipe || uninstallingId !== null}
-                  disabledReason={recipe ? undefined : zh.catalog.installedUnknown}
-                  onClick={() => setTarget(recipe ?? null)}
-                />
-              </Row>
-            );
-          })
-        )}
-      </Stack>
+          ) : null}
+          {catalogState.pending ? (
+            <Banner tone="info" title="状态读取中" description="Agent 正在后台采集应用状态，请稍后刷新。" />
+          ) : null}
+          {catalogState.error && !catalogState.pending ? (
+            <InlineError message={catalogState.error} />
+          ) : null}
 
-      {target ? (
-        <ConfirmAction
-          open
-          action={action('app.uninstall')}
-          title={fmt(zh.catalog.uninstallConfirmTitle, { name: target.name })}
-          body={zh.catalog.uninstallConfirmDesc}
-          confirmLabel={zh.actions['app.uninstall']}
-          targetName={target.name}
-          nameLabel={zh.catalog.colName}
-          onCancel={() => setTarget(null)}
-          onConfirm={uninstall}
+          {catalogState.entries.length > 0 || effectiveLoading ? (
+            <Table
+              rows={effectiveLoading ? undefined : catalogState.entries}
+              columns={columns}
+              rowKey={entryIdentity}
+              objectLabel="已装应用"
+              openRowKey={activeKey ?? undefined}
+              onRowOpen={openEntry}
+              empty={{
+                icon: 'box',
+                title: zh.hosted.installedEmpty,
+              }}
+            />
+          ) : null}
+        </Stack>
+      </Card>
+
+      {selectedEntry ? (
+        <InstalledAppDrawer
+          hubId={hubId}
+          hubName={hubName ?? hubId}
+          entry={selectedEntry}
+          view={viewMap.get(selectedEntry.manifestId)}
+          state={effectiveState}
+          catalogState={catalogState}
+          offlineReason={offlineReason}
+          pollIntervalMs={pollIntervalMs}
+          onClose={closeDrawer}
         />
       ) : null}
-    </Card>
+    </>
   );
 }

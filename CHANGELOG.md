@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.41.0] - 2026-11-23
+### Added
+- 托管应用 v2 前端工作流：安装向导支持声明式参数（`enum` 联动、`secret` 遮罩、`derive` 自动推导）、多端点发布与节点能力协商；已装应用支持 unit 启停/重启、按需查看日志、升级与强制卸载；「设置 → 应用管理」新增凭据配置、控制面步骤与外部来源展示。
+
 ## [0.40.0] - 2026-11-23
 ### Added
 - 应用清单 v2 控制面编排：支持安装/升级/卸载前节点预检与版本协商（409 `agent_upgrade_required`）、HTTPS 出站步骤与 `app.*` 加密凭据及 `allowHosts` 校验，以及 `GET /app-manifests/:id/secrets`。

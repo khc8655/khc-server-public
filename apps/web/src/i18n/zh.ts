@@ -1678,7 +1678,7 @@ export const zh = {
     searchPlaceholder: '应用名、域名或端口',
     appName: '应用名称',
     appNamePlaceholder: '例如 llmproxy',
-    appNameHelp: '显示在应用列表中，用于区分同一域名下的不同应用（如 llmproxy / magpie）',
+    appNameHelp: '显示在应用列表中，用于区分同一域名下的不同应用（如 llmproxy / app-web）',
     previewLabel: '对外访问预览',
     previewArrow: '→',
     previewEmptyUrl: '填写域名和端口后生成访问地址',

@@ -7,6 +7,7 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly fields?: Record<string, string>,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -49,11 +50,17 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   if (!res.ok) {
     const parsed = apiErrorSchema.safeParse(data);
     if (parsed.success) {
+      const rawDetails = (data as { error?: { details?: unknown } } | null)?.error?.details;
+      const details =
+        rawDetails && typeof rawDetails === 'object' && !Array.isArray(rawDetails)
+          ? (rawDetails as Record<string, unknown>)
+          : undefined;
       throw new ApiError(
         res.status,
         parsed.data.error.code,
         parsed.data.error.message,
         parsed.data.error.fields,
+        details,
       );
     }
     throw new ApiError(res.status, 'http_error', `HTTP ${res.status}`);
