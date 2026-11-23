@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { appManifestDefinitionV2Schema } from './manifest-v2';
 
 // ---------------------------------------------------------------------------
 // 基础
@@ -516,6 +517,8 @@ export const resultCardSchema = z.object({
   value: z.string(),
   copy: z.boolean().optional(),
   qr: z.boolean().optional(),
+  kind: z.enum(['url', 'secret', 'text', 'command']).optional(),
+  primary: z.boolean().optional(),
 });
 export type ResultCard = z.infer<typeof resultCardSchema>;
 
@@ -748,6 +751,19 @@ export const agentSelfSchema = z
         notAfter: z.number().int().nonnegative().optional(),
         names: z.array(z.string()).optional(),
         error: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    /** Agent 能力协商上报（v2 应用分发等，向后兼容） */
+    capabilities: z
+      .object({
+        appManifest: z
+          .object({
+            schemas: z.array(z.number().int().positive()),
+            features: z.array(z.string()),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .optional(),
@@ -1810,3 +1826,15 @@ export const manifestActionParamsSchema = z
   })
   .passthrough();
 export type ManifestActionParams = z.infer<typeof manifestActionParamsSchema>;
+
+// ---------------------------------------------------------------------------
+// V2 清单契约联合与导出（V2 批次才接入路由，本批仅导出契约）
+// ---------------------------------------------------------------------------
+
+export const appManifestAnyDefinitionSchema = z.union([
+  appManifestDefinitionSchema,
+  appManifestDefinitionV2Schema,
+]);
+export type AppManifestAnyDefinition = z.infer<typeof appManifestAnyDefinitionSchema>;
+
+export * from './manifest-v2';
