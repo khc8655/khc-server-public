@@ -1,6 +1,6 @@
 # V6 开工说明：khcsearch 应用包——只交数据的免发版验收
 
-> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §9、§11 V6、§12 第 7 项；khcsearch 接入文档（主人提供的 `node-provisioning-api.md`，文档版本 20261121-01）
+> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/app-distribution-v2-2026-11-23.md` §9、§11 V6、§12 第 7 项；khcsearch 接入文档（主人提供的 `node-provisioning-api.md`，文档版本 20261121-01）
 
 > **给开发 agent**：开工前提：**V5a、V5b 已合入**，测试节点已是 Agent 0.8.1。本批是「加一个应用不发版」的验收：**只允许新增 `apps/manifests/khcsearch/` 与验证证据**，任何 `apps/`（除 manifests）、`packages/`、`agent/`、`scripts/`、`migrations/` 的改动都说明平台还有缺口——此时停下，在 PR 里写明缺什么，由设计任务补到平台批次，不要在本批绕过。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 

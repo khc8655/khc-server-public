@@ -97,7 +97,45 @@ curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
 
 **约定**：`root` 模式应用的脚本，所有系统路径都要加 `${KHC_ROOT%/}` 前缀（生产环境为 `/`），这样卸载测试不需要 root。
 
-## 6. 现状与排障
+## 6. 添加一个新应用（5 步，不改面板代码、不发版）
+
+以 `apps/manifests/magpie/` 为模板复制一份。**只做自包含应用**：脚本自己下载、自己写 unit、自己起服务。不使用 `hooks`（控制面步骤）、`secrets`（应用凭据）和非固定来源；确实需要对接外部服务时，先单独讨论，不要往清单里加。
+
+1. **建目录**：`apps/manifests/<id>/`（`id` 为小写字母、数字、`-`），放四个文件：`install.sh`、`uninstall.sh`、`manifest.json`、`uninstall-fixture.json`。
+2. **写脚本**：
+   - 参数从环境变量 `KHC_PARAM_<KEY 大写>` 读取，另有 `KHC_APP_HOME`（可写根目录）、`KHC_INSTANCE`（实例名，默认等于 `id`）。
+   - 下载照抄 §3.1 的 curl 写法，固定版本并校验 sha256。
+   - 用 user unit 时，unit 名写成 `khc-<id>-${KHC_INSTANCE}.service`；启动一律 `enable` + `restart`（升级会重跑 install 脚本）。
+   - 结束时打印一行 `KHC_RESULT={"cards":[...]}`，每张卡片 `{title, value, kind: url|secret|text|command, primary?, copy?}`。
+   - `uninstall.sh` 清掉 install 写下的全部东西（见 §5「卸载必须清干净」）。
+3. **写 `manifest.json`**：仓库格式 `{"id": "<id>", "enabled": true, "manifest": {...}}`。`manifest` 只需要这些字段：
+
+   | 字段 | 说明 |
+   |---|---|
+   | `schema` / `name` / `version` | `2` / 显示名 / 每次改脚本都要改版本号 |
+   | `runtime` | `{"mode": "create", "user": "khc-app-<id>", "linger": true}`（需要 root 才用 `{"mode": "root"}`） |
+   | `params` | 安装表单字段；**每个参数都给 `default`**，端口用 `integer` + `min` / `max` |
+   | `units` | `[{"name": "khc-<id>-{{instance}}.service", "scope": "user"}]`，面板据此提供启停与日志 |
+   | `health` | `{"type": "tcp", "portParam": "<端口参数>", "graceSec": 60}` 或 `http` |
+   | `endpoints` | 要发布的端口：`{"id", "label", "protocol": "http", "portParam", "bind": "loopback", "publish": "caddy"}` |
+   | `writes` / `sources` / `requires` | 可写目录 / 下载用到的主机（`pinned: true`）/ 架构、磁盘、命令要求，可选 |
+
+   `scripts` 与 `sha256` 不要手写，下一步自动回填。
+4. **本地校验**：
+
+   ```bash
+   node scripts/verify-app-manifests.mjs --sync   # 回填 scripts 与 sha256
+   ./scripts/manifest-uninstall-test.sh <id>      # 按 uninstall-fixture.json 验证卸载干净
+   ./scripts/verify.sh                            # 全量校验
+   ```
+
+5. **上线**（任选其一，都不发版）：
+   - 面板「设置 → 应用管理 → 导入应用 → 从 URL」，填该文件在仓库 `main` 上的 raw 地址，核对差异后确认；
+   - 或 `KHC_PASSWORD=… node scripts/publish-app-manifest.mjs --base https://a.18888.bond <id>`（先看差异，确认后加 `--yes`）。
+
+   然后在「节点 → 应用 → 发布应用」里安装。改脚本时重复第 4、5 步并提高 `version`，已装节点在抽屉里点「升级」。
+
+## 7. 现状与排障
 
 - 仓内内置应用清单与前端实现严格解耦：面板不硬编码任何具体应用名或字段逻辑，全部由清单契约与 Agent 上报能力驱动。
 - 发布成功只代表**站点已应用**，不代表证书已签发：Caddy 自动 TLS 证书在首次访问时申请；节点没有域名时无法发布 Caddy 站点，需先到节点设置「接入」配置域名。

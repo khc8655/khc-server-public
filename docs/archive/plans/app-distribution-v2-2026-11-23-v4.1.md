@@ -1,6 +1,6 @@
 # V4.1 开工说明：升级沿用安装参数（前端 + Worker）与 V4 真机发现修复
 
-> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §15；`docs/plans/app-distribution-v2-2026-11-23-v4.md`；`docs/verification/2026-11-23/manifest-v2-web.md` §五
+> 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/archive/plans/app-distribution-v2-2026-11-23.md` §15；`docs/archive/plans/app-distribution-v2-2026-11-23-v4.md`；`docs/verification/2026-11-23/manifest-v2-web.md` §五
 
 > **给开发 agent**：开工前提：V4 已合入（#158），V4 真机证据已合入（#160）。先读 `AGENTS.md`、提案 §15、V4 开工说明与本文全文。本批改**前端 + Worker + 文档**，**不改契约（`packages/contracts`）与 Agent**；Agent 侧的「安装记录保存参数值」在 V5b（V5 §8.2）做。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 
