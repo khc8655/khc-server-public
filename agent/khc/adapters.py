@@ -406,6 +406,7 @@ class Ctx:
         cwd: Optional[str] = None,
         max_lines: int = 400,
         tail_chars: int = 8000,
+        redact: Optional[Callable[[str], str]] = None,
     ) -> RunResult:
         """边跑边把输出写进任务日志（长任务专用）。
 
@@ -415,6 +416,9 @@ class Ctx:
 
         输出仍然完整收集（受 tail_chars 限制），返回的 RunResult 与 run() 同形，
         调用方按原有方式判断 rc / stdout。
+
+        ``redact`` 在每一行写入任务日志之前调用（用于遮罩 secret 参数值）；返回的 RunResult
+        不经它处理，调用方自行对 stdout / stderr 遮罩。
         """
         self.check_cancel()
         argv = [str(part) for part in cmd]
@@ -444,7 +448,7 @@ class Ctx:
             timeout=timeout,
             env=merged_env,
             cwd=cwd,
-            on_line=self.log,
+            on_line=(lambda line: self.log(redact(line))) if redact is not None else self.log,
             max_lines=max_lines,
             tail_chars=tail_chars,
             cancel_event=self._cancel_event,

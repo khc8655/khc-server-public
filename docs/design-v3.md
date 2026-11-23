@@ -285,9 +285,9 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 
 用一个全新应用（建议 node_exporter）做演练：**只新增两个文件**，就能完成 安装 → 配置 → 预览 diff → 应用 → 回滚 → 卸载 全流程，`git diff --stat` 里不出现 `apps/api/`、`migrations/`、`packages/contracts/`、`agent/khc/`。做不到就说明核心还没设计完，继续改核心，直到做到为止。
 
-### 3.5 受控装包与 recipe 目录（P1）
+### 3.5 受控装包与应用清单执行器（P1）
 
-两个**知识层**能力。第 2 项的面板下发通道自 0.13.0 起由 Worker 的通用注入点与 D1 表 `app_manifests` 承载（见 `docs/plans/app-manifests-2026-11-15.md`），内置 recipe 旧通道保留只读：
+两个**知识层**能力。第 2 项的面板下发通道自 0.13.0 起由 Worker 的通用注入点与 D1 表 `app_manifests` 承载（见 `docs/hosted-apps.md`）：
 
 1. **受控系统包安装**（`agent/khc/pkg.py`，仅 system profile / root）
    - 白名单固定：`caddy`、`wireguard-tools`、`socat`；其他包名一律拒绝。
@@ -296,15 +296,12 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
    - 失败回滚：安装前记录二进制是否存在；安装失败或装后二进制不可用 → 尝试卸载并报 `pkg_install_failed`。
    - 适配器通过 `capabilities: {"pkgInstall": true}` 声明能力；面板只在看到该能力时展示「一键安装」，旧 Agent 不露按钮。
 
-2. **recipe 引擎**（`agent/khc/recipes.py` + `agent/adapters/app_catalog.py`）
-   - 内置 recipe 清单 `agent/recipes/catalog.json` 随 Agent 包发布，旧通道只读保留；面板「应用管理」里的脚本定义存 D1，安装时由 Worker 按 `manifestId` 读出正文随请求下发，浏览器不能直传正文。
-   - 下发的脚本由 `agent/khc/app_manifests.py` 校验 sha256、`writes` 只允许 `~/` 家目录相对路径；参数仍走 `KHC_PARAM_*` 环境变量。
-   - 运行身份在安装时二选一（参数 `runtimeMode`，定义里的 `runtime.mode` 只是默认选项）：`root` 经 `systemd-run` 一次性单元在 Agent 沙箱外以 root 执行，参数经 0600 环境文件传入；`create` 新建或沿用面板建过的应用用户（家目录在 `/var/lib/khc-apps/home/`、nologin、非管理员组），以 `runuser -u` 执行。安装身份记在 Agent 数据目录，卸载沿用。
-   - 参数经 `KHC_PARAM_<KEY>` 环境变量传入；未知参数/类型/范围在 Agent 侧校验。
-   - 脚本最后输出 `KHC_RESULT={"access":[...],"cards":[...]}`；结果写入 `<data>/recipes/results/<id>.<action>.json`，权限 0600，密码类参数不进任务日志。
-   - 清单 `writes` 必须在白名单根（`/etc/khc-recipes`、`/opt/khc-recipes`、`/var/lib/khc-recipes`、`/etc/systemd/system/khc-*`）下，且目标/父级不能是符号链接。
-   - 安装/卸载是后台任务：`POST /apps/app-catalog/recipe_install|recipe_uninstall`，参数 `{recipeId, values}`；已安装清单落 `<data>/recipes/installed.json`（0600）。
-   - `POST /apps/app-catalog/recipe_install` 返回 `{taskId}`；任务结果里的 `cards`/`access` 不写 D1、不进审计。
+2. **应用清单执行器**（`agent/khc/app_manifests.py` + `agent/adapters/app_catalog.py`）
+   - 应用定义存 D1，安装时由 Worker 按 `manifestId` 读出正文随请求下发，浏览器不能直传正文；随包不携带任何应用脚本。
+   - 脚本校验 sha256、`writes` 只允许 `~/` 家目录相对路径；参数走 `KHC_PARAM_*` 环境变量。
+   - 运行身份在安装时二选一（参数 `runtimeMode`，定义里的 `runtime.mode` 只是默认选项）：`root` 经 `systemd-run` 一次性单元在 Agent 沙箱外以 root 执行；`create` 新建或沿用面板建过的应用用户（家目录在 `/var/lib/khc-apps/home/`、nologin、非管理员组），以 `runuser -u` 执行。安装身份与参数值记在 Agent 数据目录（0600），升级与卸载沿用（见 `docs/security-boundaries.md` §8）。
+   - 脚本最后输出 `KHC_RESULT={"cards":[...]}`；密码类参数不进任务日志。
+   - 动作：`manifest_install` / `manifest_upgrade` / `manifest_uninstall`（后台任务，返回 `{taskId}`）；`recipe_install` / `recipe_uninstall` 是别名（不带 `manifest` 返回 400 `manifest_required`）。任务结果里的 `cards` 不写 D1、不进审计。
 
 ---
 
@@ -315,7 +312,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 | `wireguard` | 接口 + peers；自定义动作 `rotate_peer`、`confirm_rotation`、`cancel_rotation`、`client_config`（见 §5） |
 | `caddy-site` | 反代/静态站点，产出 Caddy 片段 |
 | `port-forward` | socat/nftables 转发单元 |
-| `app-catalog` | 应用目录：recipe 安装/卸载与清单 v2 动作（`manifest_preflight` / `manifest_install` / `manifest_upgrade` / `manifest_uninstall` / `manifest_control` / `manifest_logs` / `manifest_installed`） |
+| `app-catalog` | 应用目录：应用清单动作（`manifest_preflight` / `manifest_install` / `manifest_upgrade` / `manifest_uninstall` / `manifest_control` / `manifest_logs` / `manifest_installed`） |
 | 其他常用软件 | 待定 |
 
 ---

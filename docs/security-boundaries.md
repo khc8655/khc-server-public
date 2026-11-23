@@ -111,34 +111,22 @@ Agent 可写路径 = unit 的 `ReadWritePaths` 全集（system 模式默认值�
 
 实现：`apps/api/src/lib/secret-refs.ts`（引用解析与命名空间校验）、`apps/api/src/lib/secure-channel.ts`（安全通道检查）。测试覆盖：命名空间隔离 7 项、安全通道 16 项。
 
-## 8. Recipe 参数注入防护（安全批次 B，2026-11-06）
+## 8. 清单执行器：参数注入防护与安装记录
 
-Recipe 参数（`agent/recipes/catalog.json`）在传递到 shell 脚本前必须经过严格校验，防止注入攻击：
+控制面下发的应用清单由 `agent/khc/app_manifests.py` 执行（随包不再携带任何应用脚本）。
 
-### 8.1 字符白名单（pattern 约束）
+### 8.1 参数校验
 
-所有可能进入 systemd unit / shell 变量的字符串参数**必须带 `pattern` 正则约束**：
+- 参数只经 `KHC_PARAM_<KEY>` 环境变量传入，不拼接命令行；root 模式经 0600 环境文件，用后即删。
+- Agent 侧是权威校验：未声明的参数、类型、整数范围、枚举选项、`maxLength`、`pattern`（整值匹配）、控制字符。失败统一返回 `param_invalid`，`details.field` 指出参数名（未声明的参数给第一个键）。
+- 脚本正文与 sha256 逐字节核对后才落盘；`writes` 只允许 `~/` 相对路径；`create` 模式只接受面板自己建的应用账号。
 
-| Recipe | 参数 | pattern | 用途 |
-|---|---|---|---|
-| demo-echo | greeting | `^[\x20-\x7E]*$` | 禁止控制字符与换行（防止 unit 注入） |
-| sing-box | protocol | `^(vless\|trojan\|vmess)$` | 枚举限制 |
-| sing-box | password | `^[A-Za-z0-9-]*$` | UUID/密码字符集 |
-| generic-service | mode | `^(docker\|binary)$` | 枚举限制 |
-| generic-service | image | `^[a-z0-9._/-]*$` | Docker 镜像名 |
-| generic-service | downloadUrl | `^https://[A-Za-z0-9._/-]*$` | 强制 HTTPS，禁止特殊字符 |
-| generic-service | sha256 | `^[a-f0-9]{0,64}$` | 哈希值格式 |
+### 8.2 安装记录里的参数值
 
-### 8.2 校验机制
-
-- `khc/recipes.py:validate_params()` 对每个参数按 `pattern` 校验，不匹配时抛 `RecipeError`。
-- 校验在 Agent 侧执行（权威），Worker/前端同步执行相同校验（提前反馈）。
-- 测试覆盖：换行注入拒绝、控制字符拒绝、http URL 拒绝、特殊字符拒绝（`test_recipes.py` 新增 2 项）。
-
-### 8.3 已知限制
-
-- `pattern` 只能按**整个值**匹配，无法按字段内部结构（如 JSON/YAML）校验——需要这类参数的 recipe 必须在脚本内再次校验或使用更安全的传递机制（如临时文件）。
-- 现有 recipe 参数若含特殊字符将被拒绝（向后不兼容），但旧系统无生产实例，影响可控。
+- 记录在 Agent 数据目录（`<data>/app-manifests/<id>--<instance>.json`，目录 0700、文件 0600、属主 root），应用用户不可写。
+- 记录含 `values`（本次生效的参数值，**包括 secret 与 derive 参数**），供升级与卸载沿用。secret 值本来就由安装脚本写进应用自己的配置，记录不新增暴露面。
+- `values` 不外泄：`read_installed_manifests` 是字段白名单、不拷贝它；`status()`、`/state`、`manifest_installed`、任务日志、错误详情与 `KHC_RESULT` 都不含参数值。日志与错误详情按**合并后**的值遮罩 secret（包括只存在于记录里的）。结果卡片是给用户看的输出，不遮罩（`kind: secret` 由面板掩码显示）。
+- 卸载即删记录；旧记录（0.8.0 写的）没有 `values`，缺参数时按 `param_invalid` 拒绝，不用空串顶替（卸载脚本常用参数拼路径）。
 
 ## 9. 自查命令集（对应实测 F1–F4）
 
@@ -209,4 +197,4 @@ curl -s http://<ip>:<port>/health          # 唯一无鉴权端点，只回 ok+v
 - **凭据存储与权限隔离**：`PUT /api/v1/settings/app.<manifestId>.<name>` 强制按 `{ value, allowHosts }` 校验并经 `MASTER_ENC_KEY` AES-GCM 加密落库，审计仅记键名；新增 `GET /api/v1/app-manifests/:id/secrets` 只返回 `{ configured, allowHosts, updatedAt }`，绝不回显 `value`。
 - **主机白名单（`allowHosts`）**：控制面执行 `hooks` 前提取全部引用的 `{{secret.*}}`，仅当 hook 目标主机（小写、去尾点）精确命中该凭据的 `allowHosts` 时才渲染并发送；越界时返回 403 `secret_host_not_allowed` 且不发出请求。
 - **出站约束与零回显**：hook 仅允许 `https://`，`redirect: 'manual'` 拒绝 3xx，10s 超时、响应体流式上限 64KB 且不重试；无论成功失败均写 `app.hook` 审计（含 `status`/`durationMs`/`outcome`），`expectStatus` 失败只提取第三方响应体中的 `error` 字符串前 200 字符，不回显 URL 查询串、请求头/体或原始响应体；审计与日志均不含任何凭据或提取值；同一 Worker 实例内 10 分钟去重；跨实例重试仍可能重复执行。
-- **明文控制通道限制**：`hooks` 提取的 `hookOutputs` 非空时沿用 `assertSecureChannelForRawSecrets` 口径——生产环境下节点任一候选入口为 `http://` 即拒绝下发（400 `insecure_channel_secret`）。
+- **明文控制通道限制**：hook 声明 `extract` 时，在执行之前即拒绝明文通道——生产环境下节点任一候选入口为 `http://` 即返回 400 `insecure_channel_secret`，不会先调用第三方再因提取值无法安全下发而失败。

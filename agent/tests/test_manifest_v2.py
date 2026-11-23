@@ -52,6 +52,18 @@ UNINSTALL_OK = "#!/usr/bin/env bash\necho removed\n"
 APP_USER = "khc-app-v2"
 
 
+_bus_patch = mock.patch.object(mod, "_user_bus_exists", return_value=True)
+
+
+def setUpModule():
+    # 单测机没有 /run/user/<uid>/bus：默认视为总线已就绪，免得每个用例等 15s。
+    _bus_patch.start()
+
+
+def tearDownModule():
+    _bus_patch.stop()
+
+
 class RecordingRunner:
     def __init__(self, stdout: str = "", rc: int = 0, stderr: str = "") -> None:
         self.stdout = stdout
@@ -656,7 +668,7 @@ class UnitsControlLogsAndStatusTests(unittest.TestCase):
             ctrl = control_manifest_units(self.ctx, manifest_id="demo", unit="khc-u-demo.service", op="restart")
             self.assertEqual(
                 self.runner.calls[0],
-                ["runuser", "-u", APP_USER, "--", "env", "XDG_RUNTIME_DIR=/run/user/1042", "systemctl", "--user", "restart", "khc-u-demo.service"],
+                ["runuser", "-u", APP_USER, "--", "env", "XDG_RUNTIME_DIR=/run/user/1042", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1042/bus", "systemctl", "--user", "restart", "khc-u-demo.service"],
             )
             self.assertTrue(ctrl["lingerDisabled"])
 

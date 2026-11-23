@@ -21,7 +21,7 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/khc-pkg.XXXXXX")"
 trap 'rm -rf -- "$STAGE"' EXIT
 
 mkdir -p "$STAGE/$NAME"
-for item in khc adapters recipes khc_agent.py install.sh uninstall.sh khc-agent.service README.md; do
+for item in khc adapters khc_agent.py install.sh uninstall.sh khc-agent.service README.md; do
   cp -R -- "$SCRIPT_DIR/$item" "$STAGE/$NAME/"
 done
 find "$STAGE/$NAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true

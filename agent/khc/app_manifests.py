@@ -14,8 +14,11 @@ Worker 安装时把 D1 里的应用定义随请求下发，本模块负责：
 - 参数经 ``KHC_PARAM_*`` 环境变量传入，不拼接命令行、不进日志；
 - 结果沿用 ``KHC_RESULT=`` 约定。
 
-与 ``recipes.py`` 的关系：内置 recipe 是随包发布的旧通道，本提案不动；
-这里只处理「面板下发的脚本」。两者互不依赖，避免改动冻结核心的执行路径。
+脚本正文只来自面板下发的清单；随包不携带任何应用脚本。
+
+安装记录（root 0600，目录 0700）保存本次生效的参数值 ``values``（含 secret 与 derive 参数），
+升级与卸载按「本次请求值 > 记录值 > 清单默认值」合并。``values`` 永不出现在
+``read_installed_manifests`` / ``status()`` / ``/state`` / 任务日志 / ``KHC_RESULT``。
 """
 
 from __future__ import annotations
@@ -58,6 +61,8 @@ from .util import (
 )
 
 SCRIPT_TIMEOUT = 900.0
+#: 新建应用用户后等待 /run/user/<uid>/bus 就绪的上限（秒）
+BUS_WAIT_SEC = 15.0
 RESULT_PREFIX = "KHC_RESULT="
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SCRIPT_BYTES = 64 * 1024
@@ -624,6 +629,11 @@ def _env_key(key: str) -> str:
     return "KHC_PARAM_" + re.sub(r"[^A-Za-z0-9]", "_", key).upper()
 
 
+def _param_error(message: str, field: str, **extra: Any) -> ManifestError:
+    """参数校验类错误统一 code=param_invalid，details.field 必带（前端按它定位表单项）。"""
+    return ManifestError(message, code="param_invalid", details={"field": field, **extra})
+
+
 def _validate_values_both(
     specs: Mapping[str, Mapping[str, Any]],
     values: Any,
@@ -633,7 +643,8 @@ def _validate_values_both(
     raw = values if isinstance(values, Mapping) else {}
     unknown = set(raw) - set(specs)
     if unknown:
-        raise ManifestError("存在未声明的参数", details={"keys": sorted(unknown)[:8]})
+        names = sorted(unknown)
+        raise _param_error("存在未声明的参数", names[0], keys=names[:8])
     env_out: dict[str, str] = {}
     typed_out: dict[str, Any] = {}
     for key, spec in specs.items():
@@ -641,32 +652,52 @@ def _validate_values_both(
         if value is None:
             if allow_missing:
                 continue
-            raise ManifestError(f"缺少参数 {key}", details={"field": key})
+            raise _param_error(f"缺少参数 {key}", key)
         kind = spec["type"]
         if kind == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
-            raise ManifestError(f"参数 {key} 必须是整数")
+            raise _param_error(f"参数 {key} 必须是整数", key)
         if kind == "boolean" and not isinstance(value, bool):
-            raise ManifestError(f"参数 {key} 必须是布尔值")
+            raise _param_error(f"参数 {key} 必须是布尔值", key)
         if kind == "string" and not isinstance(value, str):
-            raise ManifestError(f"参数 {key} 必须是字符串")
+            raise _param_error(f"参数 {key} 必须是字符串", key)
         if kind == "enum":
             allowed_vals = {opt["value"] for opt in spec.get("options") or []}
             if not isinstance(value, str) or value not in allowed_vals:
-                raise ManifestError(f"参数 {key} 必须是允许的枚举选项之一")
+                raise _param_error(f"参数 {key} 必须是允许的枚举选项之一", key)
         if kind == "integer":
             low, high = spec.get("min"), spec.get("max")
             if isinstance(low, int) and value < low or isinstance(high, int) and value > high:
-                raise ManifestError(f"参数 {key} 超出范围 [{low}, {high}]")
+                raise _param_error(f"参数 {key} 超出范围 [{low}, {high}]", key)
         text = "1" if value is True else "0" if value is False else str(value)
         if isinstance(spec.get("maxLength"), int) and len(text) > spec["maxLength"]:
-            raise ManifestError(f"参数 {key} 超过长度限制")
+            raise _param_error(f"参数 {key} 超过长度限制", key)
         if isinstance(spec.get("pattern"), str) and not re.fullmatch(spec["pattern"], text):
-            raise ManifestError(f"参数 {key} 格式不匹配")
+            raise _param_error(f"参数 {key} 格式不匹配", key)
         if CONTROL_CHARS_RE.search(text):
-            raise ManifestError(f"参数 {key} 含控制字符")
+            raise _param_error(f"参数 {key} 含控制字符", key)
         env_out[_env_key(key)] = text
         typed_out[key] = value
     return env_out, typed_out
+
+
+def _merge_recorded_values(
+    specs: Mapping[str, Mapping[str, Any]],
+    request_values: Any,
+    recorded: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """升级 / 卸载 / 预检的参数合并：本次请求值 > 安装记录里的值 > 清单默认值（默认值在校验时补）。
+
+    记录里有、新清单已删除的键静默丢弃（不触发「存在未声明的参数」）；请求里的未声明键
+    照旧报错。0.8.0 写的记录没有 ``values``，此时只用请求值与默认值。这是读取记录 ``values``
+    的唯一入口。
+    """
+    request = dict(request_values) if isinstance(request_values, Mapping) else {}
+    stored = recorded.get("values") if isinstance(recorded, Mapping) else None
+    merged: dict[str, Any] = {}
+    if isinstance(stored, Mapping):
+        merged.update({key: value for key, value in stored.items() if key in specs})
+    merged.update(request)
+    return merged
 
 
 def validate_values(specs: Mapping[str, Mapping[str, Any]], values: Any) -> dict[str, str]:
@@ -711,7 +742,10 @@ def _mtime_iso(path: str) -> str:
 
 
 def read_installed_manifests(ctx: Ctx) -> dict[str, dict[str, Any]]:
-    """读取控制面下发应用清单的已安装记录，供 status 与 recipe_installed 返回。"""
+    """读取控制面下发应用清单的已安装记录，供 status 与 manifest_installed 返回。
+
+    字段白名单：安装记录里的 ``values``（参数值，含 secret）不得拷进返回条目。
+    """
     directory = os.path.join(ctx.paths.data_dir, "app-manifests")
     if not os.path.isdir(directory):
         return {}
@@ -806,6 +840,7 @@ def resolve_runtime_user(
     mode: Optional[str] = None,
     runtime_user: Optional[str] = None,
     runtime_password: Optional[str] = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> str:
     """按安装时选的运行身份决定最终用户，必要时建账号。
 
@@ -839,7 +874,7 @@ def resolve_runtime_user(
         # 账号已存在：先确认是面板建的，再沿用（幂等，不改密码，因此不需要密码）。
         _assert_app_account(entry, user)
         if checked.get("linger"):
-            _enable_linger(ctx, user)
+            _enable_linger(ctx, user, sleep_fn=sleep_fn)
         return user
 
     # useradd 要写 /etc/passwd，必须在沙箱外执行。全程 argv 数组，不拼 shell。
@@ -880,17 +915,71 @@ def resolve_runtime_user(
                 details={"user": user, "rc": result.rc, "stderr": tail(result.stderr or "", 500)},
             )
     if checked.get("linger"):
-        _enable_linger(ctx, user)
+        _enable_linger(ctx, user, sleep_fn=sleep_fn)
     return user
 
 
-def _enable_linger(ctx: Ctx, user: str) -> None:
-    """无人登录时仍要能跑 user unit；失败不阻断安装，只记录。"""
+def _user_bus_path(uid: int) -> str:
+    return f"/run/user/{uid}/bus"
+
+
+def _user_bus_exists(uid: int) -> bool:
+    return os.path.exists(_user_bus_path(uid))
+
+
+def _user_env_args(uid: int) -> list[str]:
+    """降权执行 ``systemctl --user`` 需要的两个环境变量（runuser 不会替用户建会话）。"""
+    return [
+        f"XDG_RUNTIME_DIR=/run/user/{uid}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path={_user_bus_path(uid)}",
+    ]
+
+
+def _wait_user_bus(
+    ctx: Ctx,
+    user: str,
+    *,
+    timeout: float = BUS_WAIT_SEC,
+    exists_fn: Callable[[int], bool] = None,  # type: ignore[assignment]
+    sleep_fn: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """新建用户后 ``user@<uid>.service`` 可能尚未就绪：显式启动并轮询 bus socket。
+
+    ``systemctl start user@<uid>.service`` 与 PID 1 通信，不受 Agent 沙箱影响。超时只记警告并
+    继续（脚本可能自己处理），不静默吞掉。
+    """
+    exists = exists_fn or _user_bus_exists
+    uid = _account(user).pw_uid
+    if exists(uid):
+        return True
+    result = ctx.run(["systemctl", "start", f"user@{uid}.service"], check=False, timeout=30)
+    if result.rc != 0:
+        ctx.log(f"systemctl start user@{uid}.service 未成功（rc={result.rc}）")
+    deadline = clock() + timeout
+    while True:
+        if exists(uid):
+            return True
+        if clock() >= deadline:
+            break
+        sleep_fn(0.5)
+    ctx.log(f"警告：等待 {_user_bus_path(uid)} 超过 {int(timeout)}s，user bus 仍未就绪；脚本里的 systemctl --user 可能失败")
+    return False
+
+
+def _enable_linger(
+    ctx: Ctx,
+    user: str,
+    *,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> None:
+    """无人登录时仍要能跑 user unit；失败不阻断安装，只记录。随后等用户总线就绪。"""
     result = ctx.run(
         ["loginctl", "enable-linger", user], check=False, timeout=30
     )
     if result.rc != 0:
         ctx.log(f"enable-linger {user} 未成功（rc={result.rc}），user unit 可能需手动启用")
+    _wait_user_bus(ctx, user, sleep_fn=sleep_fn)
 
 
 def _chown_to_user(path: str, user: str) -> None:
@@ -911,7 +1000,12 @@ def _write_paths(user: str, instance: str, writes: list[str]) -> str:
 
 
 def _run_as_root(
-    ctx: Ctx, directory: str, action: str, script_path: str, env: Mapping[str, str]
+    ctx: Ctx,
+    directory: str,
+    action: str,
+    script_path: str,
+    env: Mapping[str, str],
+    redact: Optional[Callable[[str], str]] = None,
 ) -> Any:
     """root 模式：经 systemd-run 一次性单元在 Agent 沙箱外执行。
 
@@ -939,7 +1033,7 @@ def _run_as_root(
         script_path,
     ]
     try:
-        result = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT + 10)
+        result = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT + 10, redact=redact)
         if getattr(result, "rc", 0) == 124:
             ctx.run(["systemctl", "stop", unit], check=False, timeout=15)
         return result
@@ -1213,7 +1307,7 @@ def _probe_unit_active(
                 user,
                 "--",
                 "env",
-                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                *_user_env_args(uid),
                 "systemctl",
                 "--user",
                 "is-active",
@@ -1478,17 +1572,24 @@ def run_manifest(
     manifest_id, name = _validate_manifest_ids(manifest_id, instance)
 
     checked = validate_manifest(manifest)
-    env_values, typed_values = _validate_values_both(checked["params"], values)
-    secrets = _secret_values(checked["params"], values if isinstance(values, Mapping) else {})
+    record_path = _record_path(ctx, manifest_id, name)
+    recorded = load_json(record_path, default=None)
+    recorded_map = recorded if isinstance(recorded, Mapping) else None
+
+    # 升级 / 卸载：请求值 > 记录值 > 默认值；安装只用请求值 + 默认值。
+    # 遮罩与落记录都用合并后的值，从记录取出的 secret 被脚本打印时同样遮罩。
+    merged_values = (
+        _merge_recorded_values(checked["params"], values, recorded_map)
+        if action in ("upgrade", "uninstall")
+        else values
+    )
+    env_values, typed_values = _validate_values_both(checked["params"], merged_values)
+    secrets = _secret_values(checked["params"], typed_values)
     if runtime_password:
         secrets.append(runtime_password)
 
     hook_env, hook_secrets = _normalize_hook_outputs(hook_outputs)
     secrets.extend(hook_secrets)
-
-    record_path = _record_path(ctx, manifest_id, name)
-    recorded = load_json(record_path, default=None)
-    recorded_map = recorded if isinstance(recorded, Mapping) else None
 
     if action == "upgrade":
         if recorded_map is None:
@@ -1523,6 +1624,7 @@ def run_manifest(
             mode=mode,
             runtime_user=runtime_user,
             runtime_password=runtime_password,
+            sleep_fn=sleep_fn,
         )
     else:
         mode = normalize_mode(runtime_mode or checked["mode"])
@@ -1532,6 +1634,7 @@ def run_manifest(
             mode=mode,
             runtime_user=runtime_user,
             runtime_password=runtime_password,
+            sleep_fn=sleep_fn,
         )
 
     rendered_units = _render_declared_units(checked["units"], mode, name, typed_values)
@@ -1568,14 +1671,26 @@ def run_manifest(
     env.update(hook_env)
     if hooks_skipped:
         env["KHC_HOOKS_SKIPPED"] = "1"
+    if mode != "root":
+        # runuser 不会替用户建会话；脚本里的 systemctl --user 靠这两个变量找到用户总线。
+        uid = _account(user).pw_uid
+        for item in _user_env_args(uid):
+            key, _, value = item.partition("=")
+            env[key] = value
+
+    def redact_line(text: str) -> str:
+        return _redact(text, secrets)
 
     ctx.log(f"manifest {manifest_id}/{name} {action} 开始（mode={mode} user={user}）")
     if mode == "root":
-        proc = _run_as_root(ctx, directory, action, script_path, env)
+        proc = _run_as_root(ctx, directory, action, script_path, env, redact=redact_line)
     else:
         cmd = ["runuser", "-u", user, "--", "bash", script_path]
-        proc = ctx.run_streaming(cmd, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory)
-    stdout = _redact(proc.stdout or "", secrets)
+        proc = ctx.run_streaming(
+            cmd, timeout=SCRIPT_TIMEOUT, env=env, cwd=directory, redact=redact_line
+        )
+    raw_stdout = proc.stdout or ""
+    stdout = _redact(raw_stdout, secrets)
     stderr = _redact(proc.stderr or "", secrets)
     if proc.rc != 0:
         raise ManifestError(
@@ -1583,7 +1698,9 @@ def run_manifest(
             details={"rc": proc.rc, "stdout": tail(stdout, 1200), "stderr": tail(stderr, 1200)},
         )
 
-    payload = _parse_result(stdout, result_file, ctx)
+    # 结果卡片本就是给用户看的（含 kind=secret 的登录 Key），所以从未遮罩的输出里解析；
+    # 日志、错误详情与健康检查输出仍一律遮罩。
+    payload = _parse_result(raw_stdout, result_file, ctx)
     if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESULT_BYTES:
         raise ManifestError("KHC_RESULT 超过 64KB")
     save_json(result_file, {"manifestId": manifest_id, "instance": name, "action": action}, mode=0o600)
@@ -1613,6 +1730,9 @@ def run_manifest(
             "version": checked["version"],
             "schema": 2,
             "installedAt": installed_at,
+            # 本次实际生效的参数值（含 secret 与 derive）：升级 / 卸载沿用。只经
+            # _merge_recorded_values 读取，read_installed_manifests 的白名单不拷贝它。
+            "values": dict(typed_values),
         }
         if action == "upgrade":
             record["upgradedAt"] = now_iso
@@ -1697,6 +1817,64 @@ def _listening_tcp_ports(proc_root: str) -> set[int]:
             except ValueError:
                 continue
     return ports
+
+
+def _listening_ports_by_uid(proc_root: str, uid: int) -> set[int]:
+    """正在 LISTEN（state 0A）且 socket 属主 uid 等于 ``uid`` 的端口（tcp 与 tcp6，uid 在第 8 列）。"""
+    ports: set[int] = set()
+    for name in ("tcp", "tcp6"):
+        path = os.path.join(proc_root, "net", name)
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as handle:
+                lines = handle.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 8 or parts[3] != "0A":
+                continue
+            try:
+                if int(parts[7]) != uid:
+                    continue
+                ports.add(int(parts[1].split(":")[1], 16))
+            except (ValueError, IndexError):
+                continue
+    return ports
+
+
+def _exclusive_create_uid(
+    ctx: Ctx, manifest_id: str, instance: str, recorded: Optional[Mapping[str, Any]]
+) -> Optional[int]:
+    """旧记录缺少端点时，升级预检才允许按 socket 属主认「本实例的端口」。
+
+    只有同时满足才返回 uid：记录 mode 为 create；记录里的用户存在且 uid != 0；
+    没有其他已装记录（不同 manifestId 或 instance）使用同一个用户。否则返回 None，
+    预检维持只认记录端点。
+    """
+    if not isinstance(recorded, Mapping) or recorded.get("mode") != "create":
+        return None
+    user = recorded.get("user")
+    if not isinstance(user, str) or not USER_RE.fullmatch(user):
+        return None
+    try:
+        uid = _account(user).pw_uid
+    except (KeyError, OSError):
+        return None
+    if uid == 0:
+        return None
+    directory = os.path.join(ctx.paths.data_dir, "app-manifests")
+    own_name = os.path.basename(_record_path(ctx, manifest_id, instance))
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        names = []
+    for filename in names:
+        if not filename.endswith(".json") or filename == own_name:
+            continue
+        other = load_json(os.path.join(directory, filename), default=None)
+        if isinstance(other, Mapping) and other.get("user") == user:
+            return None
+    return uid
 
 
 def _read_os_families(os_release_path: str) -> tuple[str, set[str]]:
@@ -1868,7 +2046,13 @@ def manifest_preflight(
             "installed": installed_summary,
         }
 
-    _, typed_values = _validate_values_both(checked["params"], values, allow_missing=True)
+    # upgrade：请求值 > 安装记录里的值 > 默认值（Worker 自 V4.1 起转发原始 values）
+    preflight_values = (
+        _merge_recorded_values(checked["params"], values, recorded_map)
+        if stage == "upgrade"
+        else values
+    )
+    _, typed_values = _validate_values_both(checked["params"], preflight_values, allow_missing=True)
     requires = checked.get("requires") or {}
     checks: list[dict[str, Any]] = []
 
@@ -1964,8 +2148,14 @@ def manifest_preflight(
     if ports:
         listening = _listening_tcp_ports(proc_root)
         own_ports = _own_recorded_ports(recorded_map) if stage == "upgrade" else set()
+        user_ports: set[int] = set()
+        if stage == "upgrade":
+            owner_uid = _exclusive_create_uid(ctx, manifest_id, name, recorded_map)
+            if owner_uid is not None:
+                user_ports = _listening_ports_by_uid(proc_root, owner_uid)
         for port in ports:
-            in_use = port in listening and port not in own_ports
+            by_user = port in listening and port not in own_ports and port in user_ports
+            in_use = port in listening and port not in own_ports and not by_user
             checks.append(
                 {
                     "name": f"port:{port}",
@@ -1973,6 +2163,8 @@ def manifest_preflight(
                     "message": (
                         f"端口 {port} 已被占用"
                         if in_use
+                        else f"端口 {port} 由当前应用用户占用（升级期间将重启复用）"
+                        if by_user
                         else f"端口 {port} 由当前实例占用（升级期间将重启复用）"
                         if (port in listening and port in own_ports)
                         else f"端口 {port} 可用"
@@ -2079,7 +2271,7 @@ def control_manifest_units(
             run_user,
             "--",
             "env",
-            f"XDG_RUNTIME_DIR=/run/user/{uid}",
+            *_user_env_args(uid),
             "systemctl",
             "--user",
             op,

@@ -24,6 +24,18 @@ APP_USER = "khc-app-test"
 CREDS = {"runtime_user": APP_USER, "runtime_password": "p"}
 
 
+_bus_patch = mock.patch.object(mod, "_user_bus_exists", return_value=True)
+
+
+def setUpModule():
+    # 单测机没有 /run/user/<uid>/bus：默认视为总线已就绪，免得每个用例等 15s。
+    _bus_patch.start()
+
+
+def tearDownModule():
+    _bus_patch.stop()
+
+
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

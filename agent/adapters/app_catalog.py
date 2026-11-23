@@ -1,22 +1,21 @@
-"""app-catalog 适配器（P1）：应用目录 / recipe 安装任务。
+"""app-catalog 适配器：应用清单（manifest）执行通道。
 
-契约（Worker 透传）：
+契约（Worker 透传，应用定义由 Worker 从 D1 注入 ``params.manifest``）：
 
-- ``POST /apps/app-catalog/recipe_install``
-  ``{"params": {"recipeId": "demo-echo", "values": {...}}, "idempotencyKey": "..."}``
-- ``POST /apps/app-catalog/recipe_uninstall`` 同上（values 用于卸载参数）。
-- ``GET /apps/app-catalog/recipe_installed``（sync）— 读取已安装清单。
+- ``POST /apps/app-catalog/manifest_install`` / ``manifest_upgrade`` / ``manifest_uninstall``
+  ``{"params": {"manifestId": "...", "manifest": {...}, "values": {...}}, "idempotencyKey": "..."}``（后台任务）。
+- ``manifest_preflight`` / ``manifest_control`` / ``manifest_logs`` / ``manifest_installed``：同步动作。
+- ``recipe_install`` / ``recipe_uninstall`` / ``recipe_installed``：清单动作的别名（v1 清单仍使用这些名字）；
+  ``recipe_install`` / ``recipe_uninstall`` 不带 ``manifest`` 时返回 400 ``manifest_required``。
 
 安全边界：
-- recipe 清单随 Agent 包发布（``agent/recipes/catalog.json``），面板只能选已发布 id；
+- 脚本正文只来自控制面下发的清单，节点侧校验 sha256 后降权执行；随包不再携带任何应用脚本；
 - 参数走 ``KHC_PARAM_*`` 环境变量，不拼接 shell 命令；
-- 系统包安装只允许白名单（``khc.pkg``）；
-- 结果文件 0600；密码类参数不进任务日志。
+- 结果文件 0600；secret 参数值不进任务日志。
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping
 
 from khc import Adapter, Ctx, action_params
@@ -30,44 +29,31 @@ from khc.app_manifests import (
     read_manifest_logs,
     run_manifest,
 )
-from khc.pkg import ensure_packages
-from khc.recipes import RecipeError, catalog_for_display, find_recipe, read_installed, run_recipe
+from khc.util import KhcError
 
 APP_NAME = "app-catalog"
 VERSION = "1.0.0"
 
-#: 测试/演练可覆盖 recipe 目录；生产默认随包路径。
-RECIPES_ENV = "KHC_RECIPES_DIR"
-
-
-def _catalog_dir() -> str | None:
-    value = os.environ.get(RECIPES_ENV)
-    return value.strip() if value and value.strip() else None
-
-
-def _recipe_id(params: Mapping[str, Any]) -> str:
-    value = params.get("recipeId") or params.get("id")
-    if not isinstance(value, str) or not value.strip():
-        raise RecipeError("缺少参数 recipeId", details={"field": "recipeId"})
-    return value.strip()
+class ManifestRequired(KhcError):
+    status = 400
+    code = "manifest_required"
 
 
 class AppCatalog(Adapter):
     name = APP_NAME
     version = VERSION
     api = 1
-    description = "应用目录：安装/卸载随包发布的 recipe（脚本 + 参数 + 结果文件）"
+    description = "应用目录：执行控制面下发的应用清单（安装 / 升级 / 卸载 / 启停 / 日志）"
     requires_root = True
     capabilities = {
         "pkgInstall": True,
-        "recipeInstall": True,
         "appManifest": manifest_capabilities(),
     }
     schema: dict[str, Any] = {}
     actions = {
-        "recipe_install": {"mode": "task", "write": True, "description": "安装 recipe（后台任务）"},
-        "recipe_uninstall": {"mode": "task", "write": True, "description": "卸载 recipe（后台任务）"},
-        "recipe_installed": {"mode": "sync", "write": False, "description": "已安装 recipe 清单"},
+        "recipe_install": {"mode": "task", "write": True, "description": "安装应用清单（manifest_install 的别名）"},
+        "recipe_uninstall": {"mode": "task", "write": True, "description": "卸载应用清单（manifest_uninstall 的别名）"},
+        "recipe_installed": {"mode": "sync", "write": False, "description": "已安装应用清单（manifest_installed 的别名）"},
         "manifest_preflight": {"mode": "sync", "write": False, "description": "应用清单安装/升级/卸载预检"},
         "manifest_install": {"mode": "task", "write": True, "description": "安装应用清单（后台任务）"},
         "manifest_upgrade": {"mode": "task", "write": True, "description": "升级应用清单（后台任务）"},
@@ -82,19 +68,14 @@ class AppCatalog(Adapter):
         return []
 
     def status(self, ctx: Ctx) -> dict[str, Any]:
-        installed = {**read_installed(ctx), **collect_manifest_statuses(ctx)}
+        installed = collect_manifest_statuses(ctx)
         return {
             "installed": sorted(installed),
             "installedDetail": installed,
-            "recipes": [item["id"] for item in catalog_for_display(_catalog_dir())],
         }
 
     def action_recipe_installed(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "installed": {**read_installed(ctx), **collect_manifest_statuses(ctx)},
-            "recipes": catalog_for_display(_catalog_dir()),
-            "cards": [],
-        }
+        return self.action_manifest_installed(ctx, body)
 
     @staticmethod
     def _manifest_id(params: Mapping[str, Any]) -> str:
@@ -126,28 +107,17 @@ class AppCatalog(Adapter):
             hooks_skipped=bool(params.get("hooksSkipped", False)),
         )
 
-    def _run(self, ctx: Ctx, body: Mapping[str, Any], action: str) -> dict[str, Any]:
+    def _run_alias(self, ctx: Ctx, body: Mapping[str, Any], action: str) -> dict[str, Any]:
         params = action_params(body)
-        values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
-
-        # R1/V2：带 manifest 说明脚本由 Worker 从 D1 下发，走清单执行通道。
-        # 不带 manifest 的是随包发布的内置 recipe，旧路径原样保留（P-4）。
-        if "manifest" in params:
-            return self._run_manifest_action(ctx, params, action)
-
-        recipe_id = _recipe_id(params)
-        recipe = find_recipe(recipe_id, _catalog_dir())
-        if action == "install":
-            packages = recipe.get("packages") or []
-            if packages:
-                ensure_packages(ctx, packages)
-        return run_recipe(ctx, recipe, action, dict(values))
+        if "manifest" not in params:
+            raise ManifestRequired("缺少 manifest：应用只能通过控制面下发的清单安装或卸载", details={"field": "manifest"})
+        return self._run_manifest_action(ctx, params, action)
 
     def action_recipe_install(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self._run(ctx, body, "install")
+        return self._run_alias(ctx, body, "install")
 
     def action_recipe_uninstall(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self._run(ctx, body, "uninstall")
+        return self._run_alias(ctx, body, "uninstall")
 
     def action_manifest_preflight(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         params = action_params(body)

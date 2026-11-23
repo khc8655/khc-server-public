@@ -24,8 +24,6 @@ echo "==> panel release consistency"
 node scripts/check-release-consistency.mjs --repo
 echo "==> agent package retention"
 node scripts/prune-agent-packages.mjs --check
-echo "==> app catalog drift"
-node scripts/verify-app-catalog.mjs
 echo "==> app manifests"
 node scripts/verify-app-manifests.mjs
 echo "==> app manifest uninstall (cleanup)"
@@ -35,9 +33,9 @@ echo "==> d1 migrations (local)"
 echo "==> installer lifecycle"
 ./scripts/install-lifecycle-test.sh
 echo "==> node script syntax"
-for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/relay-latency-baseline.mjs scripts/lib/relay-latency.mjs scripts/lib/admin-session.mjs scripts/lib/manifest-diff.mjs scripts/publish-app-manifest.mjs scripts/docs-lint.mjs scripts/verify-app-catalog.mjs scripts/d1-baseline.mjs; do node --check "$f"; done
+for f in scripts/uptime-check.mjs scripts/lib/uptime-check.mjs scripts/relay-latency-baseline.mjs scripts/lib/relay-latency.mjs scripts/lib/admin-session.mjs scripts/lib/manifest-diff.mjs scripts/publish-app-manifest.mjs scripts/docs-lint.mjs scripts/d1-baseline.mjs; do node --check "$f"; done
 echo "==> docs lint"
 node scripts/docs-lint.mjs --strict
 echo "==> shell syntax"
-bash -n agent/install.sh agent/uninstall.sh agent/package.sh scripts/verify.sh scripts/host-ops-peer-e2e.sh scripts/install-lifecycle-test.sh scripts/install-system-test.sh scripts/d1-migration-local-test.sh scripts/caddy-tls-modes-e2e.sh scripts/manifest-uninstall-test.sh scripts/build-agent-release.sh agent/recipes/demo-echo/install.sh agent/recipes/demo-echo/uninstall.sh agent/recipes/sing-box/install.sh agent/recipes/sing-box/uninstall.sh agent/recipes/generic-service/install.sh agent/recipes/generic-service/uninstall.sh
+bash -n agent/install.sh agent/uninstall.sh agent/package.sh scripts/verify.sh scripts/host-ops-peer-e2e.sh scripts/install-lifecycle-test.sh scripts/install-system-test.sh scripts/d1-migration-local-test.sh scripts/caddy-tls-modes-e2e.sh scripts/manifest-uninstall-test.sh scripts/build-agent-release.sh
 echo "==> OK"

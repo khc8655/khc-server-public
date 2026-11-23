@@ -2,6 +2,15 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.42.1] - 2026-11-23
+### Fixed
+- Agent `0.8.1`：安装记录保存应用参数值，升级 / 卸载沿用（请求值 > 记录值 > 默认值），不再要求重填、也不再把改过的默认值改回。
+- Agent `0.8.1`：从 v1 清单升级到 v2 时，应用自己已在用的端口不再被预检误判为占用。
+- Agent `0.8.1`：参数错误统一为 `param_invalid` 并带字段名；新建应用用户后等待用户总线就绪，首次安装不再报 `Failed to connect to bus`。
+
+### Removed
+- 旧 recipe 通道（`agent/recipes/`）已删除；`recipe_install` / `recipe_uninstall` 只作为清单动作的别名保留。
+
 ## [0.42.0] - 2026-11-23
 ### Added
 - 「设置 → 应用管理」新增 [导入应用]：粘贴 JSON、上传文件或从 https 地址导入，已存在的应用先展示与当前版本的差异再确认；新增 `scripts/publish-app-manifest.mjs` 推送仓库清单。
