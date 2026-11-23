@@ -34,6 +34,7 @@ import {
   Card,
   Drawer,
   KeyValue,
+  Link,
   LogViewer,
   Row,
   Select,
@@ -42,6 +43,7 @@ import {
   useToast,
   type KeyValueItem,
 } from '../../ui';
+import { paths } from '../../registry/routes';
 import { ManifestErrorAlert } from './ManifestErrorAlert';
 import { ResultCardsView } from './ResultCardsView';
 import { UpgradeParamsForm, type UpgradeValues } from './UpgradeParamsForm';
@@ -83,6 +85,7 @@ export function InstalledAppDrawer({
   const [unitBusy, setUnitBusy] = useState<string | null>(null);
   const [lingerDisabled, setLingerDisabled] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
+  const [failedAction, setFailedAction] = useState<'upgrade' | 'uninstall' | null>(null);
   const [task, setTask] = useState<TaskResponse | null>(null);
 
   // 升级时可选修改的参数：只保存用户改动过的键（含 secret 值，仅存于本组件状态）。
@@ -199,6 +202,13 @@ export function InstalledAppDrawer({
     }
   };
 
+  const errorField = (cause: unknown): string | undefined => {
+    const details = (cause as { details?: unknown } | null)?.details;
+    const field =
+      details && typeof details === 'object' ? (details as { field?: unknown }).field : undefined;
+    return typeof field === 'string' && field ? field : undefined;
+  };
+
   const setUpgradeValue = (key: string, value: unknown | undefined) => {
     setUpgradeValues((prev) => {
       const next = { ...prev };
@@ -235,6 +245,7 @@ export function InstalledAppDrawer({
     setConfirm(null);
     setBusy(true);
     setActionError(null);
+    setFailedAction(null);
     setTask(null);
     setUpgradeErrors({});
     setUpgradeNeedsFill(false);
@@ -258,14 +269,12 @@ export function InstalledAppDrawer({
     } catch (cause) {
       if (!mountedRef.current) return;
       setActionError(cause);
+      setFailedAction('upgrade');
       // 0.8.0 的「缺少参数」错误 code 是 internal_error：只认 details.field，不看 code 与文本。
-      const details = (cause as { details?: unknown } | null)?.details;
-      const field =
-        details && typeof details === 'object'
-          ? (details as { field?: unknown }).field
-          : undefined;
+      // 任务失败（Agent）与同步错误（Worker 的 param_invalid ApiError）走同一段定位逻辑。
+      const field = errorField(cause);
       if (
-        typeof field === 'string' &&
+        field !== undefined &&
         view &&
         !view.invalid &&
         view.def.params.some((param) => param.key === field)
@@ -290,6 +299,7 @@ export function InstalledAppDrawer({
     setConfirm(null);
     setBusy(true);
     setActionError(null);
+    setFailedAction(null);
     setTask(null);
     try {
       const actionName = uninstallActionForSchema(schema);
@@ -313,6 +323,7 @@ export function InstalledAppDrawer({
     } catch (cause) {
       if (!mountedRef.current) return;
       setActionError(cause);
+      setFailedAction('uninstall');
       if (
         !skipHooks &&
         schema === 2 &&
@@ -405,6 +416,20 @@ export function InstalledAppDrawer({
             hubId={hubId}
             manifestId={entry.manifestId}
             onNavigate={onClose}
+          />
+        ) : null}
+
+        {actionError && failedAction === 'uninstall' && errorField(actionError) ? (
+          <Banner
+            tone="warn"
+            title={`该应用清单的卸载步骤缺少参数 ${errorField(actionError)}`}
+            description="到「设置 → 应用管理」为它设置默认值后重试。"
+            action={
+              <Link
+                to={`${paths.settings}?tab=manifests&manifest=${encodeURIComponent(entry.manifestId)}`}
+                label="去应用管理设置默认值"
+              />
+            }
           />
         ) : null}
 
@@ -637,27 +662,29 @@ export function InstalledAppDrawer({
                       `当前版本 ${entry.version} → 目标版本 ${view.def.version}` +
                       (hasPreUpgradeHook ? '；将执行控制面步骤 preUpgrade' : '')
                     }
-                    action={
-                      <Row gap={2}>
-                        <Button
-                          label={upgradeNeedsFill ? zh.catalog.upgradeRetryAfterFill : '确认升级'}
-                          variant="primary"
-                          size="sm"
-                          onClick={() => void runUpgrade()}
-                        />
-                        <Button
-                          label="取消"
-                          size="sm"
-                          onClick={() => {
-                            resetUpgradeForm();
-                            setConfirm(null);
-                          }}
-                        />
-                      </Row>
-                    }
                   />
+                  <Row gap={2}>
+                    <Button
+                      label={upgradeNeedsFill ? zh.catalog.upgradeRetryAfterFill : '确认升级'}
+                      variant="primary"
+                      size="sm"
+                      onClick={() => void runUpgrade()}
+                    />
+                    <Button
+                      label="取消"
+                      size="sm"
+                      onClick={() => {
+                        resetUpgradeForm();
+                        setConfirm(null);
+                      }}
+                    />
+                  </Row>
                   {agentForgetsInstallValues ? (
-                    <Banner tone="warn" title={zh.catalog.upgradeOldAgentHint} />
+                    <Banner
+                      tone="warn"
+                      title={zh.catalog.upgradeOldAgentTitle}
+                      description={zh.catalog.upgradeOldAgentHint}
+                    />
                   ) : null}
                   {!view.invalid ? (
                     <Stack gap={3}>

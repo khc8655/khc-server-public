@@ -240,8 +240,9 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 | V2 | `docs/plans/app-distribution-v2-2026-11-23-v2.md` | 已合入（#154） |
 | V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
 | V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 已合入（#158，v0.41.0），真机证据 `docs/verification/2026-11-23/manifest-v2-web.md`（#160） |
-| V4.1 | `docs/plans/app-distribution-v2-2026-11-23-v4.1.md` | 可开工（前端 + Worker，0.41.1；见 §15） |
-| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4、V4.1 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
+| V4.1 | `docs/plans/app-distribution-v2-2026-11-23-v4.1.md` | 已合入（#162，v0.41.1），真机证据 `docs/verification/2026-11-23/manifest-upgrade-values.md`（#164） |
+| V4.2 | `docs/plans/app-distribution-v2-2026-11-23-v4.2.md` | 可开工（Worker + 前端小改，0.41.2；见 §15.3） |
+| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4、V4.1、V4.2 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
 | V6 | `docs/plans/app-distribution-v2-2026-11-23-v6.md` | V5a、V5b 合入后开工 |
 
 开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 PR 不修改 `docs/plans/` 下的文件。
@@ -281,4 +282,8 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 | v1 清单（magpie）显示 v2、走 `manifest_uninstall` | Agent 0.8.0 归一后记录写 `schema: 2`，前端按记录判断 | V4.1：按 D1 清单 schema 判断；V5a 把 magpie 转 v2 后自然消失 |
 | 新建用户首次安装撞 user bus | 已知（§14 第 2 行） | V5b §8.1 不变 |
 | 卸载不清理已发布的 Caddy 站点 | 发布与安装是两步，卸载只管节点 | 登记 backlog |
+
+### 15.3 升级 / 卸载控制面步骤引用无默认值参数（V4.1 真机证据 §四-1）
+
+preUpgrade / preUninstall 在 Worker 渲染，拿不到安装值。引用无默认值参数时，升级需用户每次补填，卸载则在 Worker 直接失败且不能强制卸载（应用卸不掉）。决定：**保存时拒绝**这类清单（只针对 preUpgrade / preUninstall + 无默认值参数；有默认值仍只提醒），执行时对旧清单兜底返回 `param_invalid` + `details.field`。V4.2（0.41.2）实施，不改契约。khcsearch（V6）不声明 preUpgrade / preUninstall，不受影响。
 

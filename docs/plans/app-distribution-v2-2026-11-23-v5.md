@@ -2,7 +2,7 @@
 
 > 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §8、§11 V5、§12 第 4–5 项；`docs/verification/2026-11-23/manifest-v2-live.md` §五-2
 
-> **给开发 agent**：开工前提：**V4 已合入**，**V4.1 已合入**（Worker 对 upgrade 转发原始 `values`，§8.2 依赖它），V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
+> **给开发 agent**：开工前提：**V4 已合入**，**V4.1、V4.2 已合入**（Worker 对 upgrade / uninstall 转发原始 `values`，§8.2 依赖它），V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 
 ## 0. 速览
 

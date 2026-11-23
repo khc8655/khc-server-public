@@ -89,16 +89,18 @@ async function checkManifestSecretHostWarnings(
   return warnings;
 }
 
-/** preUpgrade / preUninstall 引用 {{params.*}} 时：Worker 只拿得到清单默认值与本次填写的值。 */
-function checkManifestParamRefWarnings(v2: AppManifestDefinitionV2): string[] {
+type ParamRefStage = 'preUpgrade' | 'preUninstall';
+
+/** 收集 preUpgrade / preUninstall 的 url / headers / body 里引用的 `{{params.<key>}}`（按阶段去重）。 */
+function collectHookParamRefs(v2: AppManifestDefinitionV2): Array<{ stage: ParamRefStage; keys: string[] }> {
   if (!v2.hooks) return [];
-  const warnings: string[] = [];
+  const out: Array<{ stage: ParamRefStage; keys: string[] }> = [];
   for (const stage of ['preUpgrade', 'preUninstall'] as const) {
     const hook = v2.hooks[stage];
     if (!hook) continue;
     const texts: string[] = [hook.url, ...Object.values(hook.headers ?? {})];
     if (hook.body !== undefined) collectLeafStrings(hook.body, texts);
-    const refs = new Set<string>();
+    const keys = new Set<string>();
     for (const text of texts) {
       let vars: string[];
       try {
@@ -107,16 +109,38 @@ function checkManifestParamRefWarnings(v2: AppManifestDefinitionV2): string[] {
         continue;
       }
       for (const v of vars) {
-        if (v.startsWith('params.')) refs.add(v);
+        if (v.startsWith('params.')) keys.add(v.slice('params.'.length).split('.')[0]!);
       }
     }
-    if (refs.size > 0) {
-      warnings.push(
-        `${stage} 引用了 ${Array.from(refs).sort().map((r) => `{{${r}}}`).join('、')}：升级 / 卸载时控制面步骤只能拿到清单默认值和本次填写的值，拿不到安装时填的值`,
-      );
+    if (keys.size > 0) out.push({ stage, keys: Array.from(keys).sort() });
+  }
+  return out;
+}
+
+/**
+ * preUpgrade / preUninstall 在 Worker 渲染，拿不到节点上的安装值：引用无默认值（含 derive）的参数
+ * 会让升级 / 卸载在 Worker 就失败，因此保存时直接拒绝。preInstall 不受限。
+ */
+function assertHookParamRefsHaveDefaults(v2: AppManifestDefinitionV2): void {
+  for (const { stage, keys } of collectHookParamRefs(v2)) {
+    for (const key of keys) {
+      const param = v2.params.find((item) => item.key === key);
+      if (param && param.default === undefined) {
+        const message = `${stage} 引用了无默认值的参数 ${key}：升级 / 卸载时控制面步骤拿不到安装值，请为该参数设置默认值，或改为在 preInstall 里使用`;
+        throw new AppError(400, 'manifest_invalid', message, {
+          [`manifest.hooks.${stage}`]: message,
+        });
+      }
     }
   }
-  return warnings;
+}
+
+/** preUpgrade / preUninstall 引用有默认值的 {{params.*}} 时：Worker 只拿得到清单默认值与本次填写的值。 */
+function checkManifestParamRefWarnings(v2: AppManifestDefinitionV2): string[] {
+  return collectHookParamRefs(v2).map(
+    ({ stage, keys }) =>
+      `${stage} 引用了 ${keys.map((k) => `{{params.${k}}}`).join('、')}：升级 / 卸载时控制面步骤只能拿到清单默认值和本次填写的值，拿不到安装时填的值`,
+  );
 }
 
 function shaAuditFields(manifest: AppManifestAnyDefinition) {
@@ -190,6 +214,7 @@ export function appManifestRoutes(deps: AppDeps): Hono<AppBindings> {
       throw conflict(`应用 ${body.id} 已存在`);
     }
     const v2Def = toManifestV2(body.manifest);
+    assertHookParamRefsHaveDefaults(v2Def);
     const warnings = [
       ...(await checkManifestSecretHostWarnings(deps, body.id, v2Def)),
       ...checkManifestParamRefWarnings(v2Def),
@@ -224,6 +249,7 @@ export function appManifestRoutes(deps: AppDeps): Hono<AppBindings> {
     const body = await parseJsonBody(c, updateAppManifestRequestSchema);
     await assertManifestSha256(body.manifest);
     const v2Def = toManifestV2(body.manifest);
+    assertHookParamRefsHaveDefaults(v2Def);
     const warnings = [
       ...(await checkManifestSecretHostWarnings(deps, id, v2Def)),
       ...checkManifestParamRefWarnings(v2Def),

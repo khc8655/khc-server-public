@@ -833,4 +833,180 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
       }),
     ).toEqual([]);
   });
+
+  describe('控制面步骤引用无默认值参数（V4.2）', () => {
+    const noDefaultParams = [
+      { key: 'tag', type: 'string' as const },
+      { key: 'port', type: 'integer' as const, default: 18080 },
+    ];
+    const hookRef = (extra: Record<string, unknown> = {}) => ({
+      method: 'POST',
+      url: 'https://hub.example.com/h',
+      body: { tag: '{{params.tag}}' },
+      ...extra,
+    });
+
+    it('保存拒绝：preUpgrade / preUninstall 引用无默认值参数 → 400 manifest_invalid（POST 与 PUT）', async () => {
+      const ctx = makeV2AppContext();
+      const cookie = await loginAsAdmin(ctx as never);
+
+      for (const stage of ['preUpgrade', 'preUninstall'] as const) {
+        const res = await ctx.app.request(
+          '/api/v1/app-manifests',
+          {
+            method: 'POST',
+            headers: authHeaders(cookie),
+            body: JSON.stringify({
+              id: `rej-${stage.toLowerCase()}`,
+              manifest: v2Manifest({ params: noDefaultParams, hooks: { [stage]: hookRef() } }),
+            }),
+          },
+          ctx.env,
+        );
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { error: { code: string; message: string; fields?: Record<string, string> } };
+        expect(body.error.code).toBe('manifest_invalid');
+        expect(body.error.message).toContain(stage);
+        expect(body.error.message).toContain('tag');
+        expect(Object.keys(body.error.fields ?? {})).toEqual([`manifest.hooks.${stage}`]);
+      }
+      expect(await ctx.appManifests.get('rej-preupgrade')).toBeNull();
+
+      // PUT：先存一份合法清单，再改成引用无默认值参数
+      await ctx.appManifests.create({
+        id: 'rej-put',
+        enabled: true,
+        manifest: v2Manifest({ params: noDefaultParams }),
+      });
+      const putRes = await ctx.app.request(
+        '/api/v1/app-manifests/rej-put',
+        {
+          method: 'PUT',
+          headers: authHeaders(cookie),
+          body: JSON.stringify({
+            manifest: v2Manifest({ params: noDefaultParams, hooks: { preUninstall: hookRef() } }),
+          }),
+        },
+        ctx.env,
+      );
+      expect(putRes.status).toBe(400);
+      expect(((await putRes.json()) as { error: { code: string } }).error.code).toBe('manifest_invalid');
+    });
+
+    it('保存拒绝：derive 参数没有默认值时同样拒绝', async () => {
+      const ctx = makeV2AppContext();
+      const cookie = await loginAsAdmin(ctx as never);
+      const res = await ctx.app.request(
+        '/api/v1/app-manifests',
+        {
+          method: 'POST',
+          headers: authHeaders(cookie),
+          body: JSON.stringify({
+            id: 'rej-derive',
+            manifest: v2Manifest({
+              params: [
+                { key: 'web_port', type: 'integer', default: 18080 },
+                { key: 'link', type: 'string', derive: 'endpoint:web.publicUrl' },
+              ],
+              endpoints: [{ id: 'web', label: 'Web', protocol: 'http', portParam: 'web_port', publish: 'none' }],
+              hooks: {
+                preUninstall: { method: 'POST', url: 'https://hub.example.com/h', body: { l: '{{params.link}}' } },
+              },
+            }),
+          }),
+        },
+        ctx.env,
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toContain('link');
+    });
+
+    it('引用有默认值参数仍保存成功并给 warning；preInstall 引用无默认值参数不受限', async () => {
+      const ctx = makeV2AppContext();
+      const cookie = await loginAsAdmin(ctx as never);
+      const post = (id: string, hooks: Record<string, unknown>) =>
+        ctx.app.request(
+          '/api/v1/app-manifests',
+          {
+            method: 'POST',
+            headers: authHeaders(cookie),
+            body: JSON.stringify({ id, manifest: v2Manifest({ params: noDefaultParams, hooks }) }),
+          },
+          ctx.env,
+        );
+
+      const withDefault = await post('ok-default', {
+        preUpgrade: { method: 'POST', url: 'https://hub.example.com/h', body: { p: '{{params.port}}' } },
+      });
+      expect(withDefault.status).toBe(201);
+      expect(((await withDefault.json()) as { warnings?: string[] }).warnings?.[0]).toContain('params.port');
+
+      const preInstall = await post('ok-preinstall', { preInstall: hookRef() });
+      expect(preInstall.status).toBe(201);
+      expect(((await preInstall.json()) as { warnings?: string[] }).warnings).toBeUndefined();
+    });
+
+    it('执行兜底：旧清单（绕过保存校验）升级不填参数 → 400 param_invalid + details.field；填了正常；其他变量仍为 template_missing_var', async () => {
+      const hookFetch = vi.fn(async () =>
+        new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      ) as unknown as typeof fetch;
+      const ctx = makeV2AppContext({ hookFetch });
+      const cookie = await loginAsAdmin(ctx as never);
+      const { id: nodeId } = await createNode(ctx as never, cookie);
+      ctx.agent.handler = async (_m, p) => {
+        if (p.includes('manifest_preflight')) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              capabilities: { schemas: [1, 2], features: [...AGENT_MANIFEST_FEATURES] },
+              checks: [],
+              installed: { version: '1.0.0', schema: 2, facts: {} },
+            },
+          };
+        }
+        return { status: 200, body: { ok: true, taskId: 'task-legacy' } };
+      };
+      await ctx.appManifests.create({
+        id: 'legacy-hook',
+        enabled: true,
+        manifest: v2Manifest({ params: noDefaultParams, hooks: { preUpgrade: hookRef() } }),
+      });
+      await ctx.appManifests.create({
+        id: 'legacy-facts',
+        enabled: true,
+        manifest: v2Manifest({
+          hooks: {
+            preUpgrade: { method: 'POST', url: 'https://hub.example.com/h', body: { f: '{{facts.nope}}' } },
+          },
+        }),
+      });
+      const upgrade = (manifestId: string, values: Record<string, unknown>, key: string) =>
+        ctx.app.request(
+          `/api/v1/nodes/${nodeId}/apps/app-catalog/manifest_upgrade`,
+          {
+            method: 'POST',
+            headers: authHeaders(cookie),
+            body: JSON.stringify({ params: { manifestId, values }, idempotencyKey: key }),
+          },
+          ctx.env,
+        );
+
+      const missing = await upgrade('legacy-hook', {}, 'legacy-key-0001');
+      expect(missing.status).toBe(400);
+      const missingBody = (await missing.json()) as {
+        error: { code: string; details?: { field?: string; variable?: string } };
+      };
+      expect(missingBody.error.code).toBe('param_invalid');
+      expect(missingBody.error.details).toEqual({ field: 'tag', variable: 'params.tag' });
+      expect(hookFetch).not.toHaveBeenCalled();
+
+      expect((await upgrade('legacy-hook', { tag: 't1' }, 'legacy-key-0002')).status).toBe(200);
+      expect(hookFetch).toHaveBeenCalledTimes(1);
+
+      const other = await upgrade('legacy-facts', {}, 'legacy-key-0003');
+      expect(other.status).toBe(400);
+      expect(((await other.json()) as { error: { code: string } }).error.code).toBe('template_missing_var');
+    });
+  });
 });
