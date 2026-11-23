@@ -31,6 +31,7 @@ export interface StoredNode {
   /** D-2/T2.2：rev epoch（纪元），创建时生成；节点重建/恢复时换新值（公开 API 不回显） */
   revEpoch: string;
   expiresAt: string | null;
+  tlsCertId: string | null;
   lastSeenAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -48,6 +49,7 @@ export interface NewNode {
   allowInsecure?: boolean;
   preferredRoute?: PreferredRoute;
   expiresAt?: string | null;
+  tlsCertId?: string | null;
   tokenEnc: string;
 }
 
@@ -63,6 +65,7 @@ export interface NodePatch {
   preferredRoute?: PreferredRoute;
   tokenEnc?: string;
   expiresAt?: string | null;
+  tlsCertId?: string | null;
   lastSeenAt?: number | null;
 }
 

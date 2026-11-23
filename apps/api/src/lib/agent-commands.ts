@@ -55,6 +55,11 @@ export interface AgentCommandOptions {
    * 提供时安装命令会在最前面注册隧道服务（Agent 只监听回环，endpointScheme=http）。
    */
   tunnelToken?: string;
+  /**
+   * 控制面证书引导拉取 URL（绑定了面板证书库的域名节点）：
+   * 提供时 install.sh 用节点 token HMAC 拉取 fullchain.pem/key.pem 并跳过 acme.sh。
+   */
+  tlsBootstrapUrl?: string;
 }
 
 /**
@@ -73,7 +78,7 @@ function acmeDomain(options: AgentCommandOptions): string | null {
   return options.mode === 'system' ? host : null;
 }
 
-/** 传输参数：https 入口 → ACME 自动签发 + 可信证书路径；http 入口 → 显式声明明文（仅测试）。 */
+/** 传输参数：https 入口 → 面板证书引导（优先）或 ACME 自动签发；http 入口 → 显式声明明文。 */
 function transportFlags(options: AgentCommandOptions, kind: 'install' | 'upgrade'): string[] {
   if (options.endpointScheme === 'http') return ['--insecure-http'];
   if (options.endpointScheme === 'https' && kind === 'install') {
@@ -81,6 +86,10 @@ function transportFlags(options: AgentCommandOptions, kind: 'install' | 'upgrade
       options.mode === 'system'
         ? ['--tls-cert', SYSTEM_TLS_CERT, '--tls-key', SYSTEM_TLS_KEY]
         : ['--tls-cert', USER_TLS_CERT, '--tls-key', USER_TLS_KEY];
+    const bootstrapUrl = options.tlsBootstrapUrl?.trim();
+    if (bootstrapUrl) {
+      return ['--tls-bootstrap-url', shellQuote(bootstrapUrl), ...paths];
+    }
     const acme = acmeDomain(options);
     return [...(acme ? ['--acme', shellQuote(acme)] : []), ...paths];
   }
@@ -132,6 +141,11 @@ function tlsPreflightLines(
   const system = options.mode === 'system';
   const host = options.endpointHost?.trim() ?? '';
   const ipOnly = isIpLiteralHost(host);
+  if (options.tlsBootstrapUrl?.trim() && !ipOnly) {
+    return [
+      '# 证书：写入节点 token 后将直接从面板证书库拉取安装（零 acme.sh，不占用入站 80/443）。',
+    ];
+  }
   if (system && !ipOnly && host) {
     // 一键签发：install.sh 会自动用 acme.sh 申请证书（ALPN 走 443），不再要求主人预置证书。
     return [

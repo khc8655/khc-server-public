@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { hubOutageDays, useHubProbe } from '../data/useHubProbe';
+import { useAutoRenewCerts } from '../data/useAutoRenewCerts';
 import { formatRelativeTime } from '../i18n/format';
 import { fmt, zh } from '../i18n/zh';
 import { NodeExpiryChip, daysLeftFromDate, formatRatioMetric } from '../patterns/NodePresentation';
@@ -43,6 +44,8 @@ export function OverviewPage() {
     probedAt,
     expiringCerts,
   } = useHubProbe();
+  useAutoRenewCerts(expiringCerts);
+  const visibleExpiringCerts = expiringCerts.filter((cert) => cert.daysLeft <= 14);
   const probing = phase === 'probing';
   const runProbe = () => void probe({ force: true });
 
@@ -102,7 +105,7 @@ export function OverviewPage() {
     }
   }
 
-  for (const cert of expiringCerts) {
+  for (const cert of visibleExpiringCerts) {
     todos.push({
       id: `cert:${cert.id}`,
       tone: cert.daysLeft <= 0 ? 'danger' : 'warn',
@@ -275,7 +278,7 @@ export function OverviewPage() {
       offlineNodeCount > 0 ? `${offlineNodeCount} 离线` : null,
       appIssueCount > 0 ? `${appIssueCount} 应用异常` : null,
       offlinePeerCount > 0 ? `${offlinePeerCount} Peer 离线` : null,
-      expiringCerts.length > 0 ? `${expiringCerts.length} 张证书到期` : null,
+      visibleExpiringCerts.length > 0 ? `${visibleExpiringCerts.length} 张证书到期` : null,
       expiringNodeCount > 0 ? `${expiringNodeCount} 节点到期` : null,
     ].filter(Boolean);
     kpis.push({

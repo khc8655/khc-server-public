@@ -3,7 +3,7 @@ import { newEpoch, newId, nowSec } from '../../lib/ids';
 import { mapStoredNode, type NodeRow } from './rows';
 
 const COLUMNS =
-  'id, name, endpoint, tunnel_endpoint, live_endpoint, domain, access_mode, tunnel_id, allow_insecure, preferred_route, token_enc, rev_epoch, expires_at, last_seen_at, created_at, updated_at';
+  'id, name, endpoint, tunnel_endpoint, live_endpoint, domain, access_mode, tunnel_id, allow_insecure, preferred_route, token_enc, rev_epoch, expires_at, tls_cert_id, last_seen_at, created_at, updated_at';
 
 export class D1NodeRepo implements NodeRepo {
   constructor(private readonly db: D1Database) {}
@@ -44,13 +44,14 @@ export class D1NodeRepo implements NodeRepo {
       // Agent 据此识别旧纪元并重置 rev 基线（迁移 0007 为存量节点回填）。
       revEpoch: newEpoch(),
       expiresAt: input.expiresAt ?? null,
+      tlsCertId: input.tlsCertId ?? null,
       lastSeenAt: null,
       createdAt: now,
       updatedAt: now,
     };
     await this.db
       .prepare(
-        `INSERT INTO nodes (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO nodes (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         node.id,
@@ -66,6 +67,7 @@ export class D1NodeRepo implements NodeRepo {
         node.tokenEnc,
         node.revEpoch,
         node.expiresAt,
+        node.tlsCertId,
         node.lastSeenAt,
         node.createdAt,
         node.updatedAt,
@@ -95,6 +97,7 @@ export class D1NodeRepo implements NodeRepo {
     if (patch.tokenEnc !== undefined) set('token_enc', patch.tokenEnc);
     if (patch.lastSeenAt !== undefined) set('last_seen_at', patch.lastSeenAt);
     if (patch.expiresAt !== undefined) set('expires_at', patch.expiresAt);
+    if (patch.tlsCertId !== undefined) set('tls_cert_id', patch.tlsCertId);
     if (sets.length === 0) return this.get(id);
     set('updated_at', nowSec());
     await this.db

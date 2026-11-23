@@ -746,3 +746,99 @@ describe('节点应用摘要（summary，D1 派生，零节点连接）', () => 
     expect(patchedBody.node.summary).toBeUndefined();
   });
 });
+
+describe('节点绑定面板证书（tlsCertId）', () => {
+  const CERT_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+  const KEY_PEM = '-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n';
+
+  it('建节点支持绑定覆盖当前域名的泛域名证书，不匹配或不存在返回 400；切离 domain 自动清空', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const wild = await ctx.certs.create({
+      name: 'wild-16666',
+      domains: ['*.16666.cyou'],
+      issuer: 'acme',
+      notAfter: Math.floor(Date.now() / 1000) + 60 * 86_400,
+      certPem: CERT_PEM,
+      keyPem: KEY_PEM,
+      sourceNodeId: null,
+      autoSync: true,
+    });
+
+    // 不存在的证书 400
+    const missingRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: 'bad-cert',
+          accessMode: 'domain',
+          domain: 'hw.16666.cyou',
+          endpoint: 'https://hw.16666.cyou:2053',
+          tlsCertId: 'cert_missing',
+        }),
+      },
+      ctx.env,
+    );
+    expect(missingRes.status).toBe(400);
+
+    // 域名不覆盖 400
+    const mismatchRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: 'mismatch-cert',
+          accessMode: 'domain',
+          domain: 'other.example.net',
+          endpoint: 'https://other.example.net:2053',
+          tlsCertId: wild.id,
+        }),
+      },
+      ctx.env,
+    );
+    expect(mismatchRes.status).toBe(400);
+
+    // 泛域名匹配成功入库并可通过详情读取
+    const okRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: 'hw',
+          accessMode: 'domain',
+          domain: 'hw.16666.cyou',
+          endpoint: 'https://hw.16666.cyou:2053',
+          tlsCertId: wild.id,
+        }),
+      },
+      ctx.env,
+    );
+    expect(okRes.status).toBe(201);
+    const created = (await okRes.json()) as { node: { id: string; tlsCertId: string | null } };
+    expect(created.node.tlsCertId).toBe(wild.id);
+
+    // 切到 ip 直连时自动清空 tlsCertId
+    const toIp = await ctx.app.request(
+      `/api/v1/nodes/${created.node.id}`,
+      {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          accessMode: 'ip',
+          endpoint: 'http://1.2.3.4:8880',
+          domain: null,
+          allowInsecure: true,
+        }),
+      },
+      ctx.env,
+    );
+    expect(toIp.status).toBe(200);
+    const toIpBody = (await toIp.json()) as { node: { tlsCertId: string | null } };
+    expect(toIpBody.node.tlsCertId).toBeNull();
+  });
+});

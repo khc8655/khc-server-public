@@ -150,13 +150,17 @@ async function openInstall() {
   expect(await screen.findByRole('dialog')).toBeTruthy();
 }
 
-function fillPackage(url = URL, sha = SHA) {
+async function fillPackage(url = URL, sha = SHA) {
+  const advanced = screen.getByRole('button', { name: '高级' });
+  if (advanced.getAttribute('aria-expanded') !== 'true') {
+    await userEvent.click(advanced);
+  }
   fireEvent.change(screen.getByLabelText('安装包地址'), { target: { value: url } });
   fireEvent.change(screen.getByLabelText('sha256'), { target: { value: sha } });
 }
 
 describe('Agent 命令 UI', () => {
-  it('展示 Agent 版本/运行模式/最后在线并生成复制命令', async () => {
+  it('展示 Agent 版本/运行模式/最后在线并自动生成复制命令', async () => {
     await renderRoute('/hubs/tyo-1/settings');
     expect(await screen.findByText('Agent')).toBeTruthy();
     expect(await screen.findByText('v1.2.3')).toBeTruthy();
@@ -166,8 +170,8 @@ describe('Agent 命令 UI', () => {
     await openInstall();
     expect(screen.queryByText(/启用 Agent 自签 HTTPS/)).toBeNull();
     expect(screen.queryByLabelText('证书域名（CN）')).toBeNull();
-    fillPackage();
-    await userEvent.click(screen.getByRole('button', { name: '生成命令' }));
+    // 包 URL 与 sha256 默认收进「高级」，进入安装抽屉即自动生成命令
+    expect(screen.queryByLabelText('安装包地址')).toBeNull();
     const command = await screen.findByText(/khc-agent-0\.2\.0\.tar\.gz/);
     expect(command).toBeTruthy();
     expect(screen.getByText(/命令不包含节点令牌/)).toBeTruthy();
@@ -188,11 +192,13 @@ describe('Agent 命令 UI', () => {
   it('本地校验 URL 与 sha256 错误', async () => {
     await renderRoute('/hubs/tyo-1/settings');
     await openInstall();
-    fillPackage('http://example.com/a.tgz', 'bad');
-    await userEvent.click(screen.getByRole('button', { name: '生成命令' }));
+    await screen.findByText(/khc-agent-0\.2\.0\.tar\.gz/);
+    const beforeCalls = requests.filter((item) => item.url.endsWith('/agent/install-command')).length;
+    await fillPackage('http://example.com/a.tgz', 'bad');
+    await userEvent.click(screen.getByRole('button', { name: '重新生成' }));
     expect(await screen.findByText(/必须是 https/)).toBeTruthy();
     expect(await screen.findByText(/64 位十六进制/)).toBeTruthy();
-    expect(requests.some((item) => item.url.endsWith('/agent/install-command'))).toBe(false);
+    expect(requests.filter((item) => item.url.endsWith('/agent/install-command')).length).toBe(beforeCalls);
   });
 
   it('卸载命令免填包信息，带 purge；升级命令带 user 模式', async () => {
@@ -220,8 +226,6 @@ describe('Agent 命令 UI', () => {
     await openInstall();
     expect(screen.queryByText(/启用 Agent 自签 HTTPS/)).toBeNull();
     expect(screen.queryByLabelText('证书域名（CN）')).toBeNull();
-    fillPackage();
-    await userEvent.click(screen.getByRole('button', { name: '生成命令' }));
     expect(await screen.findByText(/无法生成命令/)).toBeTruthy();
   });
 
@@ -268,7 +272,7 @@ describe('Agent 命令 UI', () => {
       await renderRoute('/hubs/tyo-1/settings');
       await openInstall();
       expect(await screen.findByRole('dialog')).toBeTruthy();
-      expect(await screen.findByRole('button', { name: '生成命令' })).toBeTruthy();
+      expect(await screen.findByRole('button', { name: '我已完成安装' })).toBeTruthy();
     } finally {
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: original });
     }

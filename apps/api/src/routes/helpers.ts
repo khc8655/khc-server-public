@@ -82,6 +82,7 @@ export function toPublicNode(node: StoredNode, now = nowSec()): Node {
     preferredRoute: node.preferredRoute,
     status,
     expiresAt: node.expiresAt,
+    tlsCertId: node.tlsCertId,
     lastSeenAt: node.lastSeenAt,
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,

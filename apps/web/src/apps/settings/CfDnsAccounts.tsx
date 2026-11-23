@@ -21,7 +21,7 @@ import {
   updateCfDnsAccount,
   updateCfDnsRecord,
 } from '../../data/cfDns';
-import { fetchCertificates } from '../../data/certs';
+import { certCoversDomain, fetchCertificates, findCoveringCert, issueCfDnsCertificate } from '../../data/certs';
 import { fetchHubs } from '../../data/hubs';
 import { ApiError } from '../../data/client';
 import { nodeByDomain } from '../../data/endpoint';
@@ -86,6 +86,8 @@ interface RecordFormState {
   content: string;
   proxied: boolean;
   ttl: string;
+  issueCert: boolean;
+  certScope: 'wildcard' | 'exact';
   busy: boolean;
   error: string | null;
 }
@@ -116,10 +118,14 @@ function resolveRecordName(input: string, zoneName: string): string | null {
  */
 function ZoneRecords({
   zone,
+  accountId,
   nodes,
+  certs,
 }: {
   zone: CfDnsZoneRef;
+  accountId: string;
   nodes: Node[];
+  certs: Certificate[];
 }) {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -127,6 +133,9 @@ function ZoneRecords({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [certBanner, setCertBanner] = useState<{ domain: string; error: string } | null>(null);
+  const [certRetryBusy, setCertRetryBusy] = useState(false);
+  const [issuingRecordId, setIssuingRecordId] = useState<string | null>(null);
   /** 解析检测结果：按记录 id 存，点一次查一次，不自动轮询。 */
   const [checks, setChecks] = useState<Record<string, ResolveCheckState>>({});
   const query = useQuery({
@@ -178,6 +187,7 @@ function ZoneRecords({
   };
 
   const openCreate = () => {
+    setCertBanner(null);
     setForm({
       mode: 'create',
       recordId: null,
@@ -186,6 +196,8 @@ function ZoneRecords({
       content: '',
       proxied: false,
       ttl: '',
+      issueCert: true,
+      certScope: 'wildcard',
       busy: false,
       error: null,
     });
@@ -200,9 +212,55 @@ function ZoneRecords({
       content: record.content,
       proxied: record.proxied,
       ttl: '',
+      issueCert: false,
+      certScope: 'wildcard',
       busy: false,
       error: null,
     });
+  };
+
+  const runCertIssue = async (domain: string): Promise<boolean> => {
+    try {
+      await issueCfDnsCertificate({
+        name: domain,
+        accountId,
+        domains: [domain],
+        ca: 'letsencrypt',
+      });
+      await queryClient.invalidateQueries({ queryKey: ['certs'] });
+      setCertBanner(null);
+      toast.show({ message: fmt(zh.cfDns.recordCertIssuedToast, { domain }) });
+      return true;
+    } catch (certErr) {
+      setCertBanner({
+        domain,
+        error: errorText(certErr, zh.certs.actionFailed),
+      });
+      return false;
+    }
+  };
+
+  const retryCertIssue = async () => {
+    if (!certBanner) return;
+    setCertRetryBusy(true);
+    try {
+      await runCertIssue(certBanner.domain);
+    } finally {
+      setCertRetryBusy(false);
+    }
+  };
+
+  const issueForRecord = async (record: CfDnsZoneRecord) => {
+    setIssuingRecordId(record.id);
+    try {
+      const wildcardTarget = `*.${zone.name}`;
+      const certDomain = certCoversDomain([wildcardTarget], record.name)
+        ? wildcardTarget
+        : record.name;
+      await runCertIssue(certDomain);
+    } finally {
+      setIssuingRecordId(null);
+    }
   };
 
   const saveRecord = async () => {
@@ -247,17 +305,26 @@ function ZoneRecords({
         };
         await createCfDnsRecord(zone.id, payload);
         toast.show({ message: zh.cfDns.recordCreatedToast });
-      } else {
-        const patch: CfDnsRecordUpdateRequest = {
-          type: form.type,
-          name,
-          content: form.content.trim(),
-          proxied: form.proxied,
-          ...(ttl === undefined ? {} : { ttl }),
-        };
-        await updateCfDnsRecord(zone.id, form.recordId!, patch);
-        toast.show({ message: zh.cfDns.recordUpdatedToast });
+        await queryClient.invalidateQueries({ queryKey: ['cfDns', 'records', zone.id] });
+        const covering = form.type !== 'CNAME' ? findCoveringCert(certs, name) : null;
+        if (form.type !== 'CNAME' && form.issueCert && !covering) {
+          const wildcardTarget = `*.${zone.name}`;
+          const canWildcard = certCoversDomain([wildcardTarget], name);
+          const certDomain = form.certScope === 'wildcard' && canWildcard ? wildcardTarget : name;
+          await runCertIssue(certDomain);
+        }
+        setForm(null);
+        return;
       }
+      const patch: CfDnsRecordUpdateRequest = {
+        type: form.type,
+        name,
+        content: form.content.trim(),
+        proxied: form.proxied,
+        ...(ttl === undefined ? {} : { ttl }),
+      };
+      await updateCfDnsRecord(zone.id, form.recordId!, patch);
+      toast.show({ message: zh.cfDns.recordUpdatedToast });
       await queryClient.invalidateQueries({ queryKey: ['cfDns', 'records', zone.id] });
       setForm(null);
     } catch (error) {
@@ -278,8 +345,17 @@ function ZoneRecords({
     }
   };
 
-  const formPanel = (prefix: string) =>
-    form ? (
+  const formPanel = (prefix: string) => {
+    if (!form) return null;
+    const isAddressCreate = form.mode === 'create' && form.type !== 'CNAME';
+    const resolvedPreview = isAddressCreate ? resolveRecordName(form.name, zone.name) : null;
+    const wildcardTarget = `*.${zone.name}`;
+    const wildcardCovers = !resolvedPreview || certCoversDomain([wildcardTarget], resolvedPreview);
+    const coveringCert = isAddressCreate
+      ? findCoveringCert(certs, resolvedPreview ?? wildcardTarget)
+      : null;
+    const effectiveScope = wildcardCovers ? form.certScope : 'exact';
+    return (
       <div className="ui-record-panel">
         <Stack gap={3}>
           <Field id={`record-type-${prefix}`} label={zh.cfDns.recordTypeLabel}>
@@ -352,6 +428,61 @@ function ZoneRecords({
               onChange={(value) => setForm((prev) => (prev ? { ...prev, ttl: value } : prev))}
             />
           </Field>
+          {isAddressCreate ? (
+            coveringCert ? (
+              <Banner
+                tone="info"
+                title={fmt(zh.cfDns.recordCertCovered, {
+                  domain: coveringCert.domains[0] ?? coveringCert.name,
+                })}
+              />
+            ) : (
+              <Stack gap={2}>
+                <Checkbox
+                  checked={form.issueCert}
+                  onChange={(checked) =>
+                    setForm((prev) => (prev ? { ...prev, issueCert: checked } : prev))
+                  }
+                  label={zh.cfDns.recordIssueCertLabel}
+                />
+                {form.issueCert ? (
+                  <Field
+                    id={`record-cert-scope-${prefix}`}
+                    label={zh.cfDns.recordCertScopeLabel}
+                    help={zh.cfDns.recordIssueCertHelp}
+                  >
+                    <Select
+                      id={`record-cert-scope-${prefix}`}
+                      value={effectiveScope}
+                      options={[
+                        ...(wildcardCovers
+                          ? [
+                              {
+                                value: 'wildcard',
+                                label: fmt(zh.cfDns.recordCertScopeWildcard, { zone: zone.name }),
+                              },
+                            ]
+                          : []),
+                        {
+                          value: 'exact',
+                          label: fmt(zh.cfDns.recordCertScopeExact, {
+                            name: resolvedPreview ?? zone.name,
+                          }),
+                        },
+                      ]}
+                      onChange={(value) =>
+                        setForm((prev) =>
+                          prev
+                            ? { ...prev, certScope: value === 'exact' ? 'exact' : 'wildcard' }
+                            : prev,
+                        )
+                      }
+                    />
+                  </Field>
+                ) : null}
+              </Stack>
+            )
+          ) : null}
           {form.error ? <InlineError message={form.error} /> : null}
           <Row gap={2}>
             <Button label={zh.common.cancel} size="sm" onClick={() => setForm(null)} />
@@ -365,7 +496,8 @@ function ZoneRecords({
           </Row>
         </Stack>
       </div>
-    ) : null;
+    );
+  };
 
   if (query.isLoading) {
     return <span className="ui-muted">{zh.cfDns.recordsLoading}</span>;
@@ -399,6 +531,20 @@ function ZoneRecords({
           onClick={openCreate}
         />
       </Row>
+      {certBanner ? (
+        <Banner
+          tone="warn"
+          title={fmt(zh.cfDns.recordCertIssueFailed, { error: certBanner.error })}
+          action={
+            <Button
+              label={zh.cfDns.recordCertRetryBtn}
+              size="sm"
+              loading={certRetryBusy}
+              onClick={() => void retryCertIssue()}
+            />
+          }
+        />
+      ) : null}
       {form?.mode === 'create' ? formPanel('new') : null}
       {records.length === 0 ? (
         <span className="ui-muted">{zh.cfDns.recordsEmpty}</span>
@@ -406,6 +552,8 @@ function ZoneRecords({
         <div className="ui-record-list">
           {records.map((record) => {
             const bound = nodeByDomain(nodes, record.name);
+            const isAddressRecord = record.type === 'A' || record.type === 'AAAA';
+            const coveringCert = isAddressRecord ? findCoveringCert(certs, record.name) : null;
             const editing = form?.mode === 'edit' && form.recordId === record.id;
             const check = checks[record.id];
             return (
@@ -419,6 +567,16 @@ function ZoneRecords({
                     <Tag label={record.proxied ? zh.cfDns.recordProxied : zh.cfDns.recordUnproxied} />
                   </div>
                   <Row gap={1}>
+                    {isAddressRecord && !coveringCert ? (
+                      <Button
+                        label={zh.cfDns.recordCertIssueBtn}
+                        variant="ghost"
+                        size="sm"
+                        loading={issuingRecordId === record.id}
+                        disabled={editing || issuingRecordId !== null}
+                        onClick={() => void issueForRecord(record)}
+                      />
+                    ) : null}
                     <Button
                       label={zh.cfDns.resolveCheck}
                       variant="ghost"
@@ -450,10 +608,22 @@ function ZoneRecords({
                 <div className="ui-record-content" title={record.content}>
                   {record.content}
                 </div>
-                {bound || record.managed ? (
+                {bound || record.managed || isAddressRecord ? (
                   <div className="ui-record-tags">
                     {bound ? <Tag label={fmt(zh.cfDns.recordBound, { name: bound.name })} /> : null}
                     {record.managed ? <Tag label={zh.cfDns.recordManaged} /> : null}
+                    {isAddressRecord ? (
+                      coveringCert ? (
+                        <Badge
+                          tone="ok"
+                          label={fmt(zh.cfDns.recordCertOk, {
+                            domain: coveringCert.domains[0] ?? coveringCert.name,
+                          })}
+                        />
+                      ) : (
+                        <Badge tone="warn" label={zh.cfDns.recordCertMissing} />
+                      )
+                    ) : null}
                   </div>
                 ) : null}
                 {check?.status === 'done' ? (
@@ -1081,7 +1251,9 @@ export function CfDnsAccounts({
         >
           <ZoneRecords
             zone={domainTarget.zone}
+            accountId={domainTarget.account.id}
             nodes={nodes}
+            certs={certs}
           />
         </Drawer>
       ) : null}

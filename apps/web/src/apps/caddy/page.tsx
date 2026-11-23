@@ -5,7 +5,7 @@ import type { Certificate, TaskResponse } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
 import { hubAppsQueryOptions, hubQueryOptions, refreshHubRuntime } from '../../data/queries';
-import { certificatesQueryOptions } from '../../data/certs';
+import { certificatesQueryOptions, pickPreferredCertId } from '../../data/certs';
 import {
   PORT_FORWARD_APP,
   emptyForwardConfig,
@@ -535,7 +535,14 @@ export default function SitesPage() {
     const next = createForm();
     const vmDomain = hubQuery.data?.domain?.trim() ?? '';
     const agentPort = parseEndpointPort(hubQuery.data?.endpoint);
-    if (vmDomain) next.domains = vmDomain;
+    if (vmDomain) {
+      next.domains = vmDomain;
+      const preferredCertId = pickPreferredCertId(certs, vmDomain, hubQuery.data?.tlsCertId);
+      if (preferredCertId) {
+        next.tlsMode = 'manual';
+        next.certId = preferredCertId;
+      }
+    }
     if (preset?.upstreams) {
       next.upstreams = preset.upstreams;
       const upstreamPort = preset.port ?? splitUpstreamHostPort(preset.upstreams).port;
@@ -593,11 +600,43 @@ export default function SitesPage() {
       return;
     }
     if (drawer === 'site:new') {
-      if (form) return;
-      const initialForm = createForm();
       const vmDomain = hubQuery.data?.domain?.trim() ?? '';
+      if (form) {
+        if (
+          form.mode === 'create' &&
+          certsQuery.data &&
+          vmDomain &&
+          form.tlsMode === 'auto' &&
+          !form.certId &&
+          siteSignature(form) === form.initial
+        ) {
+          const preferredCertId = pickPreferredCertId(
+            certsQuery.data,
+            vmDomain,
+            hubQuery.data?.tlsCertId,
+          );
+          if (preferredCertId) {
+            const updated: SiteFormState = {
+              ...form,
+              tlsMode: 'manual',
+              certId: preferredCertId,
+            };
+            updated.initial = siteSignature(updated);
+            setForm(updated);
+          }
+        }
+        return;
+      }
+      const initialForm = createForm();
       const agentPort = parseEndpointPort(hubQuery.data?.endpoint);
-      if (vmDomain) initialForm.domains = vmDomain;
+      if (vmDomain) {
+        initialForm.domains = vmDomain;
+        const preferredCertId = pickPreferredCertId(certs, vmDomain, hubQuery.data?.tlsCertId);
+        if (preferredCertId) {
+          initialForm.tlsMode = 'manual';
+          initialForm.certId = preferredCertId;
+        }
+      }
       if (search.upstream) {
         initialForm.upstreams = search.upstream;
         // D-09：记录发布时端口，后续改 Peer 地址时据此提示「端口被手工改过」。
@@ -631,9 +670,9 @@ export default function SitesPage() {
       );
       if (site) setForm(editForm(site));
     }
-    // 仅在抽屉参数 / 配置加载状态变化时同步
+    // 仅在抽屉参数 / 配置 / 证书加载状态变化时同步
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.drawer, caddyQuery.isSuccess]);
+  }, [search.drawer, caddyQuery.isSuccess, certsQuery.data, hubQuery.data?.tlsCertId]);
 
   const invalidateConfig = async () => {
     await Promise.all([

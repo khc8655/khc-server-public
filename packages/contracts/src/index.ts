@@ -192,6 +192,8 @@ export const nodeSchema = z.object({
   status: nodeStatusSchema,
   /** 节点固定到期日期（YYYY-MM-DD，手动维护、不自动顺延；未设置为 null） */
   expiresAt: calendarDateSchema.nullable().optional(),
+  /** 节点绑定的全局证书库 ID（accessMode=domain 时可选；首次安装直拉与续期自动同步） */
+  tlsCertId: z.string().nullable().optional(),
   lastSeenAt: z.number().int().nonnegative().nullable(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -232,6 +234,8 @@ export const createNodeRequestSchema = z.object({
   allowInsecure: z.boolean().optional(),
   /** 节点固定到期日期（YYYY-MM-DD，可选；不自动顺延） */
   expiresAt: calendarDateSchema.nullable().optional(),
+  /** 绑定全局证书库记录（仅 accessMode=domain 时有效） */
+  tlsCertId: z.string().trim().min(1).max(64).nullish(),
 });
 export type CreateNodeRequest = z.infer<typeof createNodeRequestSchema>;
 
@@ -258,6 +262,8 @@ export const updateNodeRequestSchema = z.object({
   token: z.string().trim().min(16).max(128).optional(),
   /** 节点固定到期日期（YYYY-MM-DD，传 null 表示清除） */
   expiresAt: calendarDateSchema.nullable().optional(),
+  /** 绑定/更换/解绑全局证书库记录（仅 accessMode=domain 时有效；传 null 表示解绑） */
+  tlsCertId: z.string().trim().min(1).max(64).nullish(),
 });
 export type UpdateNodeRequest = z.infer<typeof updateNodeRequestSchema>;
 
@@ -377,6 +383,8 @@ export const expiringCertSummarySchema = z.object({
   name: z.string().min(1),
   daysLeft: z.number().int(),
   nodeId: z.string().nullable(),
+  renewable: z.boolean().optional(),
+  autoSync: z.boolean().optional(),
 });
 export type ExpiringCertSummary = z.infer<typeof expiringCertSummarySchema>;
 
@@ -1080,6 +1088,7 @@ export const certificateUsageItemSchema = z.object({
   nodeName: z.string(),
   apps: z.array(z.string()),
   isSourceNode: z.boolean(),
+  isNodeTls: z.boolean().optional(),
 });
 export type CertificateUsageItem = z.infer<typeof certificateUsageItemSchema>;
 
@@ -1406,6 +1415,15 @@ export const agentCommandResponseSchema = z.object({
   token: z.string().min(1).max(512).optional(),
 });
 export type AgentCommandResponse = z.infer<typeof agentCommandResponseSchema>;
+
+/** 节点安装引导拉取控制通道 TLS 证书响应（HMAC 鉴权，no-store） */
+export const nodeBootstrapTlsResponseSchema = z.object({
+  certPem: z.string().min(1),
+  keyPem: z.string().min(1),
+  domains: z.array(z.string()),
+  notAfter: z.number().int().nullable(),
+});
+export type NodeBootstrapTlsResponse = z.infer<typeof nodeBootstrapTlsResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // C5 阶段二：Agent 拉取式自升级/重装（docs/agent-lifecycle.md §7）

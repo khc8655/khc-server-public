@@ -421,8 +421,8 @@ describe('S3：控制面原生 ACME v2 + Cloudflare DNS-01', () => {
     };
     expect(renewed.certificate.id).toBe(issued.certificate.id);
     expect(renewed.certificate.renewable).toBe(true);
-    expect(renewed.certificate.autoSync).toBe(false);
-    expect(renewed.syncResults).toBeUndefined();
+    expect(renewed.certificate.autoSync).toBe(true);
+    expect(renewed.syncResults).toEqual([]);
   });
 
   it('S4：关联查询 / PATCH autoSync / 手动与续期自动同步到多节点（含离线节点部分失败回执）', async () => {
@@ -553,20 +553,15 @@ describe('S3：控制面原生 ACME v2 + Cloudflare DNS-01', () => {
       },
     ]);
 
-    // 3. 开启 autoSync 后再续期：自动下发并返回 syncResults
-    const patchRes = await ctx.app.request(
+    // 3. 绑定节点的 tlsCertId 后续期（默认已开启 autoSync）：自动下发 Caddy 站点并热重载节点 TLS，同时拦删（409）
+    await ctx.nodes.update(nodeOnline.id, { tlsCertId: certId });
+
+    const delBlocked = await ctx.app.request(
       `/api/v1/certs/${certId}`,
-      {
-        method: 'PATCH',
-        headers: authHeaders(cookie),
-        body: JSON.stringify({ autoSync: true }),
-      },
+      { method: 'DELETE', headers: authHeaders(cookie) },
       ctx.env,
     );
-    expect(patchRes.status).toBe(200);
-    expect(((await patchRes.json()) as { certificate: { autoSync: boolean } }).certificate.autoSync).toBe(
-      true,
-    );
+    expect(delBlocked.status).toBe(409);
 
     const reqCountBefore = ctx.agent.requests.length;
     const autoRenewRes = await ctx.app.request(
@@ -577,12 +572,31 @@ describe('S3：控制面原生 ACME v2 + Cloudflare DNS-01', () => {
     expect(autoRenewRes.status).toBe(200);
     const autoRenewBody = (await autoRenewRes.json()) as {
       certificate: { autoSync: boolean };
-      syncResults?: Array<{ nodeName: string; status: string }>;
+      syncResults?: Array<{ nodeName: string; status: string; tlsBound: boolean }>;
     };
     expect(autoRenewBody.certificate.autoSync).toBe(true);
     expect(autoRenewBody.syncResults).toHaveLength(2);
-    expect(autoRenewBody.syncResults?.find((r) => r.nodeName === 'hub-online')?.status).toBe('synced');
+    expect(autoRenewBody.syncResults?.find((r) => r.nodeName === 'hub-online')).toMatchObject({
+      status: 'synced',
+      tlsBound: true,
+    });
     expect(autoRenewBody.syncResults?.find((r) => r.nodeName === 'hub-offline')?.status).toBe('offline');
     expect(ctx.agent.requests.length).toBeGreaterThan(reqCountBefore);
+    expect(ctx.agent.requests.some((req) => req.path === '/apps/certificates/install_tls')).toBe(true);
+
+    // 4. 关闭 autoSync 正常保存
+    const patchRes = await ctx.app.request(
+      `/api/v1/certs/${certId}`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ autoSync: false }),
+      },
+      ctx.env,
+    );
+    expect(patchRes.status).toBe(200);
+    expect(((await patchRes.json()) as { certificate: { autoSync: boolean } }).certificate.autoSync).toBe(
+      false,
+    );
   });
 });

@@ -15,6 +15,7 @@ export interface NodeRow {
   token_enc: string;
   rev_epoch: string;
   expires_at: string | null;
+  tls_cert_id: string | null;
   last_seen_at: number | null;
   created_at: number;
   updated_at: number;
@@ -44,6 +45,7 @@ export function mapStoredNode(row: NodeRow): StoredNode {
     tokenEnc: row.token_enc,
     revEpoch: row.rev_epoch,
     expiresAt: row.expires_at ?? null,
+    tlsCertId: row.tls_cert_id ?? null,
     lastSeenAt: row.last_seen_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

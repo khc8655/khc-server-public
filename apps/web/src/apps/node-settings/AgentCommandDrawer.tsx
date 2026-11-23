@@ -17,18 +17,19 @@ import {
 import {
   Banner,
   Button,
-  Checkbox,
   CodeBlock,
   Drawer,
   Field,
   InlineError,
   Row,
   Segmented,
+  Skeleton,
   Stack,
   TextInput,
   Toggle,
 } from '../../ui';
 import { zh } from '../../i18n/zh';
+import { NodeInstallPanel } from './NodeInstallPanel';
 
 interface FormErrors {
   packageUrl?: string;
@@ -67,14 +68,12 @@ export function AgentCommandDrawer({
   const [packageUrl, setPackageUrl] = useState('');
   const [sha256, setSha256] = useState('');
   const [purge, setPurge] = useState(false);
-  /** P0-1：安装命令可选组件（仅 kind==='install'；默认全不勾）。 */
-  const [installOpts, setInstallOpts] = useState({ withCaddy: false });
   const [errors, setErrors] = useState<FormErrors>({});
   const [command, setCommand] = useState<AgentCommandResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  const nodeQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
+  const nodeQuery = useQuery(hubQueryOptions(hubId));
   const node = nodeQuery.data;
   const modeLabel =
     node?.accessMode === 'domain'
@@ -88,9 +87,9 @@ export function AgentCommandDrawer({
     setError(null);
   };
 
-  // 安装/升级优先使用 Worker 已签名的发布清单，避免用户手填 URL/sha。
+  // 升级抽屉优先使用 Worker 已签名的发布清单，避免用户手填 URL/sha。
   useEffect(() => {
-    if (!open || kind === 'uninstall' || packageUrl || sha256) return;
+    if (!open || kind !== 'upgrade' || packageUrl || sha256) return;
     let cancelled = false;
     void fetchAgentReleases()
       .then((releases) => {
@@ -131,12 +130,6 @@ export function AgentCommandDrawer({
         packageUrl: kind === 'uninstall' ? undefined : packageUrl,
         sha256: kind === 'uninstall' ? undefined : sha256,
         purge: kind === 'uninstall' ? purge : undefined,
-        installOptions:
-          kind === 'install'
-            ? {
-                withCaddy: installOpts.withCaddy,
-              }
-            : undefined,
       });
       setCommand(result);
     } catch (err) {
@@ -148,6 +141,32 @@ export function AgentCommandDrawer({
       setGenerating(false);
     }
   };
+
+  if (kind === 'install') {
+    return (
+      <Drawer
+        open={open}
+        title={kindTitle('install')}
+        context={zh.agent.drawerContext.replace('{hub}', hubName)}
+        onClose={onClose}
+        footer={<Button label={zh.common.close} onClick={onClose} />}
+      >
+        {nodeQuery.isLoading && !node ? (
+          <Skeleton height={120} />
+        ) : (
+          <NodeInstallPanel
+            hubId={hubId}
+            hubName={hubName}
+            accessMode={node?.accessMode ?? 'domain'}
+            endpoint={node?.endpoint}
+            domain={node?.domain}
+            tlsCertId={node?.tlsCertId}
+            offline={offline}
+          />
+        )}
+      </Drawer>
+    );
+  }
 
   return (
     <Drawer
@@ -181,9 +200,6 @@ export function AgentCommandDrawer({
               <Link to={paths.hubSection(hubId, 'settings')} label={zh.agent.changeAccess} />
             }
           />
-        ) : null}
-        {kind === 'install' ? (
-          <Banner tone="warn" title={zh.hubs.installOverwriteTitle} description={zh.hubs.installOverwriteHint} />
         ) : null}
         <Banner tone="warn" title={zh.agent.tokenWarning} />
 
@@ -255,21 +271,6 @@ export function AgentCommandDrawer({
               }}
             />
           </Field>
-        ) : null}
-
-        {kind === 'install' ? (
-          <Stack gap={1}>
-            <p className="ui-field-label">{zh.hubs.installOptionsTitle}</p>
-            <Checkbox
-              checked={installOpts.withCaddy}
-              onChange={(checked) => {
-                setInstallOpts((prev) => ({ ...prev, withCaddy: checked }));
-                clearResult();
-              }}
-              label={zh.hubs.installWithCaddy}
-            />
-            <p className="ui-field-help">{zh.hubs.installOptionsHint}</p>
-          </Stack>
         ) : null}
 
         {errors.mode ? <InlineError message={errors.mode} /> : null}

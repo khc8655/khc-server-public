@@ -21,7 +21,7 @@ import { snapshotRoutes } from './routes/snapshot';
 import { diagnosticsRoutes } from './routes/diagnostics';
 import { modeRoutes } from './routes/mode';
 import { backupRoutes } from './routes/backup';
-import { agentLifecycleRoutes } from './routes/agent_lifecycle';
+import { agentLifecycleRoutes, nodeBootstrapRoutes } from './routes/agent_lifecycle';
 import { cfDnsRoutes } from './routes/cfDns';
 import { sshKeyRoutes } from './routes/sshKeys';
 import { appManifestRoutes } from './routes/appManifests';
@@ -67,6 +67,9 @@ const PUBLIC_API_PATHS = new Set([
   '/api/v1/health',
   '/api/v1/version',
 ]);
+
+/** 节点安装引导拉取控制通道证书：自带节点 HMAC-SHA256 鉴权，不走管理员会话 cookie */
+const BOOTSTRAP_TLS_PATH_RE = /^\/api\/v1\/nodes\/[^/]+\/bootstrap\/tls$/;
 
 /** 面板对外入口白名单（跨第三方边缘回源 CSRF Origin 校验，仅 Worker 使用）：LIVE_ORIGINS 逗号分隔；未配置时为空。 */
 function allowedOriginSet(raw: string | undefined): Set<string> {
@@ -123,6 +126,7 @@ export function createApp(rawDeps: AppDeps): Hono<AppBindings> {
     // 注入 settings 仓库：会话版本校验与 TOTP 读写复用同一仓库（登录白名单路径也需可用）
     c.set('settings', deps.settings);
     if (PUBLIC_API_PATHS.has(c.req.path)) return next();
+    if (c.req.method === 'GET' && BOOTSTRAP_TLS_PATH_RE.test(c.req.path)) return next();
     return requireAuth(c, next);
   });
 
@@ -167,6 +171,7 @@ export function createApp(rawDeps: AppDeps): Hono<AppBindings> {
 
   // ---- 业务路由 ----
   app.route('/api/v1', authRoutes());
+  app.route('/api/v1', nodeBootstrapRoutes(deps));
   app.route('/api/v1', nodeRoutes(deps));
   app.route('/api/v1', appRoutes(deps));
   app.route('/api/v1', certificateRoutes(deps));

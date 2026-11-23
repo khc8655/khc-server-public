@@ -27,6 +27,8 @@ TLS_CN=""
 # 外部提供的可信证书（如 acme.sh --install-cert 的输出）；与自签 --tls-self-signed 互斥，优先生效。
 TLS_CERT_IN=""
 TLS_KEY_IN=""
+# 面板证书引导 URL：存在时使用节点 token HMAC 从面板拉取证书写入 --tls-cert/--tls-key，跳过 acme.sh。
+TLS_BOOTSTRAP_URL=""
 # 一键签发：证书缺失时用 acme.sh 自动申请（TLS-ALPN-01 走 443，失败回退 HTTP-01 走 80）。
 # 仅系统模式支持（443 需要 root）；已有证书时直接跳过。
 ACME_DOMAIN=""
@@ -49,8 +51,11 @@ usage() {
   --host HOST       Agent 监听地址（默认 0.0.0.0；隧道模式用 127.0.0.1）
   --port PORT       Agent 监听端口（默认 8880；HTTPS 直连常用 9443 等非标端口）
   --tls-cert FILE   可信 TLS 证书（PEM，含完整链）；与 --tls-key 成对。控制面会严格校验证书，
-                    推荐 acme.sh DNS-01 签发并 --install-cert 到固定路径（见 docs/runbook/node-onboarding.md §4.1）
+                    推荐由面板证书库下发（--tls-bootstrap-url）或 acme.sh DNS-01 签发
   --tls-key FILE    与 --tls-cert 配对的私钥（PEM，建议 0600）
+  --tls-bootstrap-url URL
+                    使用节点 token HMAC 签名从面板拉取控制通道证书并写入 --tls-cert/--tls-key
+                    （零 acme.sh、不占用入站 80/443；面板绑定证书后由安装命令自动带上）
   --acme DOMAIN     证书缺失时自动用 acme.sh 签发到 --tls-cert/--tls-key（TLS-ALPN-01 走 443，
                     失败回退 HTTP-01 走 80；需系统模式 root，且域名已解析到本机、Cloudflare 为「仅 DNS」）
   --acme-dns PROVIDER
@@ -108,6 +113,8 @@ while [ $# -gt 0 ]; do
     --tls-cert=*) TLS_CERT_IN="${1#*=}" ;;
     --tls-key) TLS_KEY_IN="${2:?--tls-key 需要一个参数}"; shift ;;
     --tls-key=*) TLS_KEY_IN="${1#*=}" ;;
+    --tls-bootstrap-url) TLS_BOOTSTRAP_URL="${2:?--tls-bootstrap-url 需要一个参数}"; shift ;;
+    --tls-bootstrap-url=*) TLS_BOOTSTRAP_URL="${1#*=}" ;;
     --acme) ACME_DOMAIN="${2:?--acme 需要一个域名}"; shift ;;
     --acme=*) ACME_DOMAIN="${1#*=}" ;;
     --acme-dns) ACME_DNS="${2:?--acme-dns 需要一个 provider}"; shift ;;
@@ -132,6 +139,16 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$TLS_BOOTSTRAP_URL" ]; then
+  case "$TLS_BOOTSTRAP_URL" in
+    https://*|http://127.0.0.1*|http://localhost*|http://\[::1\]*) ;;
+    *) fail "--tls-bootstrap-url 必须使用 https:// 地址: $TLS_BOOTSTRAP_URL" ;;
+  esac
+  if [ -z "$TLS_CERT_IN" ] || [ -z "$TLS_KEY_IN" ]; then
+    fail "--tls-bootstrap-url 需要与 --tls-cert/--tls-key 一起使用（证书写入这两个路径）"
+  fi
+fi
 
 if [ -n "$ACME_DOMAIN" ]; then
   case "$ACME_DOMAIN" in
@@ -299,7 +316,9 @@ run_preflight() {
   if [ -n "$TLS_CN" ] && [ "$TLS" != "1" ]; then
     ck_warn "--tls-cn 仅用于自签证书（--tls-self-signed）；当前未启用自签，已忽略。域名 + 可信证书请用 --tls-cert/--tls-key"
   fi
-  if [ -n "$ACME_DOMAIN" ]; then
+  if [ -n "$TLS_BOOTSTRAP_URL" ]; then
+    ck_pass "控制通道证书将从面板证书库拉取（无需安装 acme.sh，不占用入站 80/443）"
+  elif [ -n "$ACME_DOMAIN" ]; then
     if [ -n "$ACME_DNS" ]; then
       ck_pass "ACME 走 DNS-01：provider=${ACME_DNS}，凭据环境变量齐全，不占用入站 80/443"
     elif [ -s "$TLS_CERT_IN" ] && [ -s "$TLS_KEY_IN" ]; then
@@ -428,7 +447,8 @@ transport_error() {
     case "$TLS_CERT_IN" in /*) ;; *) echo "--tls-cert 必须是绝对路径: $TLS_CERT_IN"; return 0 ;; esac
     case "$TLS_KEY_IN" in /*) ;; *) echo "--tls-key 必须是绝对路径: $TLS_KEY_IN"; return 0 ;; esac
     if [ ! -s "$TLS_CERT_IN" ]; then
-      # 一键签发：证书缺失不是错误，稍后由 acme_issue 自动申请。
+      # 引导拉取或一键签发：证书缺失不是错误，稍后由 bootstrap_tls_cert / acme_issue 写入。
+      [ -n "$TLS_BOOTSTRAP_URL" ] && return 0
       [ -n "$ACME_DOMAIN" ] && return 0
       echo "证书文件不存在或为空: $TLS_CERT_IN
 「同时安装 Caddy」只安装软件包，不会替 Agent 申请或写入证书。先签发并写到固定路径（见 docs/runbook/node-onboarding.md §4.1）：
@@ -440,6 +460,7 @@ HTTP-01 替代：~/.acme.sh/acme.sh --issue -d <证书域名> --standalone（需
       return 0
     fi
     if [ ! -s "$TLS_KEY_IN" ]; then
+      [ -n "$TLS_BOOTSTRAP_URL" ] && return 0
       [ -n "$ACME_DOMAIN" ] && return 0
       echo "私钥文件不存在或为空: ${TLS_KEY_IN}（与证书成对写入：acme.sh --install-cert --key-file 该路径）"
       return 0
@@ -524,6 +545,112 @@ EOF
   fi
 }
 
+# 面板证书引导拉取（--tls-bootstrap-url）：用刚落盘的节点 token 对控制面做 HMAC 签名，
+# 直接获取完整证书与私钥并按 0644/0600 原子写入 --tls-cert/--tls-key（零 acme.sh）。
+bootstrap_tls_cert() {
+  local url="$1"
+  [ -n "$url" ] || return 0
+  [ -s "$TOKEN_FILE" ] || fail "缺少节点 token 文件（$TOKEN_FILE），无法拉取面板证书"
+  log "从面板证书库拉取控制通道证书（零 acme.sh）..."
+  "$PYTHON" - "$url" "$TOKEN_FILE" "$TLS_CERT_IN" "$TLS_KEY_IN" <<'PY' || fail "从面板拉取 TLS 证书失败（请核对节点 token、面板地址连通性及证书绑定状态）"
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+url, token_file, cert_out, key_out = sys.argv[1:5]
+with open(token_file, "r", encoding="utf-8") as handle:
+    token = handle.read().strip()
+if not token:
+    print("[khc-agent] 节点 token 为空", file=sys.stderr)
+    sys.exit(1)
+
+parsed = urllib.parse.urlsplit(url)
+path = parsed.path or "/"
+ts = str(int(time.time()))
+nonce = secrets.token_hex(16)
+body_hash = hashlib.sha256(b"").hexdigest()
+signing = f"GET|{path}|{ts}|{nonce}|{body_hash}"
+sig = hmac.new(token.encode("utf-8"), signing.encode("utf-8"), hashlib.sha256).hexdigest()
+
+req = urllib.request.Request(
+    url,
+    method="GET",
+    headers={
+        "X-Khc-Ts": ts,
+        "X-Khc-Nonce": nonce,
+        "X-Khc-Sig": sig,
+        "Accept": "application/json",
+    },
+)
+try:
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8")
+except urllib.error.HTTPError as exc:
+    detail = ""
+    try:
+        err_body = exc.read(512).decode("utf-8", "replace")
+        err_json = json.loads(err_body)
+        msg = (err_json.get("error") or {}).get("message")
+        if isinstance(msg, str) and msg.strip():
+            detail = f"（{msg.strip()}）"
+    except Exception:
+        pass
+    print(f"[khc-agent] 面板证书接口返回 HTTP {exc.code}{detail}", file=sys.stderr)
+    sys.exit(1)
+except Exception as exc:
+    print(f"[khc-agent] 请求面板证书接口失败: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    payload = json.loads(raw)
+except Exception as exc:
+    print(f"[khc-agent] 面板证书响应不是合法 JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+cert_pem = payload.get("certPem")
+key_pem = payload.get("keyPem")
+if not isinstance(cert_pem, str) or "BEGIN CERTIFICATE" not in cert_pem:
+    print("[khc-agent] 面板返回的证书格式不正确", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(key_pem, str) or "PRIVATE KEY" not in key_pem:
+    print("[khc-agent] 面板返回的私钥格式不正确", file=sys.stderr)
+    sys.exit(1)
+
+def atomic_write_pem(target: str, content: str, mode: int) -> None:
+    parent = os.path.dirname(target) or "/"
+    os.makedirs(parent, mode=0o750, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".khc-tls-", dir=parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            if not content.endswith("\n"):
+                handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+atomic_write_pem(cert_out, cert_pem, 0o644)
+atomic_write_pem(key_out, key_pem, 0o600)
+PY
+  log "控制通道证书已导入: $TLS_CERT_IN"
+}
+
 # 一键签发（--acme）：证书缺失时用 acme.sh 申请并安装到 --tls-cert/--tls-key 路径。
 # 优先 TLS-ALPN-01（只占用 443），失败回退 HTTP-01（80）；--acme-dns 走 DNS-01（不占端口）。
 # 已有证书直接跳过签发，但仍补齐续期 timer。
@@ -576,14 +703,19 @@ acme_issue() {
       log "WARN: 未安装 cron；acme.sh 将跳过自动续期（证书到期前需手工续签）"
     fi
   fi
-  if ! curl -fsSL https://get.acme.sh | sh -s email="acme@${domain}" >/dev/null 2>&1; then
+  local acme_install_log
+  acme_install_log="$(mktemp "${TMPDIR:-/tmp}/khc-acme-install.XXXXXX")"
+  if ! curl -fsSL --connect-timeout 15 --max-time 60 https://get.acme.sh | sh -s email="acme@${domain}" >"$acme_install_log" 2>&1; then
     # 安装器可能仅因无法注册 cron 而返回失败；acme.sh 本体通常已就位。
     if [ -x /root/.acme.sh/acme.sh ] || [ -x "$HOME/.acme.sh/acme.sh" ]; then
       log "WARN: acme.sh 安装脚本返回失败（常见原因：缺少 cron）；证书仍可签发，但自动续期不可用"
     else
-      fail "acme.sh 安装失败：请确认可出站访问 https://get.acme.sh（并安装 cron）"
+      tail -n 20 "$acme_install_log" >&2 || true
+      rm -f -- "$acme_install_log"
+      fail "acme.sh 安装失败：请确认可出站访问 https://get.acme.sh（已设 15s 连接 / 60s 总超时；受限网络建议改用面板证书库下发）"
     fi
   fi
+  rm -f -- "$acme_install_log"
   # acme.sh 的 TLS-ALPN-01 依赖 socat；DNS-01 不需要，跳过以免白装包。
   if [ -z "$dns_plugin" ] && ! command -v socat >/dev/null 2>&1; then
     log "安装 socat（TLS-ALPN-01 需要）..."
@@ -875,8 +1007,12 @@ sys.exit(1)
 PY
 }
 
-# 一键签发必须在服务启动前完成：Agent 启动时会立刻读取证书。
-acme_issue "$ACME_DOMAIN"
+# 证书准备必须在服务启动前完成：Agent 启动时会立刻读取证书。
+if [ -n "$TLS_BOOTSTRAP_URL" ]; then
+  bootstrap_tls_cert "$TLS_BOOTSTRAP_URL"
+else
+  acme_issue "$ACME_DOMAIN"
+fi
 
 if [ "$START" = "1" ]; then
   if [ "$PROFILE" = "system" ]; then

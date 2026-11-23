@@ -830,4 +830,25 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(await screen.findByText(/已停止等待；请查看任务日志/)).toBeTruthy();
     expect(screen.getByText('still running')).toBeTruthy();
   });
+
+  it('全局证书库存在匹配证书时，进入第 2 步默认选用「全局证书库」并预填优选 certId', async () => {
+    window.scrollTo = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
+        return json({});
+      }),
+    );
+
+    renderWizard({ certificates: [wildcardCert] });
+    expect(await screen.findByText('magpie')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+
+    const tlsSelect = (await screen.findByLabelText('TLS 证书模式')) as HTMLSelectElement;
+    expect(tlsSelect.value).toBe('manual');
+    const certSelect = (await screen.findByLabelText(/选择全局证书/)) as HTMLSelectElement;
+    expect(certSelect.value).toBe(wildcardCert.id);
+  });
 });

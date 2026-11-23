@@ -76,10 +76,10 @@ function importError(error: unknown): ImportErrorState {
 export default function HubSettingsPage() {
   const { hubId } = useParams({ from: '/hubs/$hubId/settings' });
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; action?: string };
   const queryClient = useQueryClient();
   const toast = useToast();
-  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
+  const hubQuery = useQuery(hubQueryOptions(hubId));
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const hubName = hubQuery.data?.name ?? hubId;
   const { channels } = useHubChannelsContext();
@@ -90,7 +90,8 @@ export default function HubSettingsPage() {
   const [segment, setSegment] = useState<Segment>(() => resolveSettingsSegment(search.tab));
   useEffect(() => {
     if (search.tab) setSegment(resolveSettingsSegment(search.tab));
-  }, [search.tab]);
+    else if (search.action === 'install') setSegment('agent');
+  }, [search.action, search.tab]);
 
   /* ------------------------------------------------------------- 导出 */
   const [exporting, setExporting] = useState(false);
@@ -252,8 +253,16 @@ export default function HubSettingsPage() {
 
       {segment === 'agent' ? (
         <>
-          {hubQuery.data ? <AccessCard hub={hubQuery.data} /> : null}
-          <AgentCard hubId={hubId} hubName={hubName} lastSeenAt={hubQuery.data?.lastSeenAt ?? null} offline={offline} />
+          {hubQuery.data ? (
+            <AccessCard hub={hubQuery.data} online={channels.presence === 'managed-online'} />
+          ) : null}
+          <AgentCard
+            hubId={hubId}
+            hubName={hubName}
+            lastSeenAt={hubQuery.data?.lastSeenAt ?? null}
+            offline={offline}
+            initialDrawerKind={search.action === 'install' ? 'install' : null}
+          />
           <ModeCard hubId={hubId} hubName={hubName} offline={offline} />
         </>
       ) : null}

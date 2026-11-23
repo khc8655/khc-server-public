@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import type { Node, NodeProbeItem } from '@khc/contracts';
+import type { Node } from '@khc/contracts';
 import { ApiError } from '../data/client';
-import { createHub, deleteHub, fetchHubState, probeHubs } from '../data/hubs';
-import { fetchAgentReleases, generateAgentCommand, type AgentCommandResult } from '../data/agent';
-import { buildDomainEndpoint, normalizeDomain } from '../data/endpoint';
+import { createHub, deleteHub } from '../data/hubs';
+import { generateAgentCommand, type AgentCommandResult } from '../data/agent';
 import { deleteCfDnsRecordsForNode, createCfDnsRecordForNode } from '../data/cfDns';
-import { publishProxySite } from '../data/sites';
 import {
   hubOutageDays,
   hubOutageLabel,
@@ -15,6 +13,7 @@ import {
   useHubProbe,
   type HubView,
 } from '../data/useHubProbe';
+import { useAutoRenewCerts } from '../data/useAutoRenewCerts';
 import { action, type ActionRef } from '../registry/actions';
 import { ConfirmAction } from '../patterns';
 import { paths } from '../registry/routes';
@@ -22,26 +21,20 @@ import {
   AccessForm,
   accessDraftDirty,
   accessDraftIssue,
-  accessModeLabel,
   initialAccessDraft,
   toCreatePayload,
   type NodeAccessDraft,
 } from '../apps/node-settings/AccessForm';
+import { NodeInstallPanel } from '../apps/node-settings/NodeInstallPanel';
 import {
-  Badge,
   Banner,
   Button,
   Checkbox,
   CodeBlock,
   Drawer,
-  Field,
   InlineError,
-  KeyValue,
   PageHeader,
   Row,
-  SecretField,
-  Segmented,
-  Skeleton,
   Stack,
   Table,
   downloadTextFile,
@@ -57,7 +50,8 @@ export default function HubsPage() {
   const search = useSearch({ strict: false }) as { create?: boolean };
   // 打开列表页即批量探测（与概览页共用 useHubProbe：一次 POST /nodes/probe 覆盖全部节点，
   // 15s 内复用结果）。此前"打开不探测、显示未探测"的分裂行为已取消。
-  const { hubs, hubsQuery, phase, error: statusError, probe } = useHubProbe();
+  const { hubs, hubsQuery, phase, error: statusError, probe, expiringCerts } = useHubProbe();
+  useAutoRenewCerts(expiringCerts);
   const refreshing = phase === 'probing';
   const refreshStatuses = () => void probe({ force: true });
   /** 删除节点：L3 确认；删除前总能生成卸载脚本（不依赖节点在线），删除后留在抽屉里。 */
@@ -80,34 +74,7 @@ export default function HubsPage() {
   const [createdNodeId, setCreatedNodeId] = useState<string | null>(null);
   const [createdDomain, setCreatedDomain] = useState<string | null>(null);
   const [createdAccessMode, setCreatedAccessMode] = useState<Node['accessMode']>('domain');
-  const [installCommand, setInstallCommand] = useState<string | null>(null);
-  const [installLoading, setInstallLoading] = useState(false);
-  const [installError, setInstallError] = useState<string | null>(null);
-  const [installOpts, setInstallOpts] = useState<{
-    withCaddy: boolean;
-    mode: 'system' | 'user';
-  }>({ withCaddy: false, mode: 'system' });
-  const [probeState, setProbeState] = useState<'idle' | 'checking' | 'done' | 'error'>('idle');
-  const [probeItem, setProbeItem] = useState<NodeProbeItem | null>(null);
-  const [probeError, setProbeError] = useState<string | null>(null);
-  const [probeAuthIssue, setProbeAuthIssue] = useState<string | null>(null);
-  /** 安装完成检查只关心 Agent 与 Caddy；null = 拿不到状态（未读取）。 */
-  const [probeCaddy, setProbeCaddy] = useState<{ installed: boolean; running: boolean } | null>(
-    null,
-  );
-  /**
-   * 一键发布 HTTPS 的计划（添加节点时勾选「安装完成后自动发布」才有）：
-   * 节点在线且 Caddy 已装 → 写站点（tls=auto）→ apply → 用控制面 TLS 探测确认。
-   */
-  const [publishPlan, setPublishPlan] = useState<{
-    domain: string;
-    upstreamPort: number;
-    agentPort: number;
-    publishPort: number;
-  } | null>(null);
-  const [publishState, setPublishState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [publishStep, setPublishStep] = useState('');
-  const [publishError, setPublishError] = useState<string | null>(null);
+  const [createdTlsCertId, setCreatedTlsCertId] = useState<string | null>(null);
 
   const draftIssue = accessDraftIssue(draft, { requireName: true });
 
@@ -116,45 +83,6 @@ export default function HubsPage() {
     setDrawerOpen(true);
     void navigate({ to: '/hubs', search: { create: undefined }, replace: true });
   }, [navigate, search.create]);
-
-  const loadInstallCommand = async (
-    nodeId: string,
-    opts: { withCaddy: boolean; mode: 'system' | 'user' },
-  ) => {
-    setInstallLoading(true);
-    setInstallError(null);
-    setInstallCommand(null);
-    try {
-      const releases = await fetchAgentReleases();
-      const release = releases[0];
-      if (!release) {
-        setInstallError(zh.hubs.installUnavailable);
-        return;
-      }
-      const result = await generateAgentCommand(nodeId, 'install', {
-        mode: opts.mode,
-        packageUrl: release.url,
-        sha256: release.sha256,
-        installOptions: {
-          withCaddy: opts.withCaddy,
-        },
-      });
-      setInstallCommand(result.command);
-      if (result.token) setToken(result.token);
-    } catch (error) {
-      setInstallError(error instanceof Error ? error.message : zh.hubs.installFailed);
-    } finally {
-      setInstallLoading(false);
-    }
-  };
-
-  // P0-1：节点创建成功或安装选项变化时，实时重新生成一键安装命令。
-  useEffect(() => {
-    if (!createdNodeId) return;
-    void loadInstallCommand(createdNodeId, installOpts);
-    // installOpts 变化即重生成；loadInstallCommand 每次取最新闭包，不进依赖。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createdNodeId, installOpts]);
 
   /**
    * DNS 代建：仅在用户显式选择 Zone 时，为 IP 直连节点按 endpoint 的 IP 类型
@@ -189,11 +117,7 @@ export default function HubsPage() {
       setCreatedNodeId(data.node.id);
       setCreatedDomain(data.node.domain ?? null);
       setCreatedAccessMode(data.node.accessMode);
-      setInstallOpts({ withCaddy: data.node.accessMode === 'domain', mode: 'system' });
-      setProbeState('idle');
-      setProbeItem(null);
-      setProbeAuthIssue(null);
-      setProbeError(null);
+      setCreatedTlsCertId(data.node.tlsCertId ?? null);
       setDraft(initialAccessDraft());
       setFormError(null);
     },
@@ -245,16 +169,7 @@ export default function HubsPage() {
     setCreatedEndpoint('');
     setCreatedDomain(null);
     setCreatedAccessMode('domain');
-    setInstallCommand(null);
-    setInstallError(null);
-    setInstallOpts({ withCaddy: false, mode: 'system' });
-    setProbeState('idle');
-    setProbeItem(null);
-    setProbeError(null);
-    setPublishPlan(null);
-    setPublishState('idle');
-    setPublishStep('');
-    setPublishError(null);
+    setCreatedTlsCertId(null);
     setDrawerOpen(true);
   };
 
@@ -264,16 +179,7 @@ export default function HubsPage() {
     setCreatedNodeId(null);
     setCreatedEndpoint('');
     setCreatedDomain(null);
-    setInstallCommand(null);
-    setInstallError(null);
-    setInstallOpts({ withCaddy: false, mode: 'system' });
-    setProbeState('idle');
-    setProbeItem(null);
-    setProbeError(null);
-    setPublishPlan(null);
-    setPublishState('idle');
-    setPublishStep('');
-    setPublishError(null);
+    setCreatedTlsCertId(null);
     setFormError(null);
   };
 
@@ -292,117 +198,9 @@ export default function HubsPage() {
             subdomain: draft.dnsSubdomain.trim() || undefined,
           }
         : undefined;
-    const publishSelection =
-      draft.accessMode === 'domain' && draft.autoPublish && draft.domain.trim()
-        ? {
-            domain: normalizeDomain(draft.domain),
-            upstreamPort: Number(draft.upstreamPort),
-            agentPort: Number(draft.domainPort),
-            publishPort: Number(draft.publishPort),
-          }
-        : null;
     const data = await createMutation.mutateAsync(toCreatePayload(draft));
     // 只在用户显式选了 Zone 时代建 DNS；默认「不自动创建」不发请求。
     if (data.node.accessMode === 'ip' && dnsSelection) void autoCreateDns(data.node, dnsSelection);
-    // 发布计划要在草稿被重置前抓下来（onSuccess 会清空 draft）。
-    if (publishSelection) {
-      setPublishPlan(publishSelection);
-      setPublishState('idle');
-      setPublishStep('');
-      setPublishError(null);
-    }
-  };
-
-  /**
-   * 一键发布 HTTPS：节点在线 + Caddy 就绪后建站点并 apply。
-   *
-   * 写配置 + apply + 失败回滚都在 `publishProxySite` 里，与应用目录的「安装后发布」共用同一条路径，
-   * 不给主人留半套站点（P4 的验收要求：失败可回滚）。
-   */
-  const publishHttps = async (
-    nodeId: string,
-    plan: { domain: string; upstreamPort: number; agentPort: number; publishPort: number },
-  ) => {
-    // 一条端口只能一个进程：Agent 已占了同号端口时，Caddy 必然 bind 失败。
-    // 这种情况不写任何配置，直接说明「两条端口要错开」。
-    if (plan.publishPort === plan.agentPort) {
-      setPublishState('error');
-      setPublishStep('');
-      setPublishError(fmt(zh.hubs.publishPortConflict, { port: plan.publishPort }));
-      return;
-    }
-    setPublishState('running');
-    setPublishError(null);
-    setPublishStep(zh.hubs.publishStepSave);
-    try {
-      await publishProxySite(nodeId, {
-        domain: plan.domain,
-        listenPort: plan.publishPort,
-        upstream: `127.0.0.1:${plan.upstreamPort}`,
-      });
-      // apply 成功 = 站点已生效。证书由 Caddy 首次访问时签发，这里不谎称「HTTPS 已验证」：
-      // 控制面的 TLS 探测打的是节点接入地址（Agent），跟发布出去的应用是两回事。
-      setPublishState('done');
-      setPublishStep(zh.hubs.publishStepApplied);
-      await queryClient.invalidateQueries({ queryKey: ['hubs', nodeId] });
-    } catch (error) {
-      setPublishState('error');
-      setPublishStep('');
-      setPublishError(
-        `${error instanceof Error ? error.message : String(error)}${zh.hubs.publishRolledBack}`,
-      );
-    }
-  };
-
-  const checkInstalled = async () => {
-    if (!createdNodeId) return;
-    setProbeState('checking');
-    setProbeError(null);
-    setProbeAuthIssue(null);
-    setProbeCaddy(null);
-    let caddyInstalled: boolean | null = null;
-    try {
-      const result = await probeHubs();
-      const item = result.nodes.find((node) => node.id === createdNodeId) ?? null;
-      setProbeItem(item);
-      if (item?.reachable) {
-        // /health 是匿名端点，只能证明「进程活着」。是否真的可用要看 HMAC /state：
-        // token 不一致时这里的 error 会明确写「Agent 鉴权失败」。
-        const state = await fetchHubState(createdNodeId);
-        if (state.error && /鉴权失败|HTTP 40[13]|unauthorized|invalid token/i.test(state.error)) {
-          setProbeAuthIssue(state.error);
-          setProbeState('error');
-          setProbeError(state.error);
-          await queryClient.invalidateQueries({ queryKey: ['hubs'] });
-          return;
-        }
-        // 只检查 Caddy（必装）；其他模块按需，安装完成与否不看它们。
-        const caddyAdapter = state.state?.adapters.find((adapter) => adapter.name === 'caddy-site');
-        const caddyStatus = caddyAdapter?.status as
-          | { installed?: boolean; running?: boolean }
-          | undefined;
-        caddyInstalled = typeof caddyStatus?.installed === 'boolean' ? caddyStatus.installed : null;
-        setProbeCaddy(
-          caddyInstalled === null
-            ? null
-            : { installed: caddyInstalled, running: caddyStatus?.running === true },
-        );
-      }
-      setProbeState('done');
-      await queryClient.invalidateQueries({ queryKey: ['hubs'] });
-      // 勾选了「自动发布 HTTPS」：在线且 Caddy 就绪后直接进入发布，不让人再点一次。
-      if (item?.reachable && publishPlan) {
-        if (caddyInstalled === false) {
-          setPublishState('error');
-          setPublishError(zh.hubs.publishNeedCaddy);
-        } else {
-          await publishHttps(createdNodeId, publishPlan);
-        }
-      }
-    } catch (error) {
-      setProbeState('error');
-      setProbeError(error instanceof Error ? error.message : zh.hubs.probeError);
-    }
   };
 
   const handleAction = (ref: ActionRef, node?: Node) => {
@@ -419,7 +217,7 @@ export default function HubsPage() {
       return;
     }
     if (ref.id === 'hub.delete' && node) {
-      setDeleteDns(true);
+      setDeleteDns(false);
       setDeleteTarget(node);
     }
   };
@@ -571,210 +369,28 @@ export default function HubsPage() {
           )
         }
       >
-        {token ? (
-          <Stack gap={4}>
-            <Banner tone="info" title={zh.hubs.createdTitle} description={zh.hubs.createdHint} />
-            <Banner tone="warn" title={zh.hubs.tokenWarning} />
-            <SecretField kind="once" text={token} />
-            <KeyValue
-              items={[
-                { key: zh.fields.name, value: createdName },
-                { key: zh.access.modeLabel, value: accessModeLabel(createdAccessMode) },
-                {
-                  key: zh.fields.endpoint,
-                  value: createdEndpoint || '—',
-                  mono: true,
-                  mode: 'middle',
-                },
-                ...(createdDomain
-                  ? [{ key: zh.hubs.cfDnsDomainField, value: createdDomain, mono: true }]
-                  : []),
-              ]}
-            />
-            <Stack gap={2}>
-              <p className="ui-field-label">{zh.hubs.installStepTitle}</p>
-              <p className="ui-field-help">{zh.hubs.installStepHint}</p>
-              <Stack gap={2}>
-                <p className="ui-field-label">{zh.hubs.installOptionsTitle}</p>
-                <Field
-                  id="install-mode"
-                  label={zh.hubs.installModeLabel}
-                  help={zh.hubs.installModeHelp}
-                >
-                  <Segmented
-                    value={installOpts.mode}
-                    ariaLabel={zh.hubs.installModeLabel}
-                    options={[
-                      { value: 'system', label: zh.hubs.installModeSystem },
-                      { value: 'user', label: zh.hubs.installModeUser },
-                    ]}
-                    onChange={(value) =>
-                      setInstallOpts((prev) => ({
-                        ...prev,
-                        mode: value as 'system' | 'user',
-                      }))
-                    }
-                  />
-                </Field>
-                <Checkbox
-                  checked={installOpts.withCaddy}
-                  onChange={(checked) => setInstallOpts((prev) => ({ ...prev, withCaddy: checked }))}
-                  label={zh.hubs.installWithCaddy}
-                />
-                <p className="ui-field-help">{zh.hubs.installOptionsHint}</p>
-              </Stack>
-              {createdAccessMode === 'domain' ? (
-                <Stack gap={1}>
-                  <p className="ui-field-label">{zh.hubs.installPortsTitle}</p>
-                  <p className="ui-field-help">{zh.hubs.installPortsRequired}</p>
-                  <p className="ui-field-help">{zh.hubs.installPortsOutbound}</p>
-                  <p className="ui-field-help">{zh.hubs.installPortsOptional}</p>
-                  <p className="ui-field-help">{zh.hubs.installPortsProxy}</p>
-                </Stack>
-              ) : null}
-              <Banner
-                tone="warn"
-                title={zh.hubs.installOverwriteTitle}
-                description={zh.hubs.installOverwriteHint}
-              />
-              {installLoading ? <Skeleton height={80} /> : null}
-              {installCommand ? (
-                <CodeBlock code={installCommand} label={zh.agent.command} />
-              ) : null}
-              {!installLoading && !installCommand && installError ? (
-                <InlineError message={installError} />
-              ) : null}
-              <p className="ui-field-help">{zh.hubs.installStepAfter}</p>
-            </Stack>
-            <Stack gap={2}>
-              <Button
-                label={
-                  probeState === 'idle' || probeState === 'error'
-                    ? zh.hubs.probeDone
-                    : zh.hubs.probeRecheck
-                }
-                size="sm"
-                loading={probeState === 'checking'}
-                onClick={() => void checkInstalled()}
-              />
-              {probeState === 'done' ? (
-                <Banner
-                  tone={probeItem?.reachable ? 'ok' : 'warn'}
-                  title={probeItem?.reachable ? zh.hubs.probeOnline : zh.hubs.probeOffline}
-                  description={probeItem?.error ?? undefined}
-                />
-              ) : null}
-              {probeState === 'done' && probeItem?.reachable ? (
-                <Row gap={2} wrap>
-                  <Badge tone="ok" label={zh.hubs.checkAgent} dot />
-                  {probeCaddy === null ? (
-                    <Badge tone="neutral" label={zh.hubs.checkCaddyUnknown} dot />
-                  ) : probeCaddy.installed ? (
-                    <Badge
-                      tone={probeCaddy.running ? 'ok' : 'neutral'}
-                      label={probeCaddy.running ? zh.hubs.checkCaddyReady : zh.hubs.checkCaddyStopped}
-                      dot
-                    />
-                  ) : (
-                    <Badge tone="neutral" label={zh.hubs.checkCaddyMissing} dot />
-                  )}
-                </Row>
-              ) : null}
-              {probeState === 'done' && !probeItem?.reachable ? (
-                <Stack gap={1}>
-                  <p className="ui-field-label">{zh.hubs.probeHintsTitle}</p>
-                  <p className="ui-field-help">{zh.hubs.probeHintDns}</p>
-                  <p className="ui-field-help">{zh.hubs.probeHintTunnel}</p>
-                  <p className="ui-field-help">{zh.hubs.probeHintFirewall}</p>
-                </Stack>
-              ) : null}
-              {probeAuthIssue ? (
-                <Banner
-                  tone="danger"
-                  title={zh.hubs.probeAuthFailedTitle}
-                  description={zh.hubs.probeAuthFailedHint}
-                />
-              ) : null}
-              {probeState === 'error' && !probeAuthIssue ? (
-                <InlineError message={probeError ?? zh.hubs.probeError} />
-              ) : null}
-
-              {publishPlan ? (
-                <Stack gap={2}>
-                  <p className="ui-field-label">
-                    {fmt(zh.hubs.publishTitle, {
-                      url: buildDomainEndpoint(publishPlan.domain, String(publishPlan.publishPort)),
-                      port: publishPlan.upstreamPort,
-                    })}
-                  </p>
-                  <Row gap={2} wrap>
-                    <Badge
-                      tone="ok"
-                      dot
-                      label={fmt(zh.hubs.publishStepCreated, { domain: publishPlan.domain })}
-                    />
-                    <Badge
-                      tone={probeItem?.reachable ? 'ok' : 'neutral'}
-                      dot
-                      label={
-                        probeItem?.reachable
-                          ? zh.hubs.publishStepOnline
-                          : zh.hubs.publishStepOffline
-                      }
-                    />
-                    <Badge
-                      tone={
-                        publishState === 'done'
-                          ? 'ok'
-                          : publishState === 'error'
-                            ? 'danger'
-                            : 'neutral'
-                      }
-                      dot
-                      label={publishStep || zh.hubs.publishStepPendingTodo}
-                    />
-                  </Row>
-                  {publishState === 'error' ? (
-                    <InlineError message={publishError ?? zh.hubs.publishFailed} />
-                  ) : null}
-                  {publishState === 'done' ? (
-                    <span className="ui-field-help">
-                      {fmt(zh.hubs.publishDoneHint, {
-                        url: buildDomainEndpoint(
-                          publishPlan.domain,
-                          String(publishPlan.publishPort),
-                        ),
-                      })}
-                    </span>
-                  ) : null}
-                  {publishState === 'idle' ? (
-                    <span className="ui-field-help">{zh.hubs.publishIdleHint}</span>
-                  ) : null}
-                </Stack>
-              ) : null}
-            </Stack>
-            {createdNodeId ? (
-              <Row gap={2} wrap>
-                <Button
-                  label={zh.hubs.goToNode}
-                  size="sm"
-                  onClick={() => {
-                    closeDrawer();
-                    void navigate({ href: paths.hub(createdNodeId) });
-                  }}
-                />
-                <Button
-                  label={zh.hubs.goToSites}
-                  size="sm"
-                  variant={probeState === 'done' && probeItem?.reachable ? 'primary' : 'default'}
-                  onClick={() => {
-                    closeDrawer();
-                    void navigate({ href: paths.hubSection(createdNodeId, 'sites') });
-                  }}
-                />
-              </Row>
-            ) : null}
-          </Stack>
+        {token && createdNodeId ? (
+          <NodeInstallPanel
+            hubId={createdNodeId}
+            hubName={createdName}
+            accessMode={createdAccessMode}
+            endpoint={createdEndpoint}
+            domain={createdDomain}
+            tlsCertId={createdTlsCertId}
+            token={token}
+            showCreatedSummary
+            showNavActions
+            onGoToNode={() => {
+              const target = createdNodeId;
+              closeDrawer();
+              void navigate({ href: paths.hub(target) });
+            }}
+            onGoToSites={() => {
+              const target = createdNodeId;
+              closeDrawer();
+              void navigate({ href: paths.hubSection(target, 'sites') });
+            }}
+          />
         ) : (
           <Stack gap={4}>
             <AccessForm

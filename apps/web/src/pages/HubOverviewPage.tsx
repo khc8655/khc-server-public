@@ -472,6 +472,20 @@ export default function HubOverviewPage() {
             />
           }
         />
+      ) : !reachable && node.lastSeenAt === null ? (
+        <Banner
+          tone="info"
+          title={zh.hub.notInstalledTitle}
+          description={zh.hub.notInstalledHint}
+          action={
+            <Button
+              label={zh.hub.notInstalledAction}
+              size="sm"
+              variant="primary"
+              onClick={() => goTo(`${paths.hubSection(hubId, 'settings')}?action=install`)}
+            />
+          }
+        />
       ) : null}
 
       {kpis.length > 0 ? (

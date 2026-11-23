@@ -7,6 +7,7 @@ import {
   agentUpgradeResponseSchema,
 } from '@khc/contracts';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
+import { resetBootstrapNonceCacheForTests, signAgentRequest } from '../src/lib/node-client';
 import {
   AGENT_DEFAULT_HOST,
   SYSTEM_TLS_CERT,
@@ -40,7 +41,10 @@ const manifestSignature =
   'JqU2aZWxLfaLoMOJcYKudxptHKMJb6PbAG3HeHwSBl5Rd6dx2rx7VbKLSGdBzsHYYHs3DrbcWNdsz4DpT1zxAw==';
 const manifestPubkey = 'jDLCFXgGGib1BGypjdthOWc2nYrVdEkSagptdvBRIAc=';
 
-beforeEach(() => resetRateLimitForTests());
+beforeEach(() => {
+  resetRateLimitForTests();
+  resetBootstrapNonceCacheForTests();
+});
 
 interface SpawnResult {
   status: number | null;
@@ -1091,5 +1095,134 @@ describe('release source 约束', () => {
     expect(parsed.command).toContain(release.url);
     expect(parsed.command).toContain(release.sha256);
     await assertBashSyntax(parsed.command);
+  });
+});
+
+describe('bootstrap/tls 与面板证书直拉安装命令', () => {
+  const CERT_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+  const KEY_PEM = '-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n';
+
+  it('绑定 tlsCertId 的域名节点：install-command 带 --tls-bootstrap-url 且不再带 --acme', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const cert = await ctx.certs.create({
+      name: 'wild-example',
+      domains: ['*.example.com'],
+      issuer: 'acme',
+      notAfter: Math.floor(Date.now() / 1000) + 60 * 86_400,
+      certPem: CERT_PEM,
+      keyPem: KEY_PEM,
+      sourceNodeId: null,
+      autoSync: true,
+    });
+    const nodeRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          name: 'hw',
+          accessMode: 'domain',
+          domain: 'hw.example.com',
+          endpoint: 'https://hw.example.com:2053',
+          tlsCertId: cert.id,
+        }),
+      },
+      ctx.env,
+    );
+    expect(nodeRes.status).toBe(201);
+    const created = (await nodeRes.json()) as { node: { id: string }; token: string };
+
+    for (const mode of ['system', 'user'] as const) {
+      const cmdRes = await post(ctx, cookie, installPath(created.node.id), {
+        mode,
+        packageUrl: PACKAGE_URL,
+        sha256: SHA256,
+        installOptions: { withCaddy: true },
+      });
+      expect(cmdRes.status, mode).toBe(200);
+      const parsed = agentCommandResponseSchema.parse(await cmdRes.json());
+      expect(parsed.command, mode).toContain(
+        `--tls-bootstrap-url 'http://localhost/api/v1/nodes/${created.node.id}/bootstrap/tls'`,
+      );
+      expect(parsed.command, mode).not.toContain('--acme');
+      expect(parsed.command, mode).not.toContain('缺少可信 TLS 证书');
+      expect(parsed.command, mode).toContain('--with-caddy');
+      await assertBashSyntax(parsed.command);
+    }
+
+    // 使用节点 token 签名拉取证书：无需管理员 Cookie，返回 PEM 且带 no-store
+    const bootPath = `/api/v1/nodes/${created.node.id}/bootstrap/tls`;
+    const signed = await signAgentRequest(created.token, 'GET', bootPath, '');
+    const bootRes = await ctx.app.request(
+      bootPath,
+      { method: 'GET', headers: signed },
+      ctx.env,
+    );
+    expect(bootRes.status).toBe(200);
+    expect(bootRes.headers.get('cache-control')).toBe('no-store');
+    const bootBody = (await bootRes.json()) as { certPem: string; keyPem: string; domains: string[] };
+    expect(bootBody.certPem).toBe(CERT_PEM);
+    expect(bootBody.keyPem).toBe(KEY_PEM);
+    expect(bootBody.domains).toEqual(['*.example.com']);
+
+    // 重放同一个 nonce：401
+    const replay = await ctx.app.request(bootPath, { method: 'GET', headers: signed }, ctx.env);
+    expect(replay.status).toBe(401);
+
+    // 错签名或无签名：401；POST 方式缺少管理员 Cookie 仍走 requireAuth 401
+    const noSig = await ctx.app.request(bootPath, { method: 'GET' }, ctx.env);
+    expect(noSig.status).toBe(401);
+    const wrongMethod = await ctx.app.request(bootPath, { method: 'POST', body: '{}' }, ctx.env);
+    expect(wrongMethod.status).toBe(401);
+
+    // 审计仅记 certId，绝不落私钥或 token
+    const auditLogs = await ctx.audit.list({ nodeId: created.node.id, limit: 10 });
+    const bootAudit = auditLogs.find((item) => item.action === 'node.bootstrap_tls');
+    expect(bootAudit?.detail).toEqual({ certId: cert.id });
+    expect(JSON.stringify(bootAudit)).not.toContain('PRIVATE KEY');
+  });
+
+  it('bootstrap/tls 超过限流返回 429；未绑定 tlsCertId 返回 404', async () => {
+    const value = await setup(); // 默认未绑定 tlsCertId
+    const node = await value.ctx.nodes.get(value.node.id);
+    expect(node).toBeTruthy();
+    const createRes = await value.ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: authHeaders(value.cookie),
+        body: JSON.stringify({
+          name: 'no-cert',
+          accessMode: 'domain',
+          domain: 'nocert.example.com',
+          endpoint: 'https://nocert.example.com:2053',
+        }),
+      },
+      value.ctx.env,
+    );
+    const created = (await createRes.json()) as { node: { id: string }; token: string };
+    const bootPath = `/api/v1/nodes/${created.node.id}/bootstrap/tls`;
+
+    const first = await value.ctx.app.request(
+      bootPath,
+      { method: 'GET', headers: await signAgentRequest(created.token, 'GET', bootPath, '') },
+      value.ctx.env,
+    );
+    expect(first.status).toBe(404);
+
+    for (let i = 0; i < 19; i += 1) {
+      await value.ctx.app.request(
+        bootPath,
+        { method: 'GET', headers: await signAgentRequest(created.token, 'GET', bootPath, '') },
+        value.ctx.env,
+      );
+    }
+    const limited = await value.ctx.app.request(
+      bootPath,
+      { method: 'GET', headers: await signAgentRequest(created.token, 'GET', bootPath, '') },
+      value.ctx.env,
+    );
+    expect(limited.status).toBe(429);
   });
 });

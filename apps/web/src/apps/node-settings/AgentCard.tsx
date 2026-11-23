@@ -2,7 +2,7 @@
  * 节点设置 · Agent 卡片（C5 + E3）：上报信息展示 + 安装/卸载命令（复制粘贴）
  * + 远程升级（发布清单 → POST /agent/upgrade，Agent 拉取式自重启，替换升级命令）。
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import {
@@ -41,16 +41,21 @@ export function AgentCard({
   hubName,
   lastSeenAt,
   offline,
+  initialDrawerKind = null,
 }: {
   hubId: string;
   hubName: string;
   lastSeenAt: number | null;
   offline: boolean;
+  initialDrawerKind?: 'install' | 'uninstall' | null;
 }) {
   const { stateQuery, runtimePending, runtimeError, refreshRuntime } = useHubChannelsContext();
   const releasesQuery = useQuery(agentReleasesQueryOptions());
   const toast = useToast();
-  const [drawerKind, setDrawerKind] = useState<'install' | 'uninstall' | null>(null);
+  const [drawerKind, setDrawerKind] = useState<'install' | 'uninstall' | null>(initialDrawerKind);
+  useEffect(() => {
+    if (initialDrawerKind) setDrawerKind(initialDrawerKind);
+  }, [initialDrawerKind]);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeConfirm, setUpgradeConfirm] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);

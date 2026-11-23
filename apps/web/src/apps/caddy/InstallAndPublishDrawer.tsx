@@ -19,6 +19,7 @@ import { fetchTask, runAppAction } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import { buildDomainEndpoint, normalizeDomain } from '../../data/endpoint';
 import { callHostOps, isHostOpsAbortError, normalizeFirewallShow } from '../../data/hostOps';
+import { pickPreferredCertId } from '../../data/certs';
 import {
   certMatchesDomain,
   defaultManifestValues,
@@ -166,6 +167,7 @@ export function InstallAndPublishDrawer({
   const [caddyPorts, setCaddyPorts] = useState<Record<string, number | null>>({});
   const [tlsMode, setTlsMode] = useState<WizardTlsMode>('auto');
   const [certId, setCertId] = useState('');
+  const tlsTouchedRef = useRef(false);
 
   const [phase, setPhase] = useState<'idle' | 'installing' | 'publishing' | 'done' | 'failed'>(
     'idle',
@@ -261,8 +263,14 @@ export function InstallAndPublishDrawer({
     setDomain(defaultDomain);
     setCaddyEnabled(nextEnabled);
     setCaddyPorts(nextPorts);
-    setTlsMode('auto');
-    setCertId('');
+    tlsTouchedRef.current = false;
+    const preferredCertId = pickPreferredCertId(
+      certificates,
+      normalizeDomain(defaultDomain),
+      node?.tlsCertId,
+    );
+    setTlsMode(preferredCertId ? 'manual' : 'auto');
+    setCertId(preferredCertId);
     setTask(null);
     setActionError(null);
     setPhase('idle');
@@ -279,6 +287,20 @@ export function InstallAndPublishDrawer({
         : certificates,
     [certificates, normalizedDomain],
   );
+
+  useEffect(() => {
+    if (step !== 2 || tlsTouchedRef.current) return;
+    const preferredCertId = normalizedDomain
+      ? pickPreferredCertId(certificates, normalizedDomain, node?.tlsCertId)
+      : '';
+    if (preferredCertId) {
+      if (tlsMode !== 'manual') setTlsMode('manual');
+      if (certId !== preferredCertId) setCertId(preferredCertId);
+    } else if (tlsMode === 'manual' && !matchingCerts.some((item) => item.id === certId)) {
+      setTlsMode('auto');
+      setCertId('');
+    }
+  }, [step, normalizedDomain, certificates, node?.tlsCertId, matchingCerts, tlsMode, certId]);
 
   useEffect(() => {
     if (tlsMode !== 'manual' || !certId) return;
@@ -1120,9 +1142,10 @@ export function InstallAndPublishDrawer({
                             { value: 'manual', label: zh.hosted.wizardTlsManual },
                             { value: 'off', label: zh.sites.tlsOff },
                           ]}
-                          onChange={(value) =>
-                            setTlsMode(value === 'manual' ? 'manual' : value === 'off' ? 'off' : 'auto')
-                          }
+                          onChange={(value) => {
+                            tlsTouchedRef.current = true;
+                            setTlsMode(value === 'manual' ? 'manual' : value === 'off' ? 'off' : 'auto');
+                          }}
                         />
                       </Field>
 
@@ -1142,7 +1165,10 @@ export function InstallAndPublishDrawer({
                                 value: cert.id,
                                 label: `${cert.domains[0] ?? cert.name} · ${formatExpiry(cert.notAfter)}`,
                               }))}
-                              onChange={setCertId}
+                              onChange={(value) => {
+                                tlsTouchedRef.current = true;
+                                setCertId(value);
+                              }}
                             />
                           </Field>
                         ) : (

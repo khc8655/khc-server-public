@@ -1,25 +1,17 @@
 # Cloudflare DNS 集成（cf-dns）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`apps/web/src/apps/node-settings/AccessForm.tsx`、`docs/security-boundaries.md` §10
-> 范围：面板托管 Cloudflare DNS A/AAAA 记录（多凭据设置、读取已有记录、代建与联动删除、节点域名与证书状态）的使用说明——Token 权限、配置入口、失败处理
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`apps/api/src/routes/cfDns.ts`、`apps/api/src/lib/cf-dns.ts`、`apps/web/src/apps/node-settings/AccessForm.tsx`、`docs/security-boundaries.md` §10
+> 范围：面板托管 Cloudflare DNS A/AAAA 记录、新建解析顺手签发 DNS-01 证书、节点绑定解析与证书状态
 
-## 1. 是什么（第一期受限版，不做完整 DNS 管理面板）
+## 1. 是什么（域名解析 + 前置发证收口）
 
-域名托管在 Cloudflare 的用户可以不再去 CF 控制台手工加 A 记录：面板持有一条或多条最小权限 Token，**添加节点时可读取所选 Zone 的现有 A/AAAA/CNAME 记录（只读选用）、在抽屉内就地「+ 新建解析记录」（A/AAAA 并自动选中），或选择 Zone + 子域名自动创建 `<子域名>.<Zone>` 的 A/AAAA 记录**（按 endpoint 的 IP 类型选择，IPv6 建 AAAA），删除节点时默认联动删除；域名/主机预览下同时提供行内 [检测解析]（DoH）。记录带 `khc-server managed` **注释（comment）**作为标记——不使用 record tags（F-L1：tags 需要 Token 额外的配额权限，最小权限 Token 会被 CF 拒绝）；联动删除按面板在 D1 登记的 recordId 执行，不依赖任何标记。面板只管理自己代建的记录，**不修改用户手建记录**；读取只为选择，读取失败不影响手填子域名代建。没有 Cloudflare 账户、或域名托管在别家服务商的用户，可以在域名模式里**直接手动输入域名**建节点——面板不代管其解析，也不要求先配凭据（见 §3）。
+域名托管在 Cloudflare 的用户可在「设置 → 域名管理」维护 Zone 下的 A/AAAA/CNAME 记录，并在**新建 A/AAAA 记录时顺手签发 Cloudflare DNS-01 证书**（默认勾选，可选泛域名 `*.<Zone>` 或当前域名，入库默认开启 `autoSync`；若同一域名已被有效证书覆盖则提示免签；证书签发失败**不回滚**已建 DNS 记录并在抽屉顶部提供「重试签发证书」；已有未覆盖的 A/AAAA 记录亦可在列表中一键补签）。
 
+**添加节点时不再提供抽屉内临时建解析或自动发布 HTTPS**：域名模式仅提供「已有解析记录（只读选用 `/cf-dns/records`）」或「手动输入域名」，并按所选域名自动匹配与选用面板全局证书库中的有效证书（`nodes.tls_cert_id`）。绑定面板证书后，生成的安装命令自动带 `--with-caddy` 与 `--tls-bootstrap-url`——Agent 安装时直接用节点 token 做 HMAC 签名拉取证书落盘（**零 `acme.sh`**、不占入站 80/443）；仅当未绑定面板证书时才回退 `--acme <域名>` 兜底。
 
-选中 Zone 建记录或选用已有记录后，面板把记录名写进节点的 `domain` 列，安装命令里自动带上的只有 **`--with-caddy`**（仅安装系统包 caddy，**不创建站点、不签发证书**）。域名 HTTPS 证书支持两条路径：一是站点 Caddy `tls=auto` 在首次访问时自动申请（Let's Encrypt）或 VM 本地 `acme.sh` / IP 自签证书；二是在「设置 → 证书库」通过已配置的 Cloudflare 账户执行控制面 ACME v2 DNS-01 签发与续期（`POST /api/v1/certs/issue-dns01`、`POST /api/v1/certs/:id/renew`），支持配置 `auto_sync` 将续期后的证书自动同步到关联在线 Hub（使用面板托管证书的 VM 无需安装 `acme.sh`）。`--tls-cn` **只对自签证书生效**（`--tls` / `--tls-self-signed` 分支），生产环境的域名模式**不下发**该参数——自签证书不被控制面 Worker 接受。
+只有 IP 直连模式才提供可选的「自动创建 DNS 记录（A/AAAA，带 `khc-server managed` 注释）」；删除节点时确认框**默认不勾选**「同时删除面板代建的 DNS 记录」，默认保留全局域名解析记录供后续节点复用。
 
-节点概况的「域名 / 证书状态」按**控制面实测 → Agent 站点探测 → 未知**三级判定：先看 `GET /nodes/:id/state` 附带的 `tls.state`（控制面对接入地址做完整 TLS 校验，探测成功即「证书对该域名有效且受信」），再退回 `caddy-site` 的站点健康，两者都没有证据才显示「未知」。这样 TLS 由外部反代 / Caddy / Cloudflare Tunnel 终结的节点不会再被误报成「未签发」（见 CHANGELOG 0.12.10）。
-
-**两个端口，两条链路，默认都不占 443。** 节点上有两个端口，互不相干：
-
-- **Agent 监听端口**（默认 `2053`）：面板通过 `https://<域名>:2053` 连 Agent，管的是控制面；证书由 install.sh 的 acme.sh 签发到 `/etc/khc-agent/tls/`。
-- **发布端口**（默认 `2083`，勾选「安装完成后自动发布 HTTPS」后出现）：Caddy 监听这一条，把 `https://<域名>:2083` 反代到上游端口（`127.0.0.1:<应用端口>`），证书由 Caddy `tls=auto` 首访签发。
-
-`443` 刻意空着：一是备案/端口策略盯得最紧，二是 Caddy 与 ACME 的 TLS-ALPN-01 校验都要临时占 443，留空谁都能用。`2053`／`2083` 都在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。**两条端口不能相同**（一条端口只能一个进程）：表单检测到相同会挡住提交并给「改用 2083」，写入站点前再拦一层。
-
-> 已知限制：若发布端口与 Agent 端口互换着调（例如把发布端口的 ACME 校验流量与 Agent 抢 443），或节点 443/80 都不可入站（境内未备案），Caddy 自动签发走不通，需改用 DNS-01（`--acme-dns`）。彻底解法是把 Agent 退到回环端口、由 Caddy 统一终结 TLS（单一证书来源），属于后续结构改动，不在本期范围。
+节点概况的「域名 / 证书状态」仍按**控制面实测 → Agent 站点探测 → 未知**三级判定（先看 `/state` 附带的 `tls.state`，再退回 `caddy-site` 探测）。默认 Agent 监听端口仍为 `2053`（避开 `443`，留给后续应用目录 / 站点发布使用），可在 Cloudflare 代理白名单下使用。
 
 
 ## 2. 配置步骤（设置页「账号」与「域名管理」分段）
@@ -34,18 +26,14 @@
 | 场景 | 行为 |
 |---|---|
 | 添加节点未配置任何 DNS 凭据（或凭据全部读取失败） | 域名模式**不再被挡住**：表单只剩「手动输入域名」一条路径，直接填已在别处配好解析的域名即可建节点；安装命令带 `--with-caddy`，不产生任何 DNS 写入 |
-| 添加节点时手动输入域名（有账户） | 表单可在「已有解析记录 / 手动输入域名」间切换；手填只写 `nodes.domain` 与 `endpoint`，**不建、不改 DNS 记录**；域名与已有节点重复时给出占用提示但不禁用保存（域名可能正指向该节点） |
-| 勾选「安装完成后自动发布 HTTPS」且发布端口与 Agent 端口相同时 | 表单直接挡住提交（「发布端口和 Agent 监听端口撞了」）并给「改用 2083」；节点在线且 Caddy 就绪后才写站点，写入前还会再拦一次同号端口（不发 apply） |
-| 添加节点时未选 Zone（仅一个启用 Zone） | 按节点名在该唯一 Zone 自动代建，安装命令自动带 `--with-caddy`；前端也可显式选择 Zone/子域 |
-| 添加节点时未选 Zone（多个启用 Zone） | 返回 `cf_dns_zone_required`，抽屉显式提示选择 Zone 与子域；**不猜 Zone** |
-| 添加节点时选用 Zone/子域 | 显式传给 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`），子域留空则用节点名 |
-| 添加节点时选了 Zone（已有记录 / 就地建记录） | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取 A/AAAA/CNAME，也可在下拉区就地「+ 新建解析记录」（`POST /api/v1/cf-dns/records/:zoneId` 建 A/AAAA 并自动选中），并在地址预览下点击 [检测解析]（DoH）；选中后域名与主机只读带入（端口可改），**不写托管标记、删除节点也不联动删除自建记录**（仅把记录名写进 `nodes.domain`），安装命令自动带 `--with-caddy`（证书由后续 Caddy 站点自动签发） |
+| 添加节点时手动输入域名（有账户） | 表单可在「已有解析记录 / 手动输入域名」间切换；手填只写 `nodes.domain`、`endpoint` 与匹配的 `tlsCertId`，**不建、不改 DNS 记录**；域名与已有节点重复时给出占用提示但不禁用保存 |
+| 添加节点时选用已有记录 | 调 `GET /api/v1/cf-dns/records?zoneId=<zoneId>` 读取已有 A/AAAA 记录并带入域名与自动匹配的控制通道证书，不在节点抽屉内新建或修改 DNS 记录；可在预览下点击 [检测解析]（DoH）确认解析生效 |
 | 已有记录同名多条 / 同名 CNAME | 标注冲突并置灰不可选；已绑定其他节点的记录同样置灰，避免静默共用域名 |
 | 读取已有记录失败（权限/网络） | 抽屉内提示具体原因（权限不足 / Token 失效 / 网络），并提供「手动输入域名」路径兜底 |
-| 添加节点时选了 Zone（无已有记录或未选） | 调 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`）代建记录，写 `nodes.domain`，安装命令自动带 `--with-caddy`；代建失败**不阻断**节点创建，抽屉内用 danger Banner 写明具体原因 |
-| 直接调接口建域名节点 | `POST /api/v1/nodes` 支持只给 `domain`（不需要 endpoint）：服务端推导 `https://<domain>:2053`（`DEFAULT_DOMAIN_PORT`，与面板默认一致）并按域名模式处理；若同时给 `endpoint` 与 `domain`，两者主机必须一致，否则 `400 domain_mismatch` |
-| 设置 → 域名管理 → 展开 Zone → 添加记录 | 调 `POST /api/v1/cf-dns/records/:zoneId`（`{type, name, content, proxied?, ttl?}`）在 Cloudflare 新建单条 A/AAAA/CNAME；记录名可只填子域（自动补当前 Zone），不写面板托管标记、不绑定节点 |
-| 删除节点 | 确认框默认勾选「联动删除 DNS 记录」（`DELETE /api/v1/cf-dns/records/:nodeId`）；取消勾选则保留记录 |
+| IP 直连模式选择自动代建 DNS | 调 `POST /api/v1/cf-dns/records`（`{nodeId, zoneId, subdomain}`）代建 A/AAAA 记录；代建失败不阻断节点创建，通过 toast 明确报错 |
+| 直接调接口建域名节点 | `POST /api/v1/nodes` 支持只给 `domain`（省略 `endpoint` 自动推导 `https://<domain>:2053`）与可选 `tlsCertId`；若同时给 `endpoint` 与 `domain`，两者主机必须一致，否则 `400 domain_mismatch` |
+| 设置 → 域名管理 → 展开 Zone → 添加记录 | 调 `POST /api/v1/cf-dns/records/:zoneId` 建单条记录；A/AAAA 记录默认同时调用 `POST /certs/issue-dns01` 签发证书（`*.<zone>` 或当前域名，开启 `autoSync`）；已被现有证书覆盖则跳过，签发失败不回滚 DNS 并提供重试 |
+| 删除节点 | 确认框**默认不勾选**「同时删除面板代建的 DNS 记录」（保留全局记录可复用）；显式勾选时调 `DELETE /api/v1/cf-dns/records/:nodeId` |
 | 未配置 / 未启用凭据 | 代建端点返回 `cf_dns_disabled`；节点仍创建成功，抽屉用 toast 显式提示（不再静默跳过），可稍后手工建记录 |
 
 ## 4. 失败处理（按症状）

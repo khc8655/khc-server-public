@@ -1,8 +1,7 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { DEFAULT_DOMAIN_PORT } from '@khc/contracts';
 import type {
-  CfDnsZoneRecordsResponse,
   CreateNodeRequest,
   Node,
   NodeAccessMode,
@@ -11,11 +10,17 @@ import type {
 } from '@khc/contracts';
 import {
   checkCfDnsResolve,
-  createCfDnsRecord,
   fetchCfDnsAccounts,
   fetchCfDnsRecords,
   fetchCfDnsZones,
 } from '../../data/cfDns';
+import {
+  certCoversDomain,
+  certificatesQueryOptions,
+  isCertExpired,
+  matchingCertsForDomain,
+  pickPreferredCertId,
+} from '../../data/certs';
 import { listTunnels } from '../../data/tunnels';
 import {
   HTTPS_PORT_OPTIONS,
@@ -31,7 +36,6 @@ import {
   Badge,
   Banner,
   Button,
-  Card,
   Checkbox,
   Field,
   InlineError,
@@ -43,6 +47,7 @@ import {
   TextInput,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
+import { formatExpiry } from '../../i18n/format';
 
 /** 域名模式下域名的来源：选择已有解析记录，或直接手动输入。 */
 export type DomainSource = 'record' | 'manual';
@@ -58,8 +63,8 @@ export interface NodeAccessDraft {
   recordId: string;
   domain: string;
   domainPort: string;
-  /** 应用对外端口（Caddy 监听）；默认避开 443 与 Agent 端口。 */
-  publishPort: string;
+  /** 域名模式：绑定的全局控制通道证书 id（空串表示暂不绑定） */
+  tlsCertId: string;
   /** 隧道模式：全局隧道配置 id / 域名（仅用于满足建节点契约的 endpoint 字段） */
   tunnelId: string;
   tunnelHostname: string;
@@ -70,9 +75,6 @@ export interface NodeAccessDraft {
   /** IP 直连模式：可选自动代建 DNS 记录（多凭据模型） */
   dnsZoneId: string;
   dnsSubdomain: string;
-  /** 域名模式（仅添加节点）：安装完成后自动建 Caddy 站点并反代到该端口 */
-  autoPublish: boolean;
-  upstreamPort: string;
 }
 
 const DOMAIN_RE = /^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
@@ -80,18 +82,8 @@ const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 export const TUNNELS_SETTINGS_HREF = '/settings?tab=tunnels';
 export const DOMAIN_SETTINGS_HREF = '/settings?tab=domain';
+export const CERTS_SETTINGS_HREF = '/settings?tab=certs';
 export const ACCOUNTS_SETTINGS_HREF = '/settings?tab=accounts';
-
-/** 就地新建解析时允许只填子域（自动补当前 Zone），或 @ 表示根域名。 */
-function resolveQuickRecordName(input: string, zoneName: string): string | null {
-  const name = input.trim().toLowerCase().replace(/\.+$/, '');
-  const zone = zoneName.trim().toLowerCase();
-  if (!name || !zone) return null;
-  if (name === '@' || name === zone) return zone;
-  if (name.endsWith(`.${zone}`)) return name;
-  if (!name.includes('.')) return `${name}.${zone}`;
-  return null;
-}
 
 const MANUAL_DOMAIN_DISALLOWED_RE = /^[a-z][a-z0-9+.-]*:\/\/|[:/?#]/i;
 
@@ -172,13 +164,6 @@ function endpointProtocol(endpoint: string): string | null {
  * 2053 / 2083 都在 Cloudflare 可代理的 HTTPS 端口白名单里，橙云也能走。
  */
 export const DEFAULT_AGENT_PORT = String(DEFAULT_DOMAIN_PORT);
-export const DEFAULT_PUBLISH_PORT = '2083';
-
-/** 发布端口与 Agent 端口相同时，给一个可一键切换的候选（跳过已被占用的那条）。 */
-export function suggestPublishPort(agentPort: string): string {
-  const candidates = [DEFAULT_PUBLISH_PORT, DEFAULT_AGENT_PORT, '2053', '2083', '8443'];
-  return candidates.find((port) => port !== agentPort) ?? DEFAULT_PUBLISH_PORT;
-}
 
 export function initialAccessDraft(node?: Node): NodeAccessDraft {
   if (!node) {
@@ -190,6 +175,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       recordId: '',
       domain: '',
       domainPort: DEFAULT_AGENT_PORT,
+      tlsCertId: '',
       tunnelId: '',
       tunnelHostname: '',
       ipHost: '',
@@ -197,9 +183,6 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
       insecureConfirmed: false,
       dnsZoneId: '',
       dnsSubdomain: '',
-      autoPublish: false,
-      upstreamPort: '8080',
-      publishPort: DEFAULT_PUBLISH_PORT,
     };
   }
 
@@ -243,6 +226,7 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     recordId: '',
     domain: parsedDomain,
     domainPort: port,
+    tlsCertId: node.tlsCertId ?? '',
     tunnelId: node.tunnelId ?? '',
     tunnelHostname: '',
     ipHost: host,
@@ -250,10 +234,6 @@ export function initialAccessDraft(node?: Node): NodeAccessDraft {
     insecureConfirmed: node.allowInsecure || protocol === 'http:',
     dnsZoneId: '',
     dnsSubdomain: '',
-    // 自动发布只在「添加节点」里成立；编辑接入方式不重走安装流程。
-    autoPublish: false,
-    upstreamPort: '8080',
-    publishPort: DEFAULT_PUBLISH_PORT,
   };
 }
 
@@ -275,18 +255,6 @@ export function accessDraftIssue(
       if (!DOMAIN_RE.test(domain)) return zh.access.domainInvalid;
     }
     if (!portValid(draft.domainPort)) return zh.access.ipPortInvalid;
-    if (draft.autoPublish) {
-      if (!portValid(draft.upstreamPort)) return zh.access.upstreamPortInvalid;
-      if (!portValid(draft.publishPort)) return zh.access.publishPortInvalid;
-      // 一条端口只能一个进程：Agent 与 Caddy 撞端口注定在 apply 时失败，表单里直接挡住。
-      if (draft.publishPort === draft.domainPort) return zh.access.publishPortConflictIssue;
-      if (draft.upstreamPort.trim() === draft.publishPort.trim()) {
-        return '上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）';
-      }
-      if (draft.upstreamPort.trim() === draft.domainPort.trim()) {
-        return '上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）';
-      }
-    }
     return null;
   }
 
@@ -314,6 +282,7 @@ export function accessDraftDirty(draft: NodeAccessDraft): boolean {
     draft.zoneId.length > 0 ||
     draft.recordId.length > 0 ||
     draft.domain.trim().length > 0 ||
+    draft.tlsCertId.length > 0 ||
     draft.tunnelId.trim().length > 0 ||
     draft.ipHost.trim().length > 0 ||
     draft.insecureConfirmed ||
@@ -331,6 +300,7 @@ export function toCreatePayload(draft: NodeAccessDraft): CreateNodeRequest {
       accessMode: 'domain',
       endpoint: buildDomainEndpoint(domain, draft.domainPort),
       domain,
+      ...(draft.tlsCertId ? { tlsCertId: draft.tlsCertId } : {}),
     };
   }
   if (draft.accessMode === 'tunnel') {
@@ -356,6 +326,7 @@ export function toPatchPayload(draft: NodeAccessDraft): UpdateNodeRequest {
       accessMode: 'domain',
       endpoint: buildDomainEndpoint(domain, draft.domainPort),
       domain,
+      tlsCertId: draft.tlsCertId ? draft.tlsCertId : null,
     };
   }
   if (draft.accessMode === 'tunnel') {
@@ -408,15 +379,11 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
     retry: false,
     enabled: draft.accessMode === 'domain',
   });
+  const certsQuery = useQuery({
+    ...certificatesQueryOptions(),
+    enabled: draft.accessMode === 'domain',
+  });
 
-  const queryClient = useQueryClient();
-  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
-  const [quickType, setQuickType] = useState<'A' | 'AAAA'>('A');
-  const [quickName, setQuickName] = useState('');
-  const [quickContent, setQuickContent] = useState('');
-  const [quickProxied, setQuickProxied] = useState(false);
-  const [quickBusy, setQuickBusy] = useState(false);
-  const [quickError, setQuickError] = useState<string | null>(null);
   const [resolveState, setResolveState] = useState<{
     domain: string;
     status: 'checking' | 'done' | 'error';
@@ -444,64 +411,50 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
   const domainReady =
     normalizedDomain.length > 0 && DOMAIN_RE.test(normalizedDomain) && !manualDomainError;
   const activeResolve = resolveState?.domain === normalizedDomain ? resolveState : null;
+  const certs = certsQuery.data ?? [];
+  const matchingCerts = domainReady ? matchingCertsForDomain(certs, normalizedDomain) : [];
+  const validMatchingCerts = matchingCerts.filter((cert) => !isCertExpired(cert));
 
-  const openQuickCreate = () => {
-    setQuickCreateOpen(true);
-    setQuickError(null);
-  };
+  const certManualNoneRef = useRef(false);
+  const lastDomainRef = useRef(normalizedDomain);
+  const mountDomainRef = useRef(mode === 'edit' ? normalizedDomain : '');
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const certsData = certsQuery.data;
 
-  const closeQuickCreate = () => {
-    setQuickCreateOpen(false);
-    setQuickError(null);
-  };
-
-  const handleQuickCreate = async () => {
-    if (!selectedZone) return;
-    const name = resolveQuickRecordName(quickName, selectedZone.name);
-    if (!name) {
-      setQuickError(fmt(zh.cfDns.recordNameZoneInvalid, { zone: selectedZone.name }));
+  useEffect(() => {
+    if (lastDomainRef.current !== normalizedDomain) {
+      lastDomainRef.current = normalizedDomain;
+      certManualNoneRef.current = false;
+    }
+    if (draftRef.current.accessMode !== 'domain') return;
+    if (!domainReady) {
+      if (draftRef.current.tlsCertId) {
+        onChange({ ...draftRef.current, tlsCertId: '' });
+      }
       return;
     }
-    const content = quickContent.trim();
-    if (!content) {
-      setQuickError(zh.cfDns.recordContentInvalid);
-      return;
+    if (!certsData) return;
+    const currentId = draftRef.current.tlsCertId;
+    const currentValid = Boolean(
+      currentId &&
+        certsData.some(
+          (cert) =>
+            cert.id === currentId &&
+            certCoversDomain(cert.domains, normalizedDomain) &&
+            !isCertExpired(cert),
+        ),
+    );
+    if (currentValid) return;
+    if (certManualNoneRef.current) return;
+    const allowAutoFill =
+      mode === 'create' || normalizedDomain !== mountDomainRef.current || Boolean(currentId);
+    if (!allowAutoFill) return;
+    const preferred = pickPreferredCertId(certsData, normalizedDomain);
+    if (preferred !== currentId) {
+      onChange({ ...draftRef.current, tlsCertId: preferred });
     }
-    setQuickBusy(true);
-    setQuickError(null);
-    try {
-      const created = await createCfDnsRecord(selectedZone.id, {
-        type: quickType,
-        name,
-        content,
-        proxied: quickProxied,
-      });
-      queryClient.setQueryData<CfDnsZoneRecordsResponse>(
-        ['cfDns', 'records', selectedZone.id],
-        (prev) => ({
-          zoneId: prev?.zoneId ?? selectedZone.id,
-          zoneName: prev?.zoneName ?? selectedZone.name,
-          records: [created, ...(prev?.records ?? []).filter((item) => item.id !== created.id)],
-        }),
-      );
-      void queryClient.invalidateQueries({ queryKey: ['cfDns', 'records', selectedZone.id] });
-      update({
-        zoneId: selectedZone.id,
-        recordId: created.id,
-        domain: created.name,
-      });
-      setQuickCreateOpen(false);
-      setQuickName('');
-      setQuickContent('');
-      setQuickProxied(false);
-    } catch (error) {
-      setQuickError(
-        error instanceof Error && error.message ? error.message : zh.cfDns.recordCreateError,
-      );
-    } finally {
-      setQuickBusy(false);
-    }
-  };
+  }, [certsData, domainReady, mode, normalizedDomain, draft.accessMode, onChange]);
 
   const handleResolveCheck = async () => {
     if (!domainReady) return;
@@ -528,19 +481,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
       });
     }
   };
-  const upstreamPortError = !draft.autoPublish
-    ? undefined
-    : !portValid(draft.upstreamPort)
-      ? zh.access.upstreamPortInvalid
-      : draft.upstreamPort.trim() === draft.publishPort.trim()
-        ? '上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）'
-        : draft.upstreamPort.trim() === draft.domainPort.trim()
-          ? '上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）'
-          : undefined;
-  const publishPortError =
-    draft.autoPublish && draft.publishPort === draft.domainPort
-      ? zh.access.publishPortConflictIssue
-      : undefined;
   const ipHostError =
     draft.accessMode === 'ip' && draft.ipHost.trim() && !hostValid(draft.ipHost)
       ? zh.access.ipHostInvalid
@@ -690,7 +630,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                     label: `${zone.name} · ${zone.accountName}`,
                   }))}
                   onChange={(zoneId) => {
-                    closeQuickCreate();
                     update({ zoneId, recordId: '', domain: '' });
                   }}
                 />
@@ -699,15 +638,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
               <Row justify="between" gap={2} align="center" wrap>
                 <Link to={DOMAIN_SETTINGS_HREF} label="管理域名记录" />
                 <Row gap={2} wrap>
-                  {selectedZone && candidates.length > 0 && !quickCreateOpen ? (
-                    <Button
-                      label={zh.access.dnsQuickCreateOpen}
-                      size="sm"
-                      variant="ghost"
-                      icon="plus"
-                      onClick={openQuickCreate}
-                    />
-                  ) : null}
                   <Button
                     label="刷新记录"
                     size="sm"
@@ -722,72 +652,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                   />
                 </Row>
               </Row>
-
-              {quickCreateOpen && selectedZone ? (
-                <Card title={fmt(zh.access.dnsQuickCreateTitle, { zone: selectedZone.name })}>
-                  <Stack gap={3}>
-                    <Field id="access-dns-create-type" label={zh.cfDns.recordTypeLabel} required>
-                      <Select
-                        id="access-dns-create-type"
-                        value={quickType}
-                        options={[
-                          { value: 'A', label: 'A (IPv4)' },
-                          { value: 'AAAA', label: 'AAAA (IPv6)' },
-                        ]}
-                        onChange={(value) => setQuickType(value === 'AAAA' ? 'AAAA' : 'A')}
-                      />
-                    </Field>
-                    <Field
-                      id="access-dns-create-name"
-                      label={zh.cfDns.recordNameLabel}
-                      help={fmt(zh.cfDns.recordNameHelp, { zone: selectedZone.name })}
-                      required
-                    >
-                      <TextInput
-                        id="access-dns-create-name"
-                        value={quickName}
-                        mono
-                        placeholder={zh.access.dnsQuickCreateNamePlaceholder}
-                        onChange={setQuickName}
-                      />
-                    </Field>
-                    <Field
-                      id="access-dns-create-content"
-                      label={zh.cfDns.recordContentLabel}
-                      required
-                    >
-                      <TextInput
-                        id="access-dns-create-content"
-                        value={quickContent}
-                        mono
-                        placeholder={zh.access.dnsQuickCreateContentPlaceholder}
-                        onChange={setQuickContent}
-                      />
-                    </Field>
-                    <Checkbox
-                      checked={quickProxied}
-                      label={zh.cfDns.recordProxiedLabel}
-                      onChange={setQuickProxied}
-                    />
-                    {quickError ? <InlineError message={quickError} /> : null}
-                    <Row justify="end" gap={2} wrap>
-                      <Button
-                        label={zh.access.dnsQuickCreateCancel}
-                        size="sm"
-                        disabled={quickBusy}
-                        onClick={closeQuickCreate}
-                      />
-                      <Button
-                        label={zh.access.dnsQuickCreateSubmit}
-                        size="sm"
-                        variant="primary"
-                        loading={quickBusy}
-                        onClick={() => void handleQuickCreate()}
-                      />
-                    </Row>
-                  </Stack>
-                </Card>
-              ) : null}
 
               {draft.zoneId ? (
                 recordsQuery.isLoading ? (
@@ -811,13 +675,6 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
                   <Stack gap={2}>
                     <span className="ui-muted">{zh.access.recordsEmpty}</span>
                     <Row justify="end" gap={2} wrap>
-                      {!quickCreateOpen ? (
-                        <Button
-                          label={zh.access.dnsQuickCreateOpen}
-                          size="sm"
-                          onClick={openQuickCreate}
-                        />
-                      ) : null}
                       <Button
                         label={zh.access.switchManual}
                         size="sm"
@@ -972,84 +829,38 @@ export function AccessForm({ draft, onChange, mode, nodes = [] }: AccessFormProp
             </span>
           )}
 
-          {mode === 'create' ? (
+          {domainReady ? (
             <Stack gap={3}>
-              <Checkbox
-                checked={draft.autoPublish}
-                onChange={(checked) => update({ autoPublish: checked })}
-                label={zh.access.autoPublishLabel}
-                description={zh.access.autoPublishHelp}
-              />
-              {draft.autoPublish && draft.publishPort === draft.domainPort ? (
-                <Stack gap={2}>
-                  <Banner
-                    tone="warn"
-                    title={zh.access.publishPortConflictTitle}
-                    description={fmt(zh.access.publishPortConflictHint, { port: draft.domainPort })}
-                  />
-                  <Row gap={2}>
-                    <Button
-                      label={fmt(zh.access.publishPortConflictCta, {
-                        port: suggestPublishPort(draft.domainPort),
-                      })}
-                      size="sm"
-                      onClick={() =>
-                        update({ publishPort: suggestPublishPort(draft.domainPort) })
-                      }
-                    />
-                  </Row>
-                </Stack>
-              ) : null}
-              {draft.autoPublish ? (
-                <>
-                  <Field
-                    id="access-publish-port"
-                    label={zh.access.publishPortLabel}
-                    help={zh.access.publishPortHelp}
-                    error={publishPortError}
-                    required
-                  >
-                    <Select
-                      id="access-publish-port"
-                      value={draft.publishPort}
-                      invalid={Boolean(publishPortError)}
-                      options={HTTPS_PORT_OPTIONS.map((port) => ({ value: port, label: port }))}
-                      onChange={(publishPort) => update({ publishPort })}
-                    />
-                  </Field>
-                  <Field
-                    id="access-upstream-port"
-                    label={zh.access.upstreamPortLabel}
-                    help={zh.access.upstreamPortHelp}
-                    error={upstreamPortError}
-                    required
-                  >
-                    <TextInput
-                      id="access-upstream-port"
-                      value={draft.upstreamPort}
-                      invalid={Boolean(upstreamPortError)}
-                      mono
-                      inputMode="numeric"
-                      placeholder="8080"
-                      onChange={(value) => update({ upstreamPort: value })}
-                    />
-                  </Field>
-                  {domainReady ? (
-                    <Field
-                      id="access-publish-target"
-                      label={zh.access.publishTargetLabel}
-                      help={zh.access.publishTargetHelp}
-                    >
-                      <TextInput
-                        id="access-publish-target"
-                        value={`${buildDomainEndpoint(normalizedDomain, draft.publishPort)} → 127.0.0.1:${draft.upstreamPort}`}
-                        mono
-                        readOnly
-                        onChange={() => {}}
-                      />
-                    </Field>
-                  ) : null}
-                </>
+              <Field id="access-tls-cert" label={zh.access.tlsCertLabel} help={zh.access.tlsCertHelp}>
+                <Select
+                  id="access-tls-cert"
+                  value={draft.tlsCertId}
+                  placeholder={zh.access.tlsCertPlaceholder}
+                  options={[
+                    { value: '', label: zh.access.tlsCertNoneOption },
+                    ...matchingCerts.map((cert) => ({
+                      value: cert.id,
+                      label: `${cert.name}（${cert.domains.join(', ')} · ${formatExpiry(cert.notAfter)}）`,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    certManualNoneRef.current = value === '';
+                    update({ tlsCertId: value });
+                  }}
+                />
+              </Field>
+              {!certsQuery.isLoading && validMatchingCerts.length === 0 ? (
+                <Banner
+                  tone="info"
+                  title={zh.access.tlsCertMissingTitle}
+                  description={zh.access.tlsCertMissingHint}
+                  action={
+                    <Row gap={2} wrap>
+                      <Link to={DOMAIN_SETTINGS_HREF} label={zh.access.goToDomainsForCert} />
+                      <Link to={CERTS_SETTINGS_HREF} label={zh.access.goToCerts} />
+                    </Row>
+                  }
+                />
               ) : null}
             </Stack>
           ) : null}

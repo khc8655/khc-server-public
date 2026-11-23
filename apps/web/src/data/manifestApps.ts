@@ -13,6 +13,7 @@ import {
   type AppManifestDefinitionV2,
 } from '@khc/contracts';
 import { formatAbsoluteTime } from '../i18n/format';
+import { certCoversDomain } from './certs';
 import { fmt, zh } from '../i18n/zh';
 import type { Tone } from '../ui';
 import { ApiError } from './client';
@@ -623,18 +624,7 @@ export function validateManifestValues(
 
 /** 证书 SAN 是否匹配目标域名（支持单级通配符 *.example.com）。 */
 export function certMatchesDomain(domains: readonly string[], target: string): boolean {
-  const host = target.trim().toLowerCase().replace(/\.$/, '');
-  if (!host) return false;
-  return domains.some((raw) => {
-    const pattern = raw.trim().toLowerCase().replace(/\.$/, '');
-    if (!pattern) return false;
-    if (pattern === host) return true;
-    if (!pattern.startsWith('*.')) return false;
-    const base = pattern.slice(2);
-    if (!base || !host.endsWith(`.${base}`)) return false;
-    const prefix = host.slice(0, host.length - base.length - 1);
-    return prefix.length > 0 && !prefix.includes('.');
-  });
+  return certCoversDomain(domains, target);
 }
 
 /** installedAt / upgradedAt / checkedAt 是 ISO 字符串。 */

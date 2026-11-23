@@ -79,6 +79,58 @@ class StreamingRunnerTests(unittest.TestCase):
         self.assertEqual(result.rc, 127)
         self.assertIn("command not found", result.stderr)
 
+    def test_cr_progress_streams_before_exit_and_throttles_bursts(self) -> None:
+        """只有 \\r 的下载进度（如 curl TTY 进度条）也要按节流间隔实时回写并在退出时刷最后一条。"""
+        seen: list[str] = []
+        seen_mid: list[str] = []
+        script = "printf 'dl 10%%\\r'; sleep 0.6; printf 'dl 100%%\\r'"
+        timer = threading.Timer(0.25, lambda: seen_mid.extend(list(seen)))
+        timer.start()
+        result = default_streaming_runner(
+            ["bash", "-c", script],
+            timeout=30,
+            on_line=seen.append,
+            cr_throttle_sec=10.0,
+        )
+        timer.cancel()
+        self.assertEqual(result.rc, 0)
+        self.assertEqual(seen_mid, ["dl 10%"])
+        self.assertEqual(seen, ["dl 10%", "dl 100%"])
+
+        burst_seen: list[str] = []
+        burst_py = (
+            "import sys, time; "
+            "sys.stdout.buffer.write(b'pct 1\\r'); sys.stdout.buffer.flush(); "
+            "time.sleep(0.08); "
+            "sys.stdout.buffer.write(''.join(f'pct {i}\\r' for i in range(2, 31)).encode()); "
+            "sys.stdout.buffer.flush(); time.sleep(0.05)"
+        )
+        burst_result = default_streaming_runner(
+            ["python3", "-c", burst_py],
+            timeout=30,
+            on_line=burst_seen.append,
+            cr_throttle_sec=10.0,
+        )
+        self.assertEqual(burst_result.rc, 0)
+        self.assertEqual(burst_seen, ["pct 1", "pct 30"])
+
+    def test_split_crlf_across_chunks_does_not_duplicate(self) -> None:
+        seen: list[str] = []
+        split_py = (
+            "import sys, time; "
+            "sys.stdout.buffer.write(b'line1\\r'); sys.stdout.buffer.flush(); "
+            "time.sleep(0.08); "
+            "sys.stdout.buffer.write(b'\\nline2\\r\\n'); sys.stdout.buffer.flush()"
+        )
+        result = default_streaming_runner(
+            ["python3", "-c", split_py],
+            timeout=30,
+            on_line=seen.append,
+            cr_throttle_sec=10.0,
+        )
+        self.assertEqual(result.rc, 0)
+        self.assertEqual(seen, ["line1", "line2"])
+
 
 class CtxStreamingTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -116,6 +168,25 @@ class CtxStreamingTests(unittest.TestCase):
         ctx = Ctx(self.paths, log=lambda _m: None, deadline=time.monotonic() - 1)
         with self.assertRaises(Exception):
             ctx.run_streaming(["bash", "-c", "echo hi"], timeout=30)
+
+    def test_on_line_callback_works_for_streaming_and_injected_runner(self) -> None:
+        logs: list[str] = []
+        streamed: list[str] = []
+        ctx = Ctx(self.paths, log=logs.append)
+        result = ctx.run_streaming(["bash", "-c", "echo alpha; echo beta"], timeout=30, on_line=streamed.append)
+        self.assertEqual(result.rc, 0)
+        self.assertEqual(streamed, ["alpha", "beta"])
+        self.assertTrue(any(line.startswith("$ bash") for line in logs))
+        self.assertNotIn("alpha", logs)
+
+        def fake_runner(cmd, *, timeout=None, input=None, env=None, cwd=None):
+            return RunResult(cmd=[str(p) for p in cmd], rc=0, stdout="one\ntwo\n")
+
+        injected_lines: list[str] = []
+        ctx2 = Ctx(self.paths, command_runner=fake_runner, log=lambda _m: None)
+        res2 = ctx2.run_streaming(["fake-cmd"], timeout=5, on_line=injected_lines.append)
+        self.assertEqual(res2.rc, 0)
+        self.assertEqual(injected_lines, ["one", "two"])
 
 
 if __name__ == "__main__":

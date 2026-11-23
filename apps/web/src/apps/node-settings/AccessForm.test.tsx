@@ -4,7 +4,6 @@ import type { Node } from '@khc/contracts';
 import {
   TUNNELS_SETTINGS_HREF,
   accessDraftIssue,
-  suggestPublishPort,
   initialAccessDraft,
   isAccessDraftSubmittable,
   toCreatePayload,
@@ -21,6 +20,7 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     recordId: 'rec-1',
     domain: 'agent.example.com',
     domainPort: '2053',
+    tlsCertId: '',
     tunnelId: '',
     tunnelHostname: '',
     ipHost: '',
@@ -28,25 +28,36 @@ function draft(patch: Partial<NodeAccessDraft> = {}): NodeAccessDraft {
     insecureConfirmed: false,
     dnsZoneId: '',
     dnsSubdomain: '',
-    autoPublish: false,
-    upstreamPort: '8080',
-    publishPort: '2083',
     ...patch,
   };
 }
 
 describe('AccessForm 纯函数', () => {
-  it('域名模式：create / patch payload 自动生成 https endpoint 与 domain', () => {
+  it('域名模式：create / patch payload 自动生成 https endpoint、domain 与 tlsCertId', () => {
     expect(toCreatePayload(draft())).toEqual({
       name: 'node-9',
       accessMode: 'domain',
       endpoint: 'https://agent.example.com:2053',
       domain: 'agent.example.com',
     });
+    expect(toCreatePayload(draft({ tlsCertId: 'cert-1' }))).toEqual({
+      name: 'node-9',
+      accessMode: 'domain',
+      endpoint: 'https://agent.example.com:2053',
+      domain: 'agent.example.com',
+      tlsCertId: 'cert-1',
+    });
     expect(toPatchPayload(draft({ domainPort: '8443' }))).toEqual({
       accessMode: 'domain',
       endpoint: 'https://agent.example.com:8443',
       domain: 'agent.example.com',
+      tlsCertId: null,
+    });
+    expect(toPatchPayload(draft({ domainPort: '8443', tlsCertId: 'cert-2' }))).toEqual({
+      accessMode: 'domain',
+      endpoint: 'https://agent.example.com:8443',
+      domain: 'agent.example.com',
+      tlsCertId: 'cert-2',
     });
   });
 
@@ -111,6 +122,7 @@ describe('AccessForm 纯函数', () => {
       accessMode: 'domain',
       endpoint: 'https://app.other.net:8443',
       domain: 'app.other.net',
+      tlsCertId: null,
     });
   });
 
@@ -138,62 +150,17 @@ describe('AccessForm 纯函数', () => {
     ).toBe(true);
   });
 
-  it('域名模式自动发布：upstreamPort 与 publishPort 或 domainPort 冲突时不可提交', () => {
-    expect(
-      accessDraftIssue(
-        draft({
-          autoPublish: true,
-          upstreamPort: '443',
-          publishPort: '443',
-          domainPort: '8443',
-        }),
-      ),
-    ).toBe('上游端口不能与发布端口相同（会形成 Caddy 自反代死循环）');
-    expect(
-      accessDraftIssue(
-        draft({
-          autoPublish: true,
-          upstreamPort: '8443',
-          publishPort: '443',
-          domainPort: '8443',
-        }),
-      ),
-    ).toBe('上游端口不能与 Agent 监听端口相同（Agent 已占用该端口）');
-    expect(
-      isAccessDraftSubmittable(
-        draft({
-          autoPublish: true,
-          upstreamPort: '3000',
-          publishPort: '443',
-          domainPort: '8443',
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it('发布端口与 Agent 端口相同则不可提交；错开即可', () => {
-    const clash = draft({ autoPublish: true, domainPort: '2053', publishPort: '2053' });
-    expect(accessDraftIssue(clash)).toBe(
-      '发布端口不能与 Agent 监听端口相同：两个进程不能共用一个端口',
-    );
-    expect(isAccessDraftSubmittable(clash)).toBe(false);
-    expect(isAccessDraftSubmittable({ ...clash, publishPort: '2083' })).toBe(true);
-    // 不自动发布时不涉及第二条端口，同号也不影响保存
-    expect(isAccessDraftSubmittable({ ...clash, autoPublish: false })).toBe(true);
-  });
-
-  it('新节点默认两条端口都避开 443', () => {
+  it('新节点默认 Agent 端口避开 443，且无自动发布/发布端口字段', () => {
     const fresh = initialAccessDraft();
     expect(fresh.domainPort).toBe('2053');
-    expect(fresh.publishPort).toBe('2083');
     expect(fresh.domainPort).not.toBe('443');
-    expect(fresh.publishPort).not.toBe('443');
-    // 撞端口时的建议值要跳过 Agent 已经占用的那条
-    expect(suggestPublishPort('2053')).toBe('2083');
-    expect(suggestPublishPort('2083')).toBe('2053');
+    expect(fresh.tlsCertId).toBe('');
+    expect(fresh).not.toHaveProperty('autoPublish');
+    expect(fresh).not.toHaveProperty('publishPort');
+    expect(fresh).not.toHaveProperty('upstreamPort');
   });
 
-  it('存量节点有域名时默认落到「手动输入」，域名可直接改', () => {
+  it('存量节点有域名与 tlsCertId 时保留回显并默认落到「手动输入」', () => {
     const existing = initialAccessDraft({
       id: 'n2',
       name: 'existing',
@@ -203,11 +170,13 @@ describe('AccessForm 纯函数', () => {
       preferredRoute: 'direct',
       accessMode: 'domain',
       domain: 'app.other.net',
+      tlsCertId: 'cert-9',
       status: 'offline',
       lastSeenAt: null,
       createdAt: 1,
       updatedAt: 1,
     } as Node);
+    expect(existing.tlsCertId).toBe('cert-9');
     expect(existing.domainSource).toBe('manual');
     expect(existing.domain).toBe('app.other.net');
   });
