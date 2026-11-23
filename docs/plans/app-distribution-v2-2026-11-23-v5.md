@@ -2,14 +2,14 @@
 
 > 状态：已拍板 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/plans/app-distribution-v2-2026-11-23.md` §8、§11 V5、§12 第 4–5 项；`docs/verification/2026-11-23/manifest-v2-live.md` §五-2
 
-> **给开发 agent**：开工前提：**V4 已合入**，V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
+> **给开发 agent**：开工前提：**V4 已合入**，**V4.1 已合入**（Worker 对 upgrade 转发原始 `values`，§8.2 依赖它），V4 真机证据（V4 §7 流程、magpie v1 安装/卸载回归、9 张截图与四态说明）已合入 `docs/verification/`，且**全部生产节点已升级到 Agent ≥ 0.8.0**（magpie 改成 v2 后，0.7.x 节点会返回 409）。先读 `AGENTS.md`、提案、V4 与本文全文。本批跨 Worker、前端、Agent、脚本，分成两个 PR（§0）。认为本文有误时在 PR 里提出，不要改 `docs/plans/` 下的文件。
 
 ## 0. 速览
 
 | PR | 分支 | 内容 | 类型 / 版本 |
 |---|---|---|---|
 | V5a | `feat/app-library` | §2 去打包、§3 导入、§4 推送脚本、§5 magpie v2、§6 校验脚本通用化 | A + W，面板 **minor** |
-| V5b | `chore/remove-legacy-recipes` | §7 旧 recipe 删除、§8 Agent 用户总线修复 | G + P，Agent **patch → 0.8.1**；面板不 bump（无 `apps/` 改动时） |
+| V5b | `chore/remove-legacy-recipes` | §7 旧 recipe 删除、§8 Agent 0.8.1（8.1 用户总线就绪、8.2 安装记录保存参数值） | G + P，Agent **patch → 0.8.1**；面板不 bump（无 `apps/` 改动时） |
 
 合并顺序：V5a → 在测试节点用新导入功能导入 magpie v2 并回归 → V5b → 测试节点升级 0.8.1 → 滚动升级。
 
@@ -99,7 +99,9 @@
 
 文档：`docs/security-boundaries.md`（recipe 一节改写为清单执行器；顺带把 §13 最后一条改成「hook 声明 `extract` 时，在执行之前即拒绝明文通道」）、`docs/design-v3.md`、`docs/dual-mode.md`、`docs/ui-redesign/ui-guidelines.md` 中引用旧 recipe 的句子、`docs/hosted-apps.md` §1 三层表、`agent/README.md`。
 
-## 8. Agent 0.8.1：create 模式用户总线就绪（V5b）
+## 8. Agent 0.8.1（V5b）
+
+### 8.1 create 模式用户总线就绪
 
 真机证据 §五-2：新建应用用户后立即执行 `systemctl --user`，Ubuntu 24.04 上 `user@<uid>.service` 尚未就绪，报 `Failed to connect to bus`。修复放在 `agent/khc/app_manifests.py`：
 
@@ -109,15 +111,27 @@
 4. 测试：socket 已存在时不调用 `systemctl start`；不存在时调用一次并在出现后继续；15s 超时记警告；环境变量注入断言 argv / env。
 5. `VERSION = "0.8.1"`；`MIN_PANEL_VERSION` 不变。
 
+### 8.2 安装记录保存参数值，升级沿用（提案 §15）
+
+V4 真机证据 §五-1：安装记录不保存参数值，升级时只能拿到清单默认值，无默认值的参数报缺失、改过默认值的参数被静默改回。修复放在 `agent/khc/app_manifests.py`：
+
+1. **保存**：install / upgrade 成功落记录时（`run_manifest` 写 `record` 处），增加 `values`：本次实际生效的 `typed_values`（含 secret 参数与 derive 参数的值）。记录文件沿用 0600、目录 0700、属主 root。
+2. **不外泄**：`read_installed_manifests` 是字段白名单，**不得**把 `values` 拷进条目；`status()`、`manifest_installed`、`/state`、任务日志、`KHC_RESULT` 都不出现参数值。secret 参数值继续进 `_secret_values` 做日志遮罩。
+3. **升级合并**：`action == "upgrade"` 时，参数值 = 本次请求 `values` > 记录里的 `values` > 新清单 `default`。记录里有、新清单已删除的键**静默丢弃**（不要触发「存在未声明的参数」）；记录值不满足新清单校验（如枚举选项被删、范围变了）时报错，带 `details.field`。
+4. **旧记录**：0.8.0 写的记录没有 `values`，按现状只用请求值 + 默认值；缺失时照旧报 `缺少参数 X`。
+5. **错误码**：参数校验类错误（缺失、未声明、类型、范围、枚举、长度、pattern、控制字符）统一 `code="param_invalid"`，`details.field` 必带（未声明的参数给第一个键）。前端 V4.1 只认 `details.field`，所以改 code 不影响前端。
+6. **卸载**：记录删除即随之删除，不另行处理。uninstall 校验参数时同样用「请求值 > 记录值 > 默认值」（避免卸载因缺参失败）。
+7. 测试：保存后记录含 `values` 且 `read_installed_manifests` / `status()` 输出不含任何参数值（含 secret，断言序列化后的字符串不含该值）；升级合并三层优先级各一例；新清单删参数静默丢弃；记录值违反新校验报 `param_invalid` + `field`；旧记录（无 `values`）行为与 0.8.0 一致；uninstall 用记录值。
+
 ## 9. 测试汇总
 
 - V5a：导入三种来源（URL 来源用假 fetch：非 https 拒绝、超 512KB 拒绝、跨域失败提示）；差异确认的每类变化；`create → root` 警示；`app-manifests.test.ts` 全部清单通过 v2 / v1 schema；推送脚本 dry run 不发写请求、`--yes` 才发；`GET /app-manifests` 不再写 D1（去打包回归）；卸载测试遍历全部应用。
-- V5b：Agent 单测（§8-4）；`app_catalog` 不带 manifest 的 `recipe_*` 返回 400；`install-lifecycle-test.sh` 与 `test_cli.py` 通过；`verify.sh` 全绿。
+- V5b：Agent 单测（§8.1-4、§8.2-7）；`app_catalog` 不带 manifest 的 `recipe_*` 返回 400；`install-lifecycle-test.sh` 与 `test_cli.py` 通过；`verify.sh` 全绿。
 
 ## 10. 证据
 
 - V5a：测试节点（0.8.0）上用 [导入应用] 从仓库 raw URL 导入 magpie v2（截图差异确认页）→ 安装 → 两个端点只发布 web → 完成页主按钮可登录 → 升级（版本相同，应不显示升级按钮）→ 卸载；一台仍装着 v1 magpie 的节点，导入后能用 v2 清单卸载。
-- V5b：测试节点升级 0.8.1，**用一个从未存在过的应用用户**安装 magpie，首装即成功（无 bus 报错）；滚动升级其余节点（间隔 ≥ 60s）。
+- V5b：测试节点升级 0.8.1，**用一个从未存在过的应用用户**安装 magpie，首装即成功（无 bus 报错）；用 `ux-` 清单（一个无默认值参数、一个改过默认值的端口参数）安装 → 升级时不填任何参数 → 成功且健康检查仍在安装时的端口；`/state` 与任务日志里搜不到参数值；滚动升级其余节点（间隔 ≥ 60s）。
 - 证据写入 `docs/verification/<日期>/app-library.md`。
 
 ## 11. 审核清单
@@ -129,4 +143,4 @@
 - [ ] magpie v2 字段与 §5 表一致；install 一律 restart；结果只输出 cards
 - [ ] schema 校验只有一个来源（contracts）；卸载测试按 fixture 遍历全部应用
 - [ ] 旧 recipe 文件与引用全部删除，`pkg.py` 保留；`recipe_*` 别名保留
-- [ ] 0.8.1 总线就绪修复与测试；文档六处；版本号正确
+- [ ] 0.8.1 总线就绪修复与测试；安装记录保存 `values`、不外泄、升级三层合并、`param_invalid` + `field`；`docs/security-boundaries.md` 写明安装记录含参数值（0600，root）；文档六处；版本号正确

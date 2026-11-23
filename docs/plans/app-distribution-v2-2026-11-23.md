@@ -239,8 +239,9 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 | V1 | `docs/plans/app-distribution-v2-2026-11-23-v1.md` | 已合入（#151） |
 | V2 | `docs/plans/app-distribution-v2-2026-11-23-v2.md` | 已合入（#154） |
 | V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
-| V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 可开工 |
-| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR） |
+| V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 已合入（#158，v0.41.0），真机证据 `docs/verification/2026-11-23/manifest-v2-web.md`（#160） |
+| V4.1 | `docs/plans/app-distribution-v2-2026-11-23-v4.1.md` | 可开工（前端 + Worker，0.41.1；见 §15） |
+| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4、V4.1 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
 | V6 | `docs/plans/app-distribution-v2-2026-11-23-v6.md` | V5a、V5b 合入后开工 |
 
 开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 PR 不修改 `docs/plans/` 下的文件。
@@ -253,3 +254,31 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 | 首次建用户后 `systemctl --user` 报 bus 未就绪 | 执行器 enable-linger 后未等待 `user@<uid>.service`；create 模式自 R1 起即存在，非 0.8.0 回归 | V5b：Agent 0.8.1 等待总线就绪并注入 `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` |
 | `manifest_installed` 不传 `instance` 查不到 | 同第 1 行：记录是以 `default` 实例安装的，属测试口径 | 不改代码；默认实例约定写入 V4 与 `docs/hosted-apps.md` |
 | 第三轮升级后约 30s 显示不可达 | Worker `node-client` 对连接拒绝的冷却为 30s（超时才是 5s），`/state` 不绕过冷却；Agent 实际早已恢复 | 登记 backlog，不阻塞本提案 |
+
+## 15. V4 真机发现与处置（2026-11-23，证据 `docs/verification/2026-11-23/manifest-v2-web.md` §五）
+
+### 15.1 升级沿用安装参数（主人 2026-11-23 拍板）
+
+问题：安装记录不保存参数值；Worker 对 upgrade 用清单默认值补全 `values`；前端升级发 `values: {}`。于是无默认值的参数（含 `derive`）升级必报缺失，安装时改过默认值的参数升级后被**静默改回默认值**。这是 §4 设计遗漏，不是实现偏差。
+
+决定：
+
+| 层 | 改动 | 批次 |
+|---|---|---|
+| Agent | 安装记录保存本次生效的参数值（含 secret，记录 0600 / root）；状态、`/state`、日志、结果一律不输出；升级按「本次值 > 记录值 > 新清单默认值」合并，新清单删掉的键静默丢弃；参数错误统一 `param_invalid` + `details.field` | V5b（Agent 0.8.1，V5 §8.2） |
+| Worker | upgrade 转发请求原始 `values`，不再补默认值（Agent 自己补，0.8.0 行为不变）；hooks 渲染仍用默认值 + 本次值；保存时 preUpgrade / preUninstall 引用 `params.*` 给提醒 | V4.1（0.41.1） |
+| 前端 | 升级确认加「修改参数（可选）」，只提交改动键；按 `details.field` 自动展开补填 | V4.1（0.41.1） |
+
+不选的方案：只在前端让用户升级时重填全部参数（用户不记得安装值，易填错，secret 更不可能记得）；Worker 在 D1 存安装参数（参数值本属节点，secret 不应进控制面库，且多面板 / 节点重装会不一致）。
+
+安全取舍：secret 参数值本来就由安装脚本写进应用自己的配置，记录文件同为 root 0600，不新增暴露面；ADR-0023 决策 6 与 `docs/security-boundaries.md` 同步写明。
+
+### 15.2 其余发现
+
+| 发现 | 根因 | 处置 |
+|---|---|---|
+| 单元状态永远「未知」 | V3 开工说明 §7 示例把 `active` 写成字符串；实现是布尔 + `state` | V4.1 前端兼容；V3 文档已勘误 |
+| v1 清单（magpie）显示 v2、走 `manifest_uninstall` | Agent 0.8.0 归一后记录写 `schema: 2`，前端按记录判断 | V4.1：按 D1 清单 schema 判断；V5a 把 magpie 转 v2 后自然消失 |
+| 新建用户首次安装撞 user bus | 已知（§14 第 2 行） | V5b §8.1 不变 |
+| 卸载不清理已发布的 Caddy 站点 | 发布与安装是两步，卸载只管节点 | 登记 backlog |
+
