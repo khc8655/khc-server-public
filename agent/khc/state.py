@@ -16,6 +16,7 @@ import shutil
 import time
 from typing import Any, Optional
 
+from .app_manifests import manifest_capabilities
 from .ops import collect_ops, collect_snapshot
 from .util import LOG, Paths
 
@@ -123,6 +124,7 @@ def agent_info(kernel: Any) -> dict[str, Any]:
     epoch = epoch.epoch() if epoch is not None and callable(getattr(epoch, "epoch", None)) else None
     if epoch:
         info["epoch"] = epoch
+    info["capabilities"] = {"appManifest": manifest_capabilities()}
     return info
 
 

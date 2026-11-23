@@ -20,7 +20,16 @@ import os
 from typing import Any, Mapping
 
 from khc import Adapter, Ctx, action_params
-from khc.app_manifests import ManifestError, read_installed_manifests, run_manifest
+from khc.app_manifests import (
+    ManifestError,
+    collect_manifest_statuses,
+    control_manifest_units,
+    manifest_capabilities,
+    manifest_installed,
+    manifest_preflight,
+    read_manifest_logs,
+    run_manifest,
+)
 from khc.pkg import ensure_packages
 from khc.recipes import RecipeError, catalog_for_display, find_recipe, read_installed, run_recipe
 
@@ -49,12 +58,23 @@ class AppCatalog(Adapter):
     api = 1
     description = "应用目录：安装/卸载随包发布的 recipe（脚本 + 参数 + 结果文件）"
     requires_root = True
-    capabilities = {"pkgInstall": True, "recipeInstall": True}
+    capabilities = {
+        "pkgInstall": True,
+        "recipeInstall": True,
+        "appManifest": manifest_capabilities(),
+    }
     schema: dict[str, Any] = {}
     actions = {
         "recipe_install": {"mode": "task", "write": True, "description": "安装 recipe（后台任务）"},
         "recipe_uninstall": {"mode": "task", "write": True, "description": "卸载 recipe（后台任务）"},
         "recipe_installed": {"mode": "sync", "write": False, "description": "已安装 recipe 清单"},
+        "manifest_preflight": {"mode": "sync", "write": False, "description": "应用清单安装/升级/卸载预检"},
+        "manifest_install": {"mode": "task", "write": True, "description": "安装应用清单（后台任务）"},
+        "manifest_upgrade": {"mode": "task", "write": True, "description": "升级应用清单（后台任务）"},
+        "manifest_uninstall": {"mode": "task", "write": True, "description": "卸载应用清单（后台任务）"},
+        "manifest_control": {"mode": "sync", "write": True, "description": "启停或重启声明的 systemd unit"},
+        "manifest_logs": {"mode": "sync", "write": False, "description": "查看声明的 systemd unit 日志"},
+        "manifest_installed": {"mode": "sync", "write": False, "description": "查看已安装清单与单元/健康状态"},
     }
 
     def render(self, ctx: Ctx, config: Mapping[str, Any]) -> list:
@@ -62,7 +82,7 @@ class AppCatalog(Adapter):
         return []
 
     def status(self, ctx: Ctx) -> dict[str, Any]:
-        installed = {**read_installed(ctx), **read_installed_manifests(ctx)}
+        installed = {**read_installed(ctx), **collect_manifest_statuses(ctx)}
         return {
             "installed": sorted(installed),
             "installedDetail": installed,
@@ -71,40 +91,49 @@ class AppCatalog(Adapter):
 
     def action_recipe_installed(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         return {
-            "installed": {**read_installed(ctx), **read_installed_manifests(ctx)},
+            "installed": {**read_installed(ctx), **collect_manifest_statuses(ctx)},
             "recipes": catalog_for_display(_catalog_dir()),
             "cards": [],
         }
+
+    @staticmethod
+    def _manifest_id(params: Mapping[str, Any]) -> str:
+        manifest_id = params.get("manifestId") or params.get("id")
+        if not isinstance(manifest_id, str) or not manifest_id.strip():
+            raise ManifestError("缺少 manifestId")
+        return manifest_id.strip()
+
+    @staticmethod
+    def _opt_str(params: Mapping[str, Any], key: str) -> str | None:
+        val = params.get(key)
+        return val if isinstance(val, str) else None
+
+    def _run_manifest_action(self, ctx: Ctx, params: Mapping[str, Any], action: str) -> dict[str, Any]:
+        manifest_id = self._manifest_id(params)
+        values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
+        return run_manifest(
+            ctx,
+            manifest=params.get("manifest"),
+            manifest_id=manifest_id,
+            action=action,
+            values=dict(values),
+            instance=self._opt_str(params, "instance"),
+            runtime_mode=self._opt_str(params, "runtimeMode"),
+            runtime_user=self._opt_str(params, "runtimeUser"),
+            runtime_password=self._opt_str(params, "runtimePassword"),
+            hook_outputs=params.get("hookOutputs"),
+            hook_facts=params.get("hookFacts"),
+            hooks_skipped=bool(params.get("hooksSkipped", False)),
+        )
 
     def _run(self, ctx: Ctx, body: Mapping[str, Any], action: str) -> dict[str, Any]:
         params = action_params(body)
         values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
 
-        # R1：带 manifest 说明脚本由 Worker 从 D1 下发，走降权执行通道。
+        # R1/V2：带 manifest 说明脚本由 Worker 从 D1 下发，走清单执行通道。
         # 不带 manifest 的是随包发布的内置 recipe，旧路径原样保留（P-4）。
         if "manifest" in params:
-            manifest_id = params.get("manifestId") or params.get("id")
-            if not isinstance(manifest_id, str) or not manifest_id.strip():
-                raise ManifestError("缺少 manifestId")
-            return run_manifest(
-                ctx,
-                manifest=params["manifest"],
-                manifest_id=manifest_id.strip(),
-                action=action,
-                values=dict(values),
-                instance=params.get("instance") if isinstance(params.get("instance"), str) else None,
-                runtime_mode=(
-                    params.get("runtimeMode") if isinstance(params.get("runtimeMode"), str) else None
-                ),
-                runtime_user=(
-                    params.get("runtimeUser") if isinstance(params.get("runtimeUser"), str) else None
-                ),
-                runtime_password=(
-                    params.get("runtimePassword")
-                    if isinstance(params.get("runtimePassword"), str)
-                    else None
-                ),
-            )
+            return self._run_manifest_action(ctx, params, action)
 
         recipe_id = _recipe_id(params)
         recipe = find_recipe(recipe_id, _catalog_dir())
@@ -119,3 +148,76 @@ class AppCatalog(Adapter):
 
     def action_recipe_uninstall(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._run(ctx, body, "uninstall")
+
+    def action_manifest_preflight(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        params = action_params(body)
+        manifest_id = self._manifest_id(params)
+        values = params.get("values") if isinstance(params.get("values"), Mapping) else {}
+        stage = params.get("stage", "install")
+        if not isinstance(stage, str):
+            raise ManifestError("preflight stage 必须是字符串")
+        return manifest_preflight(
+            ctx,
+            manifest=params.get("manifest"),
+            manifest_id=manifest_id,
+            instance=self._opt_str(params, "instance"),
+            values=dict(values),
+            stage=stage,
+        )
+
+    def action_manifest_install(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._run_manifest_action(ctx, action_params(body), "install")
+
+    def action_manifest_upgrade(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._run_manifest_action(ctx, action_params(body), "upgrade")
+
+    def action_manifest_uninstall(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._run_manifest_action(ctx, action_params(body), "uninstall")
+
+    def action_manifest_control(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        params = action_params(body)
+        manifest_id = self._manifest_id(params)
+        unit = self._opt_str(params, "unit")
+        op = self._opt_str(params, "op")
+        if not unit:
+            raise ManifestError("缺少参数 unit")
+        if not op:
+            raise ManifestError("缺少参数 op")
+        values = params.get("values") if isinstance(params.get("values"), Mapping) else None
+        return control_manifest_units(
+            ctx,
+            manifest_id=manifest_id,
+            instance=self._opt_str(params, "instance"),
+            unit=unit,
+            op=op,
+            manifest=params.get("manifest"),
+            values=dict(values) if values is not None else None,
+        )
+
+    def action_manifest_logs(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        params = action_params(body)
+        manifest_id = self._manifest_id(params)
+        unit = self._opt_str(params, "unit")
+        if not unit:
+            raise ManifestError("缺少参数 unit")
+        values = params.get("values") if isinstance(params.get("values"), Mapping) else None
+        return read_manifest_logs(
+            ctx,
+            manifest_id=manifest_id,
+            instance=self._opt_str(params, "instance"),
+            unit=unit,
+            lines=params.get("lines"),
+            manifest=params.get("manifest"),
+            values=dict(values) if values is not None else None,
+        )
+
+    def action_manifest_installed(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        params = action_params(body)
+        manifest_id = params.get("manifestId") or params.get("id")
+        if manifest_id is not None and (not isinstance(manifest_id, str) or not manifest_id.strip()):
+            raise ManifestError("manifestId 非法")
+        return manifest_installed(
+            ctx,
+            manifest_id=manifest_id.strip() if isinstance(manifest_id, str) else None,
+            instance=self._opt_str(params, "instance"),
+        )

@@ -5,6 +5,7 @@
 ## [0.40.0] - 2026-11-23
 ### Added
 - 应用清单 v2 控制面编排：支持安装/升级/卸载前节点预检与版本协商（409 `agent_upgrade_required`）、HTTPS 出站步骤与 `app.*` 加密凭据及 `allowHosts` 校验，以及 `GET /app-manifests/:id/secrets`。
+- Agent `0.8.0`：新增应用清单 v2 执行器（模板引擎、安装前预检、升级、unit 启停与日志、回环健康检查与能力上报）。
 
 ## [0.39.0] - 2026-11-23
 ### Added

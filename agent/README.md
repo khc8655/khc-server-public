@@ -1,6 +1,6 @@
 # khc-agent（Hub 端 Agent 内核）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：docs/design-v3.md §2.2、docs/agent-lifecycle.md
 > 范围：Agent 内核/适配器契约与已知限制
 
 只用 **Python 3.11 标准库**，供 Cloudflare Worker 按需 HTTPS 调用（HMAC 鉴权）。
@@ -284,3 +284,10 @@ udp/51820 端口登记、客户端配置、无损换钥全状态机（PENDING→
 
 - 浏览器直连观测（`127.0.0.1:8899`、`/_live/*` 与 `/_live/snapshot`）已于 Agent `0.6.0` 下线，10s 快照由 Worker 签名转发 `GET /snapshot`。
 - `khc_agent.py run` 与 `install.sh` 保留 `--live-host` / `--live-port` / `--live-origins` / `--no-live` 为空操作参数，确保旧安装命令与旧 unit 升级不报错。
+
+## 应用清单执行器 v2（`app-catalog`）
+
+- `GET /state` 的 `agent.capabilities.appManifest` 上报 `schemas: [1, 2]` 与 9 项能力（`schema2`、`upgrade`、`units`、`health.http`、`health.tcp`、`health.unit`、`preflight`、`hookEnv`、`params.enum`）；`manifest_preflight` 在清单校验失败时仍返回 `capabilities`。
+- `app-catalog` 暴露 `manifest_preflight`（sync 只读）、`manifest_install` / `manifest_upgrade` / `manifest_uninstall`（task）、`manifest_control`（sync 写，`start`/`stop`/`restart`）、`manifest_logs`（sync 只读，1–500 行 / 64KB 截断并标明 `mayContainSecrets: true`）、`manifest_installed`（sync 只读）；`recipe_*` 旧动作与无 `manifest` 参数的随包 recipe 通道保持兼容。
+- `manifest_install` / `manifest_upgrade` 支持 `KHC_HOOK_*`（全部值计入日志脱敏列表）、`KHC_HOOKS_SKIPPED=1`（追加跳过提示卡）、`KHC_RESULT.cards`（≤16 条）与 `facts`（按 已有记录 < `hookFacts` < `KHC_RESULT.facts` 合并，只收标量、总计 ≤16 键 / 4KB）；`upgrade` 缺失记录报 409 `not_installed`，`manifest_control` / `manifest_logs` 对未安装实例同样报 409 `not_installed`。
+- 声明 `health` 时在安装/升级末尾按 `graceSec`/`intervalSec` 轮询检查（HTTP 限 `127.0.0.1`/`::1` 且强制 `ProxyHandler({})` 绕过代理变量、禁止跟随 3xx 重定向，支持 `versionPointer`）；失败保留已安装记录并附脱敏 unit 日志报 `health_failed`。`status()` 使用守护线程并发探测已安装实例与单元（共享 1s 预算、5s 只读缓存），兼容内核 2s 状态截止时间。
