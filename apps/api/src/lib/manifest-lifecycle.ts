@@ -416,17 +416,18 @@ export async function prepareManifestLifecycleAction(
   let hookFacts: Record<string, HookScalar> = {};
   let hooksSkipped = false;
 
+  // upgrade 只认 preUpgrade，未声明时不回退 preInstall，避免把注册步骤当升级重跑。
   const hookStep =
     stage === 'install'
       ? defV2.hooks?.preInstall
       : stage === 'upgrade'
-        ? (defV2.hooks?.preUpgrade ?? defV2.hooks?.preInstall)
+        ? defV2.hooks?.preUpgrade
         : defV2.hooks?.preUninstall;
   const hookStageName: 'preInstall' | 'preUpgrade' | 'preUninstall' =
     stage === 'install'
       ? 'preInstall'
       : stage === 'upgrade'
-        ? (defV2.hooks?.preUpgrade ? 'preUpgrade' : 'preInstall')
+        ? 'preUpgrade'
         : 'preUninstall';
 
   if (rawSkipHooks === true && stage === 'uninstall') {
@@ -439,6 +440,10 @@ export async function prepareManifestLifecycleAction(
       detail: { manifestId: parsed.data.manifestId, instance, stage: 'uninstall' },
     });
   } else if (hookStep) {
+    // hook 声明 extract 时产出的凭据将下发给节点：发往第三方前先拦截明文通道，避免已触发外部副作用后再失败。
+    if (hookStep.extract && Object.keys(hookStep.extract).length > 0) {
+      assertSecureChannelForRawSecrets(env, node);
+    }
     const factsRaw = installedInfo?.facts;
     const installedFacts =
       factsRaw && typeof factsRaw === 'object' && !Array.isArray(factsRaw)

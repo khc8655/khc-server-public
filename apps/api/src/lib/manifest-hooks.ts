@@ -239,118 +239,132 @@ export async function executeManifestHook(input: ExecuteHookInput): Promise<Exec
 
   const fetchImpl = deps.hookFetch ?? fetch;
   const startedAt = Date.now();
+  let status = 0;
+  let outcome = 'hook_failed';
   let response: Response;
+
   try {
-    response = await timed('ext', () =>
-      fetchImpl(renderedUrl, {
-        method: hook.method,
-        headers,
-        ...(serializedBody !== undefined ? { body: serializedBody } : {}),
-        redirect: 'manual',
-        signal: AbortSignal.timeout(HOOK_TIMEOUT_MS),
-      }),
-    );
-  } catch {
-    throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 请求失败`, undefined, {
-      stage,
-      status: 0,
-      error: 'request_failed_or_timeout',
-    });
-  }
-
-  if (response.status >= 300 && response.status < 400) {
-    await response.body?.cancel().catch(() => {});
-    throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 拒绝跟随重定向`, undefined, {
-      stage,
-      status: response.status,
-      error: 'redirect_not_allowed',
-    });
-  }
-
-  let rawText: string;
-  try {
-    rawText = await readBoundedText(response, MAX_HOOK_RESPONSE_BYTES);
-  } catch {
-    throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 响应超过 64KB 上限`, undefined, {
-      stage,
-      status: response.status,
-      error: 'response_too_large',
-    });
-  }
-
-  const statusOk = hook.expectStatus
-    ? hook.expectStatus.includes(response.status)
-    : response.status >= 200 && response.status <= 299;
-
-  if (!statusOk) {
-    let remoteError: string | undefined;
     try {
-      const errJson = JSON.parse(rawText) as { error?: unknown };
-      if (errJson && typeof errJson === 'object' && typeof errJson.error === 'string' && errJson.error) {
-        remoteError = errJson.error.slice(0, 200);
-      }
+      response = await timed('ext', () =>
+        fetchImpl(renderedUrl, {
+          method: hook.method,
+          headers,
+          ...(serializedBody !== undefined ? { body: serializedBody } : {}),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(HOOK_TIMEOUT_MS),
+        }),
+      );
     } catch {
-      // 忽略非 JSON 错误体，绝不回显原始响应
-    }
-    throw new AppError(
-      502,
-      'hook_failed',
-      `控制面步骤 ${stage} 返回状态 ${response.status}`,
-      undefined,
-      {
+      outcome = 'hook_failed';
+      throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 请求失败`, undefined, {
         stage,
-        status: response.status,
-        ...(remoteError ? { error: remoteError } : {}),
-      },
-    );
-  }
-
-  const hookOutputs: Record<string, HookScalar> = {};
-  const hookFacts: Record<string, HookScalar> = {};
-  const extractEntries = Object.entries(hook.extract ?? {});
-  if (extractEntries.length > 0) {
-    let doc: unknown;
-    try {
-      doc = JSON.parse(rawText);
-    } catch {
-      throw new AppError(502, 'hook_extract_failed', '控制面步骤响应不是合法 JSON', undefined, {
-        key: extractEntries[0]?.[0] ?? 'body',
+        status: 0,
+        error: 'request_failed_or_timeout',
       });
     }
-    const encoder = new TextEncoder();
-    const publicSet = new Set(hook.public ?? []);
-    for (const [key, pointer] of extractEntries) {
-      const val = extractJsonPointer(doc, pointer);
-      const isScalar =
-        typeof val === 'string' ||
-        (typeof val === 'number' && Number.isFinite(val)) ||
-        typeof val === 'boolean';
-      if (!isScalar || encoder.encode(String(val)).byteLength > MAX_EXTRACT_BYTES) {
-        throw new AppError(502, 'hook_extract_failed', `控制面步骤提取字段 ${key} 失败`, undefined, {
-          key,
+
+    status = response.status;
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => {});
+      outcome = 'hook_failed';
+      throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 拒绝跟随重定向`, undefined, {
+        stage,
+        status: response.status,
+        error: 'redirect_not_allowed',
+      });
+    }
+
+    let rawText: string;
+    try {
+      rawText = await readBoundedText(response, MAX_HOOK_RESPONSE_BYTES);
+    } catch {
+      outcome = 'hook_failed';
+      throw new AppError(502, 'hook_failed', `控制面步骤 ${stage} 响应超过 64KB 上限`, undefined, {
+        stage,
+        status: response.status,
+        error: 'response_too_large',
+      });
+    }
+
+    const statusOk = hook.expectStatus
+      ? hook.expectStatus.includes(response.status)
+      : response.status >= 200 && response.status <= 299;
+
+    if (!statusOk) {
+      outcome = 'hook_failed';
+      let remoteError: string | undefined;
+      try {
+        const errJson = JSON.parse(rawText) as { error?: unknown };
+        if (errJson && typeof errJson === 'object' && typeof errJson.error === 'string' && errJson.error) {
+          remoteError = errJson.error.slice(0, 200);
+        }
+      } catch {
+        // 忽略非 JSON 错误体，绝不回显原始响应
+      }
+      throw new AppError(
+        502,
+        'hook_failed',
+        `控制面步骤 ${stage} 返回状态 ${response.status}`,
+        undefined,
+        {
+          stage,
+          status: response.status,
+          ...(remoteError ? { error: remoteError } : {}),
+        },
+      );
+    }
+
+    const hookOutputs: Record<string, HookScalar> = {};
+    const hookFacts: Record<string, HookScalar> = {};
+    const extractEntries = Object.entries(hook.extract ?? {});
+    if (extractEntries.length > 0) {
+      let doc: unknown;
+      try {
+        doc = JSON.parse(rawText);
+      } catch {
+        outcome = 'hook_extract_failed';
+        throw new AppError(502, 'hook_extract_failed', '控制面步骤响应不是合法 JSON', undefined, {
+          key: extractEntries[0]?.[0] ?? 'body',
         });
       }
-      hookOutputs[key] = val;
-      if (publicSet.has(key)) {
-        hookFacts[key] = val;
+      const encoder = new TextEncoder();
+      const publicSet = new Set(hook.public ?? []);
+      for (const [key, pointer] of extractEntries) {
+        const val = extractJsonPointer(doc, pointer);
+        const isScalar =
+          typeof val === 'string' ||
+          (typeof val === 'number' && Number.isFinite(val)) ||
+          typeof val === 'boolean';
+        if (!isScalar || encoder.encode(String(val)).byteLength > MAX_EXTRACT_BYTES) {
+          outcome = 'hook_extract_failed';
+          throw new AppError(502, 'hook_extract_failed', `控制面步骤提取字段 ${key} 失败`, undefined, {
+            key,
+          });
+        }
+        hookOutputs[key] = val;
+        if (publicSet.has(key)) {
+          hookFacts[key] = val;
+        }
       }
     }
+
+    outcome = 'ok';
+    return { hookOutputs, hookFacts };
+  } finally {
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    await deps.audit.log({
+      actor,
+      nodeId: node.id,
+      action: 'app.hook',
+      detail: {
+        manifestId,
+        instance,
+        stage,
+        host: targetHost,
+        status,
+        durationMs,
+        outcome,
+      },
+    });
   }
-
-  const durationMs = Math.max(0, Date.now() - startedAt);
-  await deps.audit.log({
-    actor,
-    nodeId: node.id,
-    action: 'app.hook',
-    detail: {
-      manifestId,
-      instance,
-      stage,
-      host: targetHost,
-      status: response.status,
-      durationMs,
-    },
-  });
-
-  return { hookOutputs, hookFacts };
 }

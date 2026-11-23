@@ -165,6 +165,8 @@ describe('应用清单 v2 控制面步骤与出站安全约束（V2）', () => {
     expect(hostErrRes.status).toBe(403);
     expect(((await hostErrRes.json()) as { error: { code: string } }).error.code).toBe('secret_host_not_allowed');
     expect(hookFetch).not.toHaveBeenCalled();
+    // 请求发出前被拦截：不得产生 app.hook 审计
+    expect(ctx.audit.entries.filter((e) => e.action === 'app.hook')).toHaveLength(0);
 
     // 3. 配置正确 host → 成功、ext 进入 Server-Timing、audit 无凭据值、hookOutputs/hookFacts 分离
     await ctx.settings.put('app.hook-app.api_key', {
@@ -185,6 +187,16 @@ describe('应用清单 v2 控制面步骤与出站安全约束（V2）', () => {
     expect(receivedRequests[0]?.url).toBe('https://hub.example.com/nodes/hn_99?env=prod&node=测试 Hub');
     expect(receivedRequests[0]?.init?.redirect).toBe('manual');
     expect((receivedRequests[0]?.init?.headers as Record<string, string>).authorization).toBe(`Bearer ${SECRET_RAW}`);
+    const hookAudits = ctx.audit.entries.filter((e) => e.action === 'app.hook');
+    expect(hookAudits).toHaveLength(1);
+    expect(hookAudits[0]?.detail).toMatchObject({
+      manifestId: 'hook-app',
+      instance: 'alpha',
+      stage: 'preUpgrade',
+      host: 'hub.example.com',
+      status: 201,
+      outcome: 'ok',
+    });
 
     const agentForwarded = (ctx.agent.requests.at(-1)?.body as { params: Record<string, unknown> }).params;
     expect(agentForwarded.hookOutputs).toEqual({ token: 'tok_out', ext_id: 'ext_42' });
@@ -274,9 +286,21 @@ describe('应用清单 v2 控制面步骤与出站安全约束（V2）', () => {
     expect(errText).not.toContain('should-never-echo');
     const errBody = JSON.parse(errText) as { error: { details: { error: string } } };
     expect(errBody.error.details.error).toHaveLength(200);
+
+    // 每次实际发出请求失败后都记 app.hook 审计（含 status / durationMs / outcome）
+    const failAudits = ctx.audit.entries
+      .filter((e) => e.action === 'app.hook')
+      .map((e) => e.detail);
+    expect(failAudits.map((d) => [d?.status, d?.outcome])).toEqual([
+      [302, 'hook_failed'],
+      [0, 'hook_failed'],
+      [200, 'hook_failed'],
+      [200, 'hook_extract_failed'],
+      [500, 'hook_failed'],
+    ]);
   });
 
-  it('明文通道且带 hookOutputs 时拒绝转发给 Agent', async () => {
+  it('明文通道且 hook 声明 extract 时在发往第三方前即拦截（hookFetch 调用 0 次）', async () => {
     const hookFetch = vi.fn(async () => {
       return new Response(JSON.stringify({ key: 'hk_secret' }), {
         status: 200,
@@ -323,7 +347,52 @@ describe('应用清单 v2 控制面步骤与出站安全约束（V2）', () => {
     );
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('insecure_channel_secret');
-    // 预检发出过，但安装动作因明文通道被阻断未发给 Agent
+    expect(hookFetch).not.toHaveBeenCalled();
     expect(ctx.agent.requests.every((r) => !r.path.includes('manifest_install'))).toBe(true);
+  });
+
+  it('升级不回退 preInstall：只声明 preInstall 时，manifest_upgrade 不调用 hookFetch', async () => {
+    const hookFetch = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const ctx = makeContext({ hookFetch });
+    const cookie = await loginAsAdmin(ctx as never);
+    const { id: nodeId } = await createNode(ctx as never, cookie);
+    await ctx.appManifests.create({
+      id: 'no-pre-upg',
+      enabled: true,
+      manifest: makeManifestWithHook(
+        {
+          method: 'POST',
+          url: 'https://hub.example.com/register',
+          extract: { key: '/key' },
+        },
+        'preInstall',
+      ),
+    });
+    ctx.agent.handler = async (_m, p) => {
+      if (p.includes('manifest_preflight')) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            capabilities: { schemas: [1, 2], features: [...AGENT_MANIFEST_FEATURES] },
+            checks: [],
+            installed: { version: '2.0.0', schema: 2, facts: {} },
+          },
+        };
+      }
+      return { status: 200, body: { ok: true, taskId: 'upg-no-hook' } };
+    };
+
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/manifest_upgrade`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ params: { manifestId: 'no-pre-upg' }, idempotencyKey: 'upg-no-fb' }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    expect(hookFetch).not.toHaveBeenCalled();
   });
 });
