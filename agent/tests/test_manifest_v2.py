@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import hashlib
 import json
 import os
@@ -33,7 +34,7 @@ from khc.app_manifests import (
 from khc.manifest_template import TemplateRenderError, list_template_vars, render_template
 from khc.state import agent_info
 
-from .support import FakeRunner, HttpHarness, TEST_TOKEN, make_kernel, make_paths
+from .support import FakeRunner, HttpHarness, TEST_TOKEN, make_kernel, make_paths, wait_task
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEMPLATE_VECTORS_PATH = os.path.join(
@@ -370,6 +371,110 @@ class InstallUpgradeHealthTests(unittest.TestCase):
                 hook_outputs={"bad-key": "1"},
             )
 
+    def test_hook_facts_precedence_scalar_only_and_limits(self) -> None:
+        m = v2_manifest(scripts={"install": INSTALL_OK, "uninstall": UNINSTALL_OK, "upgrade": UPGRADE_OK})
+        # 合并顺序：已有记录 facts < hookFacts < KHC_RESULT.facts
+        run_manifest(
+            self._ctx(RecordingRunner(stdout='KHC_RESULT={"facts":{"shared":"script1","rec_only":"r0","rec_vs_hook":"r1"}}\n')),
+            manifest=m,
+            manifest_id="facts-demo",
+            action="install",
+            values={"port": 18080, "token": "sec-token"},
+            hook_facts={"shared": "hook1", "hook_only": 7, "enabled": True},
+        )
+        installed = mod.read_installed_manifests(self._ctx(RecordingRunner()))["facts-demo"]
+        self.assertEqual(
+            installed["facts"],
+            {
+                "shared": "script1",
+                "rec_only": "r0",
+                "rec_vs_hook": "r1",
+                "hook_only": 7,
+                "enabled": True,
+            },
+        )
+
+        # upgrade 时：rec_only 保留；hookFacts 覆盖 rec_vs_hook；KHC_RESULT.facts 覆盖 hookFacts
+        up = run_manifest(
+            self._ctx(RecordingRunner(stdout='KHC_RESULT={"facts":{"both":"from-script"}}\n')),
+            manifest=m,
+            manifest_id="facts-demo",
+            action="upgrade",
+            values={"port": 18080, "token": "sec-token"},
+            hook_facts={"rec_vs_hook": "from-hook", "both": "from-hook"},
+        )
+        self.assertEqual(up["facts"]["rec_only"], "r0")
+        self.assertEqual(up["facts"]["rec_vs_hook"], "from-hook")
+        self.assertEqual(up["facts"]["both"], "from-script")
+
+        # 非标量（object/list/null）必须拒绝
+        with self.assertRaises(ManifestError):
+            run_manifest(
+                self._ctx(RecordingRunner()),
+                manifest=m,
+                manifest_id="facts-bad",
+                action="install",
+                hook_facts={"nested": {"a": 1}},
+            )
+        # 16 键 / 4KB 上限对 hookFacts + KHC_RESULT.facts 共同生效
+        with self.assertRaises(ManifestError):
+            run_manifest(
+                self._ctx(RecordingRunner(stdout='KHC_RESULT={"facts":{"k17":"v"}}\n')),
+                manifest=m,
+                manifest_id="facts-limit",
+                action="install",
+                hook_facts={f"k{i}": i for i in range(16)},
+            )
+
+    def test_http_health_refuses_redirect_and_never_requests_target(self) -> None:
+        target_hits: list[str] = []
+
+        class TargetHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                target_hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *args):  # noqa: ANN002
+                pass
+
+        target_srv = HTTPServer(("127.0.0.1", 0), TargetHandler)
+        target_port = target_srv.server_address[1]
+        target_thread = threading.Thread(target=target_srv.serve_forever, daemon=True)
+        target_thread.start()
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target_port}/steal")
+                self.end_headers()
+
+            def log_message(self, *args):  # noqa: ANN002
+                pass
+
+        redir_srv = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+        redir_port = redir_srv.server_address[1]
+        redir_thread = threading.Thread(target=redir_srv.serve_forever, daemon=True)
+        redir_thread.start()
+        try:
+            res = mod._probe_http_health(
+                {
+                    "type": "http",
+                    "url": f"http://127.0.0.1:{redir_port}/hz",
+                    "expectStatus": 200,
+                    "timeoutMs": 1000,
+                }
+            )
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["status"], 302)
+            self.assertEqual(target_hits, [])
+        finally:
+            redir_srv.shutdown()
+            redir_srv.server_close()
+            target_srv.shutdown()
+            target_srv.server_close()
+
     def test_http_health_retry_version_pointer_and_proxy_bypass(self) -> None:
         m = v2_manifest(
             units=[{"name": "khc-demo-{{instance}}.service", "scope": "system"}],
@@ -602,6 +707,46 @@ class UnitsControlLogsAndStatusTests(unittest.TestCase):
         self.assertEqual(list(out_installed["installed"].keys()), ["app1"])
         self.assertEqual(out_installed["capabilities"], manifest_capabilities())
 
+    def test_status_probe_timeout_does_not_block_other_entries(self) -> None:
+        m = v2_manifest(
+            units=[{"name": "khc-s-{{instance}}.service", "scope": "system"}],
+            health={"type": "unit", "graceSec": 0, "intervalSec": 1},
+        )
+        run_manifest(self.ctx, manifest=m, manifest_id="slow-app", action="install")
+        run_manifest(self.ctx, manifest=m, manifest_id="fast-app", action="install")
+
+        release_slow = threading.Event()
+        orig_probe = mod._probe_unit_active
+
+        def slow_or_fast(ctx, *, scope, unit, user, timeout=mod.STATUS_PROBE_TIMEOUT):
+            if "slow-app" in unit:
+                release_slow.wait(timeout=5.0)
+            return orig_probe(ctx, scope=scope, unit=unit, user=user, timeout=timeout)
+
+        try:
+            with mock.patch.object(mod, "_probe_unit_active", side_effect=slow_or_fast):
+                t0 = time.monotonic()
+                statuses = collect_manifest_statuses(self.ctx, force=True)
+                elapsed = time.monotonic() - t0
+        finally:
+            release_slow.set()
+
+        self.assertLessEqual(elapsed, 1.5)
+        self.assertTrue(statuses["fast-app"]["lastHealth"]["ok"])
+        self.assertFalse(statuses["slow-app"]["lastHealth"]["ok"])
+        self.assertIn("timeout", statuses["slow-app"]["lastHealth"]["error"])
+
+    def test_control_and_logs_require_installed_record_409(self) -> None:
+        m = v2_manifest(units=[{"name": "khc-demo-{{instance}}.service", "scope": "system"}])
+        for fn, kwargs in (
+            (control_manifest_units, {"unit": "khc-demo-missing.service", "op": "restart"}),
+            (read_manifest_logs, {"unit": "khc-demo-missing.service"}),
+        ):
+            with self.assertRaises(ManifestError) as caught:
+                fn(self.ctx, manifest_id="missing", manifest=m, **kwargs)
+            self.assertEqual(caught.exception.status, 409)
+            self.assertEqual(caught.exception.code, "not_installed")
+
     def test_http_harness_routes_and_state_capabilities(self) -> None:
         kernel = make_kernel(self.paths, runner=FakeRunner())
         info = agent_info(kernel)
@@ -624,9 +769,38 @@ class UnitsControlLogsAndStatusTests(unittest.TestCase):
             self.assertTrue(pre["ok"])
             self.assertEqual(pre["capabilities"], manifest_capabilities())
 
+            code, ctrl_err, _ = harness.request(
+                "POST",
+                "/apps/app-catalog/manifest_control",
+                {
+                    "params": {"manifestId": "missing", "unit": "khc-demo.service", "op": "restart", "manifest": v2_manifest()},
+                    "idempotencyKey": "v2-http-ctrl-missing",
+                },
+            )
+            self.assertEqual(code, 409)
+            self.assertEqual(ctrl_err["error"]["code"], "not_installed")
+
+            code, task_resp, _ = harness.request(
+                "POST",
+                "/apps/app-catalog/manifest_install",
+                {
+                    "params": {
+                        "manifestId": "demo",
+                        "manifest": v2_manifest(),
+                        "hookFacts": {"hub_node_id": "hn_42"},
+                    },
+                    "idempotencyKey": "v2-http-hookfacts",
+                },
+            )
+            self.assertEqual(code, 200)
+            finished = wait_task(kernel, task_resp["taskId"])
+            self.assertEqual(finished["state"], "done")
+            self.assertEqual(finished["result"]["facts"], {"hub_node_id": "hn_42"})
+
             code, installed, _ = harness.request("POST", "/apps/app-catalog/manifest_installed", {"params": {}})
             self.assertEqual(code, 200)
-            self.assertEqual(installed["installed"], {})
+            self.assertIn("demo", installed["installed"])
+            self.assertEqual(installed["installed"]["demo"]["facts"], {"hub_node_id": "hn_42"})
         finally:
             harness.stop()
 

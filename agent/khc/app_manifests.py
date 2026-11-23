@@ -37,7 +37,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from secrets import token_hex
 from typing import Any, Callable, Mapping, Optional
 
@@ -1162,9 +1161,20 @@ def _normalize_cards(payload: Mapping[str, Any], *, hooks_skipped: bool = False)
 
 def _extract_facts(
     payload: Mapping[str, Any],
+    *,
     existing: Optional[Mapping[str, Any]] = None,
+    hook_facts: Any = None,
 ) -> dict[str, Any]:
     merged: dict[str, Any] = dict(existing) if isinstance(existing, Mapping) else {}
+    if hook_facts is not None:
+        if not isinstance(hook_facts, Mapping):
+            raise ManifestError("hookFacts 必须是对象")
+        for k, v in hook_facts.items():
+            if not isinstance(k, str) or not k:
+                raise ManifestError("hookFacts 键名必须是非空字符串")
+            if isinstance(v, (dict, list, tuple, set)) or v is None or not isinstance(v, (str, int, float, bool)):
+                raise ManifestError(f"hookFacts.{k} 只允许标量（string/number/boolean）")
+            merged[k] = v
     raw_facts = payload.get("facts")
     if raw_facts is not None:
         if not isinstance(raw_facts, Mapping):
@@ -1228,6 +1238,13 @@ def _probe_unit_active(
     return entry
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """健康检查禁止跟随任何 3xx 重定向，防止回环地址把探测跳转到外部主机。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ARG002
+        return None
+
+
 def _probe_http_health(
     spec: Mapping[str, Any],
     *,
@@ -1244,7 +1261,11 @@ def _probe_http_health(
     timeout_sec = max(0.1, float(spec.get("timeoutMs", 1000)) / 1000.0)
     if timeout_cap is not None:
         timeout_sec = min(timeout_sec, timeout_cap)
-    http_opener = opener if opener is not None else urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    http_opener = (
+        opener
+        if opener is not None
+        else urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirectHandler())
+    )
 
     status_code: Optional[int] = None
     body_bytes = b""
@@ -1259,6 +1280,11 @@ def _probe_http_health(
             body_bytes = exc.read(64 * 1024)
         except Exception:
             body_bytes = b""
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -1439,6 +1465,7 @@ def run_manifest(
     runtime_user: Optional[str] = None,
     runtime_password: Optional[str] = None,
     hook_outputs: Any = None,
+    hook_facts: Any = None,
     hooks_skipped: bool = False,
     health_http_opener: Optional[Any] = None,
     health_tcp_connector: Callable[..., Any] = socket.create_connection,
@@ -1562,7 +1589,7 @@ def run_manifest(
     save_json(result_file, {"manifestId": manifest_id, "instance": name, "action": action}, mode=0o600)
 
     old_facts = recorded_map.get("facts") if (action == "upgrade" and recorded_map) else None
-    facts = _extract_facts(payload, existing=old_facts) if action != "uninstall" else {}
+    facts = _extract_facts(payload, existing=old_facts, hook_facts=hook_facts) if action != "uninstall" else {}
     cards = _normalize_cards(payload, hooks_skipped=bool(hooks_skipped))
     access = list(payload["access"]) if isinstance(payload.get("access"), list) else []
 
@@ -1976,6 +2003,13 @@ def _resolve_unit_target(
 
     recorded = load_json(_record_path(ctx, manifest_id, name), default=None)
     recorded_map = recorded if isinstance(recorded, Mapping) else None
+    if recorded_map is None:
+        raise ManifestError(
+            "该实例尚未安装，无法操作单元或读取日志",
+            status=409,
+            code="not_installed",
+            details={"manifestId": manifest_id, "instance": name},
+        )
 
     allowed_units: list[dict[str, str]] = []
     if recorded_map and isinstance(recorded_map.get("units"), list):
@@ -2220,28 +2254,55 @@ def collect_manifest_statuses(
     result: dict[str, dict[str, Any]] = {key: dict(val) for key, val in installed.items()}
 
     if needs_probe:
-        with ThreadPoolExecutor(max_workers=min(8, len(needs_probe))) as pool:
-            futures = {
-                key: pool.submit(
-                    _probe_installed_entry,
+        deadline = clock() + STATUS_PROBE_TIMEOUT
+        outcomes: dict[str, dict[str, Any]] = {}
+        out_lock = threading.Lock()
+        threads: list[tuple[str, threading.Thread]] = []
+
+        def run_one(entry_key: str, item: Mapping[str, Any]) -> None:
+            try:
+                val = _probe_installed_entry(
                     ctx,
                     item,
                     opener=opener,
                     connector=connector,
                 )
-                for key, item in needs_probe
-            }
-            for key, fut in futures.items():
-                try:
-                    result[key] = fut.result(timeout=STATUS_PROBE_TIMEOUT + 0.5)
-                except Exception as exc:  # noqa: BLE001
-                    fallback = dict(result[key])
-                    fallback["lastHealth"] = {
-                        "ok": False,
-                        "checkedAt": iso_utc(time.time()),
-                        "error": str(exc),
-                    }
-                    result[key] = fallback
+            except Exception as exc:  # noqa: BLE001
+                val = dict(item)
+                val["lastHealth"] = {
+                    "ok": False,
+                    "checkedAt": iso_utc(time.time()),
+                    "error": str(exc),
+                }
+            with out_lock:
+                outcomes[entry_key] = val
+
+        for entry_key, item in needs_probe:
+            t = threading.Thread(
+                target=run_one,
+                args=(entry_key, item),
+                name=f"khc-manifest-status-{entry_key[:24]}",
+                daemon=True,
+            )
+            t.start()
+            threads.append((entry_key, t))
+
+        for entry_key, t in threads:
+            remaining = max(0.0, deadline - clock())
+            if remaining > 0.0:
+                t.join(timeout=remaining)
+            with out_lock:
+                done_val = outcomes.get(entry_key)
+            if done_val is not None:
+                result[entry_key] = done_val
+            else:
+                fallback = dict(result[entry_key])
+                fallback["lastHealth"] = {
+                    "ok": False,
+                    "checkedAt": iso_utc(time.time()),
+                    "error": "status probe timeout",
+                }
+                result[entry_key] = fallback
 
     if cache_ttl > 0 and opener is None and connector is socket.create_connection:
         with _STATUS_CACHE_LOCK:

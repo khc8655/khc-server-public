@@ -122,6 +122,7 @@ class AppCatalog(Adapter):
             runtime_user=self._opt_str(params, "runtimeUser"),
             runtime_password=self._opt_str(params, "runtimePassword"),
             hook_outputs=params.get("hookOutputs"),
+            hook_facts=params.get("hookFacts"),
             hooks_skipped=bool(params.get("hooksSkipped", False)),
         )
 
