@@ -1,9 +1,12 @@
-/** R1：全局应用清单（运行时从 Worker 读取，不再构建期生成）。 */
+/** R1 / V4：全局应用清单与凭据状态查询（运行时从 Worker 读取）。 */
 import { queryOptions } from '@tanstack/react-query';
 import {
   appManifestListResponseSchema,
   appManifestResponseSchema,
+  appManifestSecretsResponseSchema,
   type AppManifest,
+  type AppManifestResponse,
+  type AppManifestSecretStatus,
   type CreateAppManifestRequest,
   type UpdateAppManifestRequest,
 } from '@khc/contracts';
@@ -14,32 +17,47 @@ export async function fetchAppManifests(): Promise<AppManifest[]> {
   return appManifestListResponseSchema.parse(body).appManifests;
 }
 
-export async function createAppManifest(input: CreateAppManifestRequest): Promise<AppManifest> {
+export async function createAppManifest(
+  input: CreateAppManifestRequest,
+): Promise<AppManifestResponse> {
   const body = await apiRequest('/api/v1/app-manifests', {
     method: 'POST',
     body: JSON.stringify(input),
   });
-  return appManifestResponseSchema.parse(body).appManifest;
+  return appManifestResponseSchema.parse(body);
 }
 
 export async function updateAppManifest(
   id: string,
   input: UpdateAppManifestRequest,
-): Promise<AppManifest> {
+): Promise<AppManifestResponse> {
   const body = await apiRequest(`/api/v1/app-manifests/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(input),
   });
-  return appManifestResponseSchema.parse(body).appManifest;
+  return appManifestResponseSchema.parse(body);
 }
 
 export async function deleteAppManifest(id: string): Promise<void> {
   await apiRequest(`/api/v1/app-manifests/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+export async function fetchAppManifestSecrets(id: string): Promise<AppManifestSecretStatus[]> {
+  const body = await apiRequest(`/api/v1/app-manifests/${encodeURIComponent(id)}/secrets`);
+  return appManifestSecretsResponseSchema.parse(body).secrets;
+}
+
 export const appManifestsQueryOptions = () =>
   queryOptions({
     queryKey: ['appManifests'],
     queryFn: fetchAppManifests,
+    staleTime: 10_000,
+  });
+
+export const appManifestSecretsQueryOptions = (id: string) =>
+  queryOptions({
+    queryKey: ['appManifestSecrets', id],
+    queryFn: () => fetchAppManifestSecrets(id),
+    enabled: Boolean(id),
     staleTime: 10_000,
   });

@@ -1,6 +1,6 @@
 # 全站页面规范（page-specs）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：[ui-guidelines.md](ui-guidelines.md)、AGENTS.md §3、ADR-0018
+> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：[ui-guidelines.md](ui-guidelines.md)、AGENTS.md §3、ADR-0018
 > 范围：路由总表与区块映射，新增页面必须同步登记
 > 页面类型代号见 [ui-guidelines.md](ui-guidelines.md)：A 分诊概览 / B 列表对象 / C 单对象详情 / D 配置表单 / E 运维动作 / L 登录。
 > 本文只负责**路由与区块映射**；布局、字阶、组件形态、四态、响应式与文案细则见 `ui-guidelines.md` §8.9–§8.14。
@@ -104,7 +104,7 @@
 
 ### 1.4 `/settings` 全局设置（类型 B + D）
 
-- **应用管理分段（R1，类型 D 资源库）**：数据运行时读 `/api/v1/app-manifests`。表：应用 | ID | 版本 | 运行用户 | 状态。整行点击打开编辑抽屉：应用 ID（创建时）、应用定义 JSON（mono 文本域，失焦后由 Worker 的 `.strict()` 契约校验并回显错误）、启用开关。行内动作「编辑」「删除」（L2 确认）；空态主操作 [添加应用]。新增或修改定义不需要发版。
+- **应用管理分段（R1 / V4，类型 D 资源库）**：数据运行时读 `/api/v1/app-manifests`（凭据状态按需读 `/api/v1/app-manifests/:id/secrets`）。表：应用（带 `v2` / `动态脚本` 徽标）| ID | 版本 | 默认运行身份 | 状态。整行点击打开编辑抽屉（支持 `?manifest=<id>` 直达）：应用 ID（创建时）、应用定义 JSON（mono 文本域，由 Worker 契约校验并返回 `warnings[]` 顶部提醒）、启用开关，以及三只读/管理分区——**凭据**（只写不读：展示已配置状态、`allowHosts` 建议与更新时间，支持设置/替换/行内确认删除，不回显凭据值）、**控制面步骤**（只读 `stage · method · host`）、**外部来源**（`固定`/`动态`）。行内动作进 `⋯` 菜单（编辑/启用停用/L2 删除）；空态主操作 [添加应用]。新增或修改定义不需要发版。
 
 - **目的**：管理全局 DNS 账号、域名解析、证书库、隧道、应用清单与 SSH 公钥。
 - **谁/场景**：配置云厂商 DNS Token、拉取域名与管理解析记录、签发/轮换证书、维护受管应用清单，中低频。
@@ -145,11 +145,11 @@
 - **首屏**：
   1. 动态 Segmented `[应用 | 静态与跳转（有才显示） | 证书（有才显示）]`；只有 1 个分段时隐藏切换器（R2）；
   2. 应用主表上方在存在 5xx / `down` 异常反代时展示「异常应用排查」卡，直接给出明确病因（本机端口未监听 / Peer 离线 / Peer 未接入 / 上游报错）及 [编辑] [停用] 与直达链接；主表：`应用 | 访问地址（完整可点 `http(s)://域名[:端口]` + 复制按钮 + TLS 简标）| 指向目标（宽屏独立列，窄屏并入应用列第二段）| 状态（已同步 / 待应用）| 操作`；加载中先显示骨架，反代为空时显示「还没有应用」+ [添加第一个应用]（P-5）；待应用横幅主动作按钮为 [应用到节点]；搜索框支持按应用名、域名或端口过滤；
-  3. 「已安装的托管应用」卡片仅在已装数量 `> 0`、加载中或报错/卸载中时展示，0 项时自动隐藏；
+  3. 「已安装的托管应用」卡片读 `/overview` 回填的 `/state`（不再调用 `recipe_installed`），按 `manifestId`/`instance` 字段定位条目；支持 `stale` / `pending` / `error` 状态横幅与「未读取」状态；仅在数量 `> 0`、加载中或报错/状态异常时展示，0 项自动隐藏。点击行或 [详情] 打开 `InstalledAppDrawer`：展示 unit 状态、v2 unit 启动/停止/重启、按需展开 `logs`（带 `stderr`、`unit` 与 `lines`）、升级（v2 且版本不同）、常规卸载及 `hook_failed`/`hook_extract_failed` 行内强制卸载（`skipHooks: true`，均不叠 Dialog）。
   4. 「本机监听端口」卡片仅在存在未发布端口（已过滤 `caddy` / `socat` 与面板及端口转发占用端口）时渲染（R2），每行提供显式 [发布] 按钮（与行点击一致，预填进程名、节点绑定域名与避开占用的对外端口并打开 `SiteDrawer`）；无未托管站点块（且无待恢复/import 提示）时将「外部配置（未托管）」连同 [清空站点] 收进页底「高级」折叠区，发现外部块时自动顶升到「高级」区上方；
   5. 「证书」分段展示本节点关联证书并注明「仅统计证书库中的证书，Caddy 自动签发的不计」（R6）。
 
-- **抽屉与外部接管**：`SiteDrawer` 顶部增加实时 `对外访问预览（访问地址 → 转发目标）`，恢复「应用名称」字段以区分同域名多端口应用，默认预填节点绑定域名（`node.domain`）与推荐可用端口（自动避开 Agent 端口、本机上游端口及同域名已占端口），提供「与本机应用/Agent 撞端口」内联报错 + [改用推荐端口] 一键切换，以及 `.test`/`.local`/IP 自动 TLS 警告 + [改用节点域名]；启用 `host-ops` 且非 Tunnel 节点时在抽屉及 `InstallAndPublishDrawer` 第 2/3 步内联核对 `fw.show`，未放行目标 TCP 端口时提示并支持原地 [一键放行 TCP <port>]（`fw.apply` + `fw.confirm`，不叠 Dialog）；保留精简字段集与抽屉内直接保存生效/失败回滚 D1、不叠 Dialog；独立 `InstallAndPublishDrawer` 三步向导同样默认预填节点域名与非冲突端口，按应用 ID 命名站点以支持同域名多端口并存；Caddy 服务状态抽屉收在页头次操作，安装由组件 capabilities 驱动（L2）。
+- **抽屉与外部接管**：`SiteDrawer` 顶部增加实时 `对外访问预览（访问地址 → 转发目标）`，恢复「应用名称」字段以区分同域名多端口应用，默认预填节点绑定域名（`node.domain`）与推荐可用端口（自动避开 Agent 端口、本机上游端口及同域名已占端口），提供「与本机应用/Agent 撞端口」内联报错 + [改用推荐端口] 一键切换，以及 `.test`/`.local`/IP 自动 TLS 警告 + [改用节点域名]；启用 `host-ops` 且非 Tunnel 节点时在抽屉及 `InstallAndPublishDrawer` 第 2/3 步内联核对 `fw.show`，未放行目标 TCP 端口时提示并支持原地 [一键放行 TCP <port>]（`fw.apply` + `fw.confirm`，不叠 Dialog）；保留精简字段集与抽屉内直接保存生效/失败回滚 D1、不叠 Dialog；独立 `InstallAndPublishDrawer` 三步向导按 `agent.capabilities.appManifest` 做能力协商（缺能力置灰并链接节点设置升级），第 2 步按 `schema=2`（v1 经 `toManifestV2` 归一）渲染声明式参数（`enum` 联动资源提示、`secret` 遮罩显隐、隐藏并自动填充 `derive`）、多端点区（逐端点选 `通过 Caddy 发布此端点`、或展示 `direct` + `bind=any` 防火墙核对、`none` 只装不发），安装按 schema 分流 `manifest_install` / `recipe_install`，第 3 步逐个发布已勾端点并在完成页通过 `ResultCardsView` 展示 `KHC_RESULT.cards`；错误处理按 §3.1 映射结构化 `ApiError.code/details`（含 `?manifest=<id>` 直达配置凭据）；Caddy 服务状态抽屉收在页头次操作，安装由组件 capabilities 驱动（L2）。
 - **命名**：页面标题「应用」；类型：反代 / 静态 / 重定向。
 
 ### 2.2a `/hubs/:id/services` 对外服务（302 过渡）

@@ -284,7 +284,7 @@ export default function SitesPage() {
 
   const configState = caddyQuery.data;
   const config = configState?.config ?? emptyCaddyConfig();
-  const { channels, stateQuery } = useHubChannelsContext();
+  const { channels, stateQuery, runtimePending } = useHubChannelsContext();
   const liveState = stateQuery.data?.state as
     | { adapters?: { name: string; status?: Record<string, unknown> }[] }
     | undefined;
@@ -515,6 +515,7 @@ export default function SitesPage() {
   const [startConfirm, setStartConfirm] = useState(false);
   const [exportConfirm, setExportConfirm] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [selectedInstalledKey, setSelectedInstalledKey] = useState<string | null>(null);
   const [pendingSiteNames, setPendingSiteNames] = useState<string[]>([]);
 
   useEffect(() => {
@@ -558,6 +559,10 @@ export default function SitesPage() {
       });
     }
     next.initial = siteSignature(next);
+    setWizardOpen(false);
+    setServiceOpen(false);
+    setImportView(null);
+    setSelectedInstalledKey(null);
     setForm(next);
     setErrors({});
     setSaveError(null);
@@ -565,6 +570,10 @@ export default function SitesPage() {
   };
 
   const openEdit = (site: CaddySite) => {
+    setWizardOpen(false);
+    setServiceOpen(false);
+    setImportView(null);
+    setSelectedInstalledKey(null);
     setForm(editForm(site));
     setErrors({});
     setSaveError(null);
@@ -982,6 +991,10 @@ export default function SitesPage() {
   };
 
   const openService = () => {
+    closeDrawer();
+    setWizardOpen(false);
+    setImportView(null);
+    setSelectedInstalledKey(null);
     setServiceOpen(true);
     setServiceView('status');
     setServiceConfig(null);
@@ -1091,6 +1104,10 @@ export default function SitesPage() {
       setServiceConfig(extractCaddyConfig(envelope));
       setServiceView('config');
       // 导出确认框是页面级的：确认成功后重新打开同一个服务抽屉展示配置。
+      closeDrawer();
+      setWizardOpen(false);
+      setImportView(null);
+      setSelectedInstalledKey(null);
       setServiceOpen(true);
       setExportConfirm(false);
     } catch (error) {
@@ -1274,6 +1291,10 @@ export default function SitesPage() {
       return;
     }
     if (ref.id === 'app.installPublish') {
+      closeDrawer();
+      setSelectedInstalledKey(null);
+      setServiceOpen(false);
+      setImportView(null);
       setWizardOpen(true);
       return;
     }
@@ -1684,7 +1705,22 @@ export default function SitesPage() {
             onRowOpen={(row) => openEdit(row.site)}
           />
 
-          <InstalledAppsCard hubId={hubId} />
+          <InstalledAppsCard
+            hubId={hubId}
+            hubName={hubName}
+            state={stateQuery.data?.state ?? null}
+            stateLoading={runtimePending}
+            offlineReason={writeDisabledReason}
+            selectedKey={selectedInstalledKey}
+            onSelectEntry={(key) => {
+              closeDrawer();
+              setWizardOpen(false);
+              setServiceOpen(false);
+              setImportView(null);
+              setSelectedInstalledKey(key);
+            }}
+            onCloseDrawer={() => setSelectedInstalledKey(null)}
+          />
 
           {listeningPorts.length > 0 ? (
             <Card title={zh.services.listeningTitle}>
@@ -1801,6 +1837,9 @@ export default function SitesPage() {
           onSave={(apply) => void save(apply)}
           onOpenInstallWizard={() => {
             closeDrawer();
+            setSelectedInstalledKey(null);
+            setServiceOpen(false);
+            setImportView(null);
             setWizardOpen(true);
           }}
         />
@@ -1811,6 +1850,7 @@ export default function SitesPage() {
           hubId={hubId}
           hubName={hubName}
           node={hubQuery.data}
+          state={stateQuery.data?.state ?? null}
           hasHostOps={hasHostOps}
           certificates={certs}
           existingSites={config.sites}

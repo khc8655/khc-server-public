@@ -9,7 +9,7 @@ import {
   createRootRoute,
   createRouter,
 } from '@tanstack/react-router';
-import type { Certificate, Node } from '@khc/contracts';
+import type { AgentState, Certificate, Node } from '@khc/contracts';
 import { normalizeCaddyConfig, type CaddySite } from '../../data/sites';
 import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
 
@@ -38,6 +38,43 @@ const node: Node = {
   createdAt: 1,
   updatedAt: 2,
 };
+
+function makeStateResponse(
+  installedDetail: Record<string, unknown> = {},
+  capabilities: Record<string, unknown> = {
+    appManifest: {
+      schemas: [1, 2],
+      features: ['schema2', 'upgrade', 'units', 'health.http', 'hookEnv', 'params.enum'],
+    },
+  },
+) {
+  return {
+    reachable: true,
+    route: 'direct',
+    via: 'fetch',
+    error: null,
+    state: {
+      host: {
+        hostname: 'hk-1',
+        os: 'Ubuntu',
+        kernel: '6.8',
+        uptime: 100,
+        load: [0, 0, 0],
+        disk: { total: 100, used: 10, free: 90, percent: 10 },
+        mem: { total: 1000, available: 800, used: 200, percent: 20 },
+      },
+      adapters: [
+        { name: 'app-catalog', version: '1.0.0', appliedRev: null, status: { installedDetail } },
+      ],
+      ports: [],
+      agent: {
+        version: '0.8.0',
+        serverTime: NOW,
+        capabilities,
+      },
+    },
+  };
+}
 
 const magpieManifest = {
   id: 'magpie',
@@ -82,6 +119,10 @@ function renderWizard(
     existingSites?: CaddySite[];
     onPublished?: () => Promise<void> | void;
     onClose?: () => void;
+    installedDetail?: Record<string, unknown>;
+    capabilities?: Record<string, unknown>;
+    hasHostOps?: boolean;
+    installTimeoutMs?: number;
   } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -91,6 +132,9 @@ function renderWizard(
         hubId="hub-1"
         hubName="hk-1"
         node={node}
+        state={makeStateResponse(props.installedDetail, props.capabilities).state as unknown as AgentState}
+        hasHostOps={props.hasHostOps}
+        installTimeoutMs={props.installTimeoutMs}
         certificates={props.certificates ?? []}
         existingSites={props.existingSites ?? []}
         pollIntervalMs={5}
@@ -129,9 +173,6 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
-        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
-        }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           installPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return json({ ok: true, accepted: true, taskId: 'task-42', result: { taskId: 'task-42' } });
@@ -146,7 +187,17 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
               progress: done ? 100 : 50,
               logs: ['downloading magpie', ...(done ? ['service active on 3430'] : [])],
               result: done
-                ? { access: [{ label: 'Web 登录', value: 'https://app.example.com:8443/?k=1' }] }
+                ? {
+                    cards: [
+                      {
+                        title: '打开应用（含登录密钥）',
+                        value: 'https://app.example.com:8443/?k=1',
+                        kind: 'url',
+                        primary: true,
+                        copy: true,
+                      },
+                    ],
+                  }
                 : null,
               error: null,
             },
@@ -251,15 +302,6 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
-        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({
-            ok: true,
-            installed: { magpie: { version: '0.1.4265', installedAt: '2026-11-22T00:53:28Z' } },
-            recipes: [],
-            cards: [],
-            result: { cards: [] },
-          });
-        }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           return json({ ok: true, accepted: true, taskId: 'task-99', result: { taskId: 'task-99' } });
         }
@@ -304,7 +346,19 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       }),
     );
 
-    renderWizard({ certificates: [wildcardCert] });
+    renderWizard({
+      certificates: [wildcardCert],
+      installedDetail: {
+        'magpie/default': {
+          manifestId: 'magpie',
+          instance: 'default',
+          version: '0.1.4265',
+          source: 'manifest',
+          schema: 1,
+          installedAt: '2026-11-22T00:53:28Z',
+        },
+      },
+    });
 
     expect(await screen.findByText('已安装 v0.1.4265')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
@@ -341,9 +395,6 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
-        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
-        }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           return json({ ok: true, accepted: true, taskId: 'task-off', result: { taskId: 'task-off' } });
         }
@@ -358,7 +409,7 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
             savedSites = body.config.sites;
             return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: savedSites }, rev: 2, appliedRev: 1, updatedAt: NOW } });
           }
-          return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: [] }, rev: 1, appliedRev: 1, updatedAt: NOW } });
+          return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: savedSites }, rev: 1, appliedRev: 1, updatedAt: NOW } });
         }
         if (url === '/api/v1/nodes/hub-1/apps/caddy-site/apply') return json({ ok: true });
         return json({});
@@ -409,9 +460,6 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
-        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_installed') {
-          return json({ ok: true, installed: {}, recipes: [], cards: [], result: { cards: [] } });
-        }
         if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
           return json({ ok: true, accepted: true, taskId: 'task-second', result: { taskId: 'task-second' } });
         }
@@ -458,5 +506,328 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
       { name: 'llmproxy', listenPort: 443 },
       { name: 'magpie', listenPort: 8443 },
     ]);
+  });
+
+  it('schema=2 向导：enum/requires 联动、secret 遮罩切换、derive 隐藏推导、多端点发布走 manifest_install', async () => {
+    window.scrollTo = vi.fn();
+    let manifestInstallPayload: Record<string, unknown> | null = null;
+    let savedSites: Record<string, unknown>[] = [];
+    const v2App = {
+      id: 'v2-demo',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: {
+        schema: 2,
+        name: 'V2 演示应用',
+        version: '2.0.0',
+        runtime: { mode: 'create', user: 'khc-app-v2', linger: true },
+        params: [
+          {
+            key: 'tier',
+            type: 'enum',
+            label: '规格',
+            default: 'lite',
+            options: [
+              { value: 'lite', label: '轻量' },
+              { value: 'pro', label: '高配', requires: { memMB: 2048 } },
+            ],
+          },
+          { key: 'api_secret', type: 'string', label: '管理密钥', secret: true, default: '' },
+          { key: 'web_port', type: 'integer', label: '控制台端口', default: 5010, min: 1024, max: 65535 },
+          { key: 'rpc_port', type: 'integer', label: '接口端口', default: 5020, min: 1024, max: 65535 },
+          { key: 'public_url', type: 'string', label: '访问地址', derive: 'endpoint:web.publicUrl' },
+        ],
+        endpoints: [
+          { id: 'web', label: '控制台', protocol: 'http', portParam: 'web_port', bind: 'loopback', publish: 'caddy' },
+          { id: 'rpc', label: '接口', protocol: 'http', portParam: 'rpc_port', bind: 'loopback', publish: 'caddy' },
+        ],
+        units: [{ name: 'v2-demo.service', scope: 'user' }],
+        health: {
+          type: 'http',
+          url: 'http://127.0.0.1:{{params.web_port}}/health',
+          expectStatus: 200,
+          graceSec: 10,
+          intervalSec: 1,
+          timeoutMs: 1000,
+        },
+        scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+        sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+        writes: [],
+      },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [v2App] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/manifest_install') {
+          manifestInstallPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return json({ ok: true, accepted: true, taskId: 'task-v2', result: { taskId: 'task-v2' } });
+        }
+        if (url === '/api/v1/nodes/hub-1/tasks/task-v2') {
+          return json({
+            task: {
+              id: 'task-v2',
+              state: 'done',
+              progress: 100,
+              logs: ['installed'],
+              result: {
+                cards: [{ title: '管理地址', value: 'https://hk.example.com:8443', kind: 'url', primary: true, copy: true }],
+              },
+              error: null,
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site') {
+          if (init?.method === 'PUT') {
+            const body = JSON.parse(String(init.body)) as { config: { sites: Record<string, unknown>[] } };
+            savedSites = body.config.sites;
+            return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: savedSites }, rev: 2, appliedRev: 1, updatedAt: NOW } });
+          }
+          return json({ app: { app: 'caddy-site', schemaVersion: 1, config: { sites: savedSites }, rev: 1, appliedRev: 1, updatedAt: NOW } });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site/apply') return json({ ok: true });
+        return json({});
+      }),
+    );
+
+    renderWizard();
+    expect(await screen.findByText('V2 演示应用')).toBeTruthy();
+    expect(screen.getByText('v2')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+
+    // derive 字段隐藏不渲染
+    expect(screen.queryByLabelText('访问地址')).toBeNull();
+
+    // enum requires 联动
+    await userEvent.selectOptions(screen.getByLabelText('规格'), 'pro');
+    expect(screen.getByText('需 ≥ 2048 MB 内存')).toBeTruthy();
+
+    // secret 遮罩与显示切换
+    const secretInput = screen.getByLabelText('管理密钥') as HTMLInputElement;
+    expect(secretInput.type).toBe('password');
+    await userEvent.type(secretInput, 'top-secret');
+    await userEvent.click(screen.getByRole('button', { name: '显示' }));
+    expect(secretInput.type).toBe('text');
+
+    // 默认勾选首个端点、第二个未勾选；勾选第二个以同时发布两个端点
+    const pubChecks = screen.getAllByRole('checkbox', { name: '通过 Caddy 发布此端点' }) as HTMLInputElement[];
+    expect(pubChecks).toHaveLength(2);
+    expect(pubChecks[0]!.checked).toBe(true);
+    expect(pubChecks[1]!.checked).toBe(false);
+    await userEvent.click(pubChecks[1]!);
+    expect(pubChecks[1]!.checked).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+    expect(await screen.findByText('V2 演示应用 已安装并发布')).toBeTruthy();
+
+    expect((manifestInstallPayload as { params?: Record<string, unknown> } | null)?.params).toMatchObject({
+      manifestId: 'v2-demo',
+      values: {
+        tier: 'pro',
+        api_secret: 'top-secret',
+        web_port: 5010,
+        rpc_port: 5020,
+        public_url: 'https://hk.example.com',
+      },
+    });
+    expect(savedSites).toHaveLength(2);
+    expect(savedSites.map((s) => s.upstreams)).toEqual([['127.0.0.1:5010'], ['127.0.0.1:5020']]);
+  });
+
+  it('节点能力不足时禁用 schema=2 应用按钮并提示升级 Agent', async () => {
+    window.scrollTo = vi.fn();
+    const v2App = {
+      id: 'v2-cap',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: {
+        schema: 2,
+        name: 'V2 能力应用',
+        version: '2.0.0',
+        runtime: { mode: 'create', user: 'khc-app-v2', linger: true },
+        params: [],
+        units: [{ name: 'v2-cap.service', scope: 'user' }],
+        scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+        sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+        writes: [],
+      },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [v2App] });
+        return json({});
+      }),
+    );
+
+    renderWizard({ capabilities: { appManifest: { schemas: [1], features: [] } } });
+    expect(await screen.findByText('V2 能力应用')).toBeTruthy();
+    const pickBtn = screen.getByRole('button', { name: '选择并配置' }) as HTMLButtonElement;
+    expect(pickBtn.disabled).toBe(true);
+    expect(screen.getByText(/需将节点 Agent 升级到/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: '去升级' })).toBeTruthy();
+  });
+  const v2Base = {
+    schema: 2,
+    runtime: { mode: 'create', user: 'khc-app-v2', linger: true },
+    params: [
+      { key: 'web_port', type: 'integer', label: '控制台端口', default: 5010, min: 1024, max: 65535 },
+    ],
+    units: [{ name: 'v2-demo.service', scope: 'user' }],
+    scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+    sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+    writes: [],
+  };
+
+  it('安装返回 preflight_failed 时，第 3 步逐条渲染预检项（含失败项文案）', async () => {
+    window.scrollTo = vi.fn();
+    const app = {
+      id: 'v2-pre',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: { ...v2Base, name: 'V2 预检应用', version: '2.0.0' },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [app] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/manifest_install') {
+          return json(
+            {
+              error: {
+                code: 'preflight_failed',
+                message: '节点安装预检未通过',
+                details: {
+                  checks: [
+                    { name: 'disk', ok: true, message: '磁盘空间充足' },
+                    { name: 'mem', ok: false, message: '内存不足：需要 2048 MB' },
+                    { name: 'port', ok: false, message: '端口 5010 已被占用' },
+                  ],
+                },
+              },
+            },
+            422,
+          );
+        }
+        return json({});
+      }),
+    );
+
+    renderWizard();
+    expect(await screen.findByText('V2 预检应用')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+
+    expect(await screen.findByText('节点安装预检未通过')).toBeTruthy();
+    expect(screen.getByText('磁盘空间充足')).toBeTruthy();
+    expect(screen.getByText('内存不足：需要 2048 MB')).toBeTruthy();
+    expect(screen.getByText('端口 5010 已被占用')).toBeTruthy();
+    expect(screen.getAllByText('未通过')).toHaveLength(2);
+    expect(screen.getAllByText('通过')).toHaveLength(1);
+  });
+
+  describe('bind:any 防火墙提示（第 2 步）', () => {
+    const anyApp = {
+      id: 'v2-any',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: {
+        ...v2Base,
+        name: 'V2 全地址应用',
+        version: '2.0.0',
+        endpoints: [
+          { id: 'web', label: '控制台', protocol: 'http', portParam: 'web_port', bind: 'any', publish: 'caddy' },
+        ],
+      },
+    };
+
+    function stubFw(rules: Record<string, unknown>[]) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url === '/api/v1/app-manifests') return json({ appManifests: [anyApp] });
+          if (url === '/api/v1/nodes/hub-1/apps/host-ops/call') {
+            const verb = (JSON.parse(String(init?.body)) as { params: { verb: string } }).params.verb;
+            if (verb === 'version') return json({ ok: true, data: { root: true, nft: true } });
+            if (verb === 'fw.show') return json({ ok: true, data: { baseRev: 'r1', rules, autoRules: [] } });
+          }
+          return json({});
+        }),
+      );
+    }
+
+    it('端口已放行时显示 warning 级提示并说明已放行', async () => {
+      window.scrollTo = vi.fn();
+      stubFw([{ id: 'r1', action: 'allow', proto: 'tcp', port: '5010', source: '0.0.0.0/0', note: '' }]);
+      renderWizard({ hasHostOps: true });
+      expect(await screen.findByText('V2 全地址应用')).toBeTruthy();
+      await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+
+      const desc = await screen.findByText('主机防火墙当前已放行 TCP 5010。');
+      const banner = desc.closest('.ui-banner');
+      expect(banner?.classList.contains('ui-banner-warn')).toBe(true);
+      expect(banner?.textContent).toContain('应用监听所有地址');
+    });
+
+    it('端口未放行时显示信息级提示（无已放行说明）', async () => {
+      window.scrollTo = vi.fn();
+      stubFw([{ id: 'r1', action: 'allow', proto: 'tcp', port: '22', source: '0.0.0.0/0', note: '' }]);
+      renderWizard({ hasHostOps: true });
+      expect(await screen.findByText('V2 全地址应用')).toBeTruthy();
+      await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+
+      const title = await screen.findByText(/应用监听所有地址/);
+      expect(title.closest('.ui-banner')?.classList.contains('ui-banner-info')).toBe(true);
+      await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/v1/nodes/hub-1/apps/host-ops/call',
+        expect.anything(),
+      ));
+      expect(screen.queryByText('主机防火墙当前已放行 TCP 5010。')).toBeNull();
+    });
+  });
+
+  it('安装任务轮询超过上限时转为失败并提示查看任务日志', async () => {
+    window.scrollTo = vi.fn();
+    const app = {
+      id: 'v2-slow',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: { ...v2Base, name: 'V2 慢安装应用', version: '2.0.0' },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [app] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/manifest_install') {
+          return json({ ok: true, accepted: true, taskId: 'task-slow', result: { taskId: 'task-slow' } });
+        }
+        if (url === '/api/v1/nodes/hub-1/tasks/task-slow') {
+          return json({
+            task: { id: 'task-slow', state: 'running', progress: 10, logs: ['still running'], result: null, error: null },
+          });
+        }
+        return json({});
+      }),
+    );
+
+    renderWizard({ installTimeoutMs: 60 });
+    expect(await screen.findByText('V2 慢安装应用')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+
+    expect(await screen.findByText(/已停止等待；请查看任务日志/)).toBeTruthy();
+    expect(screen.getByText('still running')).toBeTruthy();
   });
 });
