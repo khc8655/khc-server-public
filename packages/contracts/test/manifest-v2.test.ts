@@ -26,6 +26,8 @@ const SHA_C = 'c'.repeat(64);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VECTORS_PATH = path.resolve(HERE, '../test-vectors/manifest-template.json');
 const MAGPIE_PATH = path.resolve(HERE, '../../../apps/manifests/magpie/manifest.json');
+/** v1 清单样本（仓内应用已转 v2，v1 归一化用固定样本守住） */
+const V1_SAMPLE_PATH = path.resolve(HERE, 'fixtures/v1-sample.json');
 
 interface TemplateVector {
   template: string;
@@ -692,8 +694,8 @@ describe('manifest-v2: 模板引擎与共享测试向量', () => {
 });
 
 describe('manifest-v2: v1 → v2 归一化与能力推导', () => {
-  it('magpie 真实清单归一化后通过 v2 schema，不修改入参，快照匹配 endpoints 与 derive', () => {
-    const rawJson = JSON.parse(fs.readFileSync(MAGPIE_PATH, 'utf8')) as { manifest: unknown };
+  it('v1 样本清单归一化后通过 v2 schema，不修改入参，快照匹配 endpoints 与 derive', () => {
+    const rawJson = JSON.parse(fs.readFileSync(V1_SAMPLE_PATH, 'utf8')) as { manifest: unknown };
     const parsedV1 = appManifestDefinitionSchema.parse(rawJson.manifest);
     const frozenInput = deepFreeze(structuredClone(parsedV1));
 

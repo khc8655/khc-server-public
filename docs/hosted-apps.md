@@ -10,11 +10,14 @@
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 仓内清单 | `apps/manifests/<id>/manifest.json` | 唯一的可评审来源，`scripts/verify-app-manifests.mjs` 校验脚本 sha256 与字段 |
+| 仓内清单 | `apps/manifests/<id>/manifest.json` | 唯一的可评审来源；`scripts/verify-app-manifests.mjs` 校验脚本正文与 sha256，字段由 `scripts/test/app-manifests.test.ts` 用契约校验 |
 | D1 记录 | 表 `app_manifests`（`migrations/0013_app_manifests.sql`） | 控制面运行时读的那份，可在「设置 → 应用管理」维护 |
 | 节点执行器 | `agent/khc/app_manifests.py` | 支持 schema v1/v2 执行、预检、启停/日志与健康检查 |
 
-内置清单由 `apps/api/src/lib/builtin-manifests.ts` 在 Worker 打包时打入，`GET /api/v1/app-manifests` 首次访问时**缺就补一行、已有记录不动**。
+仓库是编写与评审源，D1 是运行源：Worker 不打包任何应用，`GET /api/v1/app-manifests` 只读。新环境的应用库为空，经下面两种方式导入（改脚本后不发版即可生效）：
+
+- **面板**：「设置 → 应用管理」页头 [导入应用]，来源为粘贴 JSON、上传文件（≤ 512KB）或 https URL（浏览器端 `fetch`，`credentials: 'omit'`、不跟随重定向、≤ 512KB，对方须允许跨域读取；不经 Worker）。接受仓库格式 `{id, enabled?, manifest}` 或裸清单（需填应用 ID）。前端先用契约解析，ID 已存在时展示与 D1 当前版本的差异（版本、各脚本 sha256、参数增删、`runtime.mode` 变化——`create → root` 标高风险、控制面步骤的阶段与主机、`sources`、`secrets` 声明），确认后 `PUT`，新 ID 则 `POST`；Worker 拒绝时按 `fields` 路径标出。审计沿用 `appManifest.create / update`。
+- **脚本**：`KHC_PASSWORD=… [KHC_TOTP=…] node scripts/publish-app-manifest.mjs --base <面板地址> <appId> [--yes]`，读取 `apps/manifests/<appId>/manifest.json`，默认只打印与 D1 的差异（dry run），带 `--yes` 才写入并打印 `warnings`。口令只读环境变量。
 
 ## 2. 清单字段（v1 与 schema=2）
 
@@ -82,7 +85,17 @@ curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
 
 卸载脚本 `scripts.uninstall` 要求等于把 install 写下的东西**全部**清掉：停并删除 systemd unit（含 `default.target.wants` 链接）、二进制、登录凭据、数据/状态/缓存目录与 `KHC_APP_HOME` 残留；清完逐项复查，仍有残留就在 `KHC_RESULT` 里点名并 `exit 1`，不谎称「已卸载」。面板创建的系统账号由执行器管理，卸载不删。
 
-契约由 `scripts/manifest-uninstall-test.sh` 守住（已接入 `verify.sh`，离线可重复）：造出 install 会写的全部路径 → 跑清单下发的 uninstall → 断言逐项清理 → 连跑两次验幂等 → 确认没误删同目录其它应用。新增或改动任何清单的卸载脚本，都要让这个测试通过。
+契约由 `scripts/manifest-uninstall-test.sh` 守住（已接入 `verify.sh`，离线可重复，不带参数时遍历全部应用）：按应用目录下的 `uninstall-fixture.json` 造出「装过」的现场 → 跑清单下发的 uninstall → 断言逐项清理 → 连跑两次验幂等 → 确认 `keep` 里声明的同目录其它文件没被误删。`systemctl` / `getent` 用桩。fixture 字段（路径均为相对路径，以 `/` 结尾表示目录）：
+
+| 字段 | 含义 |
+|---|---|
+| `instance` | 可选，默认 `default` |
+| `home` / `appHome` / `root` | 相对应用用户家目录 / `KHC_APP_HOME` / `KHC_ROOT` 的路径，卸载后必须消失 |
+| `symlinks` | `[[链接, 目标]]`，均相对家目录 |
+| `keep` | 相对家目录，卸载后必须仍在 |
+| `appHomeEmpty` | 为 `true` 时卸载后 `KHC_APP_HOME` 必须为空 |
+
+**约定**：`root` 模式应用的脚本，所有系统路径都要加 `${KHC_ROOT%/}` 前缀（生产环境为 `/`），这样卸载测试不需要 root。
 
 ## 6. 现状与排障
 

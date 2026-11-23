@@ -241,11 +241,18 @@ v1 清单在 Worker 读取时**内存升级**为 v2（`publish` → `endpoints[0
 | V3 | `docs/plans/app-distribution-v2-2026-11-23-v3.md` | 已合入（#152），真机证据 `docs/verification/2026-11-23/manifest-v2-live.md` |
 | V4 | `docs/plans/app-distribution-v2-2026-11-23-v4.md` | 已合入（#158，v0.41.0），真机证据 `docs/verification/2026-11-23/manifest-v2-web.md`（#160） |
 | V4.1 | `docs/plans/app-distribution-v2-2026-11-23-v4.1.md` | 已合入（#162，v0.41.1），真机证据 `docs/verification/2026-11-23/manifest-upgrade-values.md`（#164） |
-| V4.2 | `docs/plans/app-distribution-v2-2026-11-23-v4.2.md` | 可开工（Worker + 前端小改，0.41.2；见 §15.3） |
-| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md` | V4、V4.1、V4.2 合入且全部节点 ≥ 0.8.0 后开工（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
+| V4.2 | `docs/plans/app-distribution-v2-2026-11-23-v4.2.md` | 开发中（Worker + 前端小改，0.41.2；见 §15.3；轻流程） |
+| V5 | `docs/plans/app-distribution-v2-2026-11-23-v5.md`（含 §12 开工前推演） | 可与 V4.2 并行开发；V4.2 合入且全部节点 ≥ 0.8.0 后合入 V5a（拆 V5a / V5b 两个 PR；V5b 含 §15 的 Agent 部分） |
 | V6 | `docs/plans/app-distribution-v2-2026-11-23-v6.md` | V5a、V5b 合入后开工 |
 
-开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 PR 不修改 `docs/plans/` 下的文件。
+开发中发现提案或开工说明有误，在 PR 里提出，由设计任务修订；开发 agent 不自行修改 `docs/plans/`。
+
+**流程（主人 2026-11-23 调整，提高效率）**：
+
+1. **开工前推演**：每批开工前，设计任务按「动作 × 前端 / Worker / Agent」逐条核对代码，把失败路径写进开工说明（如 V5 §12），不靠真机撞出问题。
+2. **少开 PR**：设计任务对 `docs/plans/` 的修订随开发 PR 一起提交，不再单独开文档 PR。
+3. **补丁轻流程**：补丁批次（如 V4.2）只要求单测与 `verify.sh`，合入后做一次冒烟，结果写在 PR 评论里；完整真机证据只在 V5 结束与 V6 验收各做一次。非阻塞问题不退回，记入下一批。
+4. **并行**：互不依赖的批次可同时开发，按合并顺序 rebase。
 
 ## 14. 真机验证发现与处置（2026-11-23）
 
