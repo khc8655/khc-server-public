@@ -77,9 +77,9 @@ export function median(values) {
   return (nums[mid - 1] + nums[mid]) / 2;
 }
 
-/** 从 Headers（或原生 getSetCookie 数组）提取非空的 `khc_sess=...` Cookie 字符串。 */
-export function sessionCookie(headers) {
-  if (!headers) return null;
+/** 从 Headers（或原生 getSetCookie 数组）提取最新非空的 `<name>=...` Cookie 字符串（已清空或 Max-Age=0 返回 null）。 */
+export function cookieValue(headers, name) {
+  if (!headers || !name) return null;
   let cookies = [];
   if (typeof headers.getSetCookie === 'function') {
     cookies = headers.getSetCookie();
@@ -90,21 +90,32 @@ export function sessionCookie(headers) {
     cookies = headers;
   }
 
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(?:^|[,\\s])${escaped}=([^;,\\s]*)`);
   let matched = null;
   for (const item of cookies) {
     if (typeof item !== 'string') continue;
-    const m = /(?:^|[,\s])khc_sess=([^;,\s]*)/.exec(item);
-    if (m && m[1]) {
-      matched = `khc_sess=${m[1]}`;
+    const m = pattern.exec(item);
+    if (!m) continue;
+    if (!m[1] || /(?:^|;\s*)max-age\s*=\s*0(?:;|$)/i.test(item)) {
+      matched = null;
+    } else {
+      matched = `${name}=${m[1]}`;
     }
   }
   return matched;
 }
 
+/** 从 Headers（或原生 getSetCookie 数组）提取非空的 `khc_sess=...` Cookie 字符串。 */
+export function sessionCookie(headers) {
+  return cookieValue(headers, 'khc_sess');
+}
+
 /**
  * 汇总单个入口单接口的多次采样结果：
  * - 第 1 次单列为 `firstMs`（排除在稳态中位数外）
- * - 第 2..N 次取 `wall` / `total` / `auth` / `d1` / `agent` / `edge(= wall - total)` 中位数
+ * - 第 2..N 次取 `wall` / `total` / `auth` / `d1` / `agent` / `edge(= wall - total)` 中位数；
+ *   有效 `Server-Timing` 中某分项因缓存命中省略（但在稳态中至少出现过一次）时按 0ms 计入，缺头样本跳过。
  */
 export function summarize(entry, endpoint, samples) {
   const list = Array.isArray(samples) ? samples : [];
@@ -117,6 +128,10 @@ export function summarize(entry, endpoint, samples) {
   const d1s = [];
   const agents = [];
   const edges = [];
+  const steadyValid = [];
+  let hasAuth = false;
+  let hasD1 = false;
+  let hasAgent = false;
 
   for (const sample of steady) {
     if (typeof sample?.wallMs === 'number' && Number.isFinite(sample.wallMs)) {
@@ -129,10 +144,17 @@ export function summarize(entry, endpoint, samples) {
       if (typeof sample?.wallMs === 'number' && Number.isFinite(sample.wallMs)) {
         edges.push(sample.wallMs - total);
       }
+      steadyValid.push(parsed);
+      if (parsed.auth?.dur !== undefined) hasAuth = true;
+      if (parsed.d1?.dur !== undefined) hasD1 = true;
+      if (parsed.agent?.dur !== undefined) hasAgent = true;
     }
-    if (parsed.auth?.dur !== undefined) auths.push(parsed.auth.dur);
-    if (parsed.d1?.dur !== undefined) d1s.push(parsed.d1.dur);
-    if (parsed.agent?.dur !== undefined) agents.push(parsed.agent.dur);
+  }
+
+  for (const parsed of steadyValid) {
+    if (hasAuth) auths.push(parsed.auth?.dur ?? 0);
+    if (hasD1) d1s.push(parsed.d1?.dur ?? 0);
+    if (hasAgent) agents.push(parsed.agent?.dur ?? 0);
   }
 
   const statuses = new Set();

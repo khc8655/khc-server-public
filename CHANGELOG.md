@@ -2,6 +2,10 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.38.3] - 2026-11-23
+### Fixed
+- 退出登录与全部登出同步清除 `khc_d1bm` Cookie，修正基线脚本对缓存命中 `d1` 中位数的统计口径，并补全安全与 ADR 一致性边界说明。
+
 ## [0.38.2] - 2026-11-23
 ### Changed
 - 接入 Cloudflare D1 Read Replication 会话与 khc_d1bm 读己之写书签，读多写少请求改走就近只读副本并保障单浏览器顺序一致。

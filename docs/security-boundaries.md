@@ -5,8 +5,8 @@
 
 ## 1. 控制面（Worker + 面板）
 
-- **会话**：登录成功发 JWT cookie `khc_sess`，有效期 8h（`SESSION_TTL_SEC`）；所有 `/api/v1` 路由（除登录本身）要求会话。启用 TOTP 后登录需追加 6 位验证码，令牌携带会话版本 `ver`（取自 settings 的 `auth.session_epoch`）；启用/禁用 TOTP 或「全部登出」递增该版本即撤销全部既有会话（8h TTL 与 cookie 名称/属性不变）。
-- **D1 读副本一致性书签**：`/api/*` 响应按需追加 `khc_d1bm` Cookie（`HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800`，不设 `Domain`），仅携带非敏感的 Cloudflare D1 Read Replication 提交书签，用于保证单浏览器读己之写顺序一致，不含用户身份、令牌或业务密文。
+- **会话**：登录成功发 JWT cookie `khc_sess`，有效期 8h（`SESSION_TTL_SEC`）；所有 `/api/v1` 路由（除登录本身）要求会话。启用 TOTP 后登录需追加 6 位验证码，令牌携带会话版本 `ver`（取自 settings 的 `auth.session_epoch`）；启用/禁用 TOTP 或「全部登出」递增该版本，当前浏览器立刻清除会话并刷新本 isolate 缓存，但其他设备 / 其他 isolate 上的既有旧会话受 15 秒 isolate 缓存（`SESSION_EPOCH_CACHE_TTL_MS`）叠加 D1 读副本同步延迟（通常数秒）影响，仍可短暂有效（8h TTL 与 cookie 名称/属性不变）。
+- **D1 读副本一致性书签**：`/api/*` 响应按需追加 `khc_d1bm` Cookie（`HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800`，不设 `Domain`），仅携带非敏感的 Cloudflare D1 Read Replication 提交书签，用于保证单浏览器读己之写顺序一致，不含用户身份、令牌或业务密文；退出登录（`/api/v1/auth/logout` 与 `/api/v1/auth/logout-all`）时同步以 `Max-Age=0` 清除。
 - **登录限流**：10 次失败 / 300s / 每源 IP，第 11 次 429。存储三级降级（P1-C，迁移 0006）：**D1 单语句原子 upsert**（`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`，跨 isolate 计数，主路径）→ KV（未绑定则跳过）→ 进程内 Map（本地 dev 兜底）。存储异常不阻塞登录主路径。
 - **Worker→Agent 传输**：域名走原生 fetch，裸 IP 走 `cloudflare:sockets` TCP 通道（同一接入方案内的两条传输通道）；均要求 HMAC 签名（见 §4）。**接入方案口径（2026-11-06 修订，取代 D-3「直连首选 / Tunnel 备用」）**：三种**并列**方案，节点创建/配置时**选定其一**，运行时只走该方案，失败即报错，无主备、无跨方案回退——
   - **方案 A：https + 域名 + 公网可信证书直连**（域名/IP 证书，平台强制校验证书）。Agent 支持直接 TLS 监听（`--tls-cert` / `--tls-key`，主端口复用，SIGHUP 热重载）；Worker 侧拒绝明文通道下发证书私钥/DNS 凭据（`secure-channel.ts`，400 `insecure_channel_secret`，development 豁免）。

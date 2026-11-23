@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { AppBindings } from '../types';
 import {
+  D1_BOOKMARK_COOKIE,
   buildD1BookmarkCookie,
   isValidD1Bookmark,
   readD1BookmarkCookie,
@@ -9,6 +10,16 @@ import {
 } from '../lib/d1-session';
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD']);
+
+function hasD1BookmarkSetCookie(res: Response): boolean {
+  const prefix = `${D1_BOOKMARK_COOKIE}=`;
+  if (typeof res.headers.getSetCookie === 'function') {
+    return res.headers.getSetCookie().some((cookie) => cookie.startsWith(prefix));
+  }
+  const raw = res.headers.get('set-cookie');
+  if (!raw) return false;
+  return raw.split(/,\s*(?=[^;]+=)/).some((cookie) => cookie.trimStart().startsWith(prefix));
+}
 
 function isSecureRequest(c: Context<AppBindings>): boolean {
   const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
@@ -69,7 +80,7 @@ export const d1Session = createMiddleware<AppBindings>(async (c, next) => {
     } catch {
       nextBookmark = null;
     }
-    if (isValidD1Bookmark(nextBookmark) && c.res) {
+    if (isValidD1Bookmark(nextBookmark) && c.res && !hasD1BookmarkSetCookie(c.res)) {
       appendSetCookie(c, buildD1BookmarkCookie(nextBookmark, isSecureRequest(c)));
     }
   }
