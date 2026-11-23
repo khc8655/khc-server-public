@@ -1819,6 +1819,64 @@ def _listening_tcp_ports(proc_root: str) -> set[int]:
     return ports
 
 
+def _listening_ports_by_uid(proc_root: str, uid: int) -> set[int]:
+    """正在 LISTEN（state 0A）且 socket 属主 uid 等于 ``uid`` 的端口（tcp 与 tcp6，uid 在第 8 列）。"""
+    ports: set[int] = set()
+    for name in ("tcp", "tcp6"):
+        path = os.path.join(proc_root, "net", name)
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as handle:
+                lines = handle.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 8 or parts[3] != "0A":
+                continue
+            try:
+                if int(parts[7]) != uid:
+                    continue
+                ports.add(int(parts[1].split(":")[1], 16))
+            except (ValueError, IndexError):
+                continue
+    return ports
+
+
+def _exclusive_create_uid(
+    ctx: Ctx, manifest_id: str, instance: str, recorded: Optional[Mapping[str, Any]]
+) -> Optional[int]:
+    """旧记录缺少端点时，升级预检才允许按 socket 属主认「本实例的端口」。
+
+    只有同时满足才返回 uid：记录 mode 为 create；记录里的用户存在且 uid != 0；
+    没有其他已装记录（不同 manifestId 或 instance）使用同一个用户。否则返回 None，
+    预检维持只认记录端点。
+    """
+    if not isinstance(recorded, Mapping) or recorded.get("mode") != "create":
+        return None
+    user = recorded.get("user")
+    if not isinstance(user, str) or not USER_RE.fullmatch(user):
+        return None
+    try:
+        uid = _account(user).pw_uid
+    except (KeyError, OSError):
+        return None
+    if uid == 0:
+        return None
+    directory = os.path.join(ctx.paths.data_dir, "app-manifests")
+    own_name = os.path.basename(_record_path(ctx, manifest_id, instance))
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        names = []
+    for filename in names:
+        if not filename.endswith(".json") or filename == own_name:
+            continue
+        other = load_json(os.path.join(directory, filename), default=None)
+        if isinstance(other, Mapping) and other.get("user") == user:
+            return None
+    return uid
+
+
 def _read_os_families(os_release_path: str) -> tuple[str, set[str]]:
     try:
         with open(os_release_path, encoding="utf-8", errors="ignore") as handle:
@@ -2090,8 +2148,14 @@ def manifest_preflight(
     if ports:
         listening = _listening_tcp_ports(proc_root)
         own_ports = _own_recorded_ports(recorded_map) if stage == "upgrade" else set()
+        user_ports: set[int] = set()
+        if stage == "upgrade":
+            owner_uid = _exclusive_create_uid(ctx, manifest_id, name, recorded_map)
+            if owner_uid is not None:
+                user_ports = _listening_ports_by_uid(proc_root, owner_uid)
         for port in ports:
-            in_use = port in listening and port not in own_ports
+            by_user = port in listening and port not in own_ports and port in user_ports
+            in_use = port in listening and port not in own_ports and not by_user
             checks.append(
                 {
                     "name": f"port:{port}",
@@ -2099,6 +2163,8 @@ def manifest_preflight(
                     "message": (
                         f"端口 {port} 已被占用"
                         if in_use
+                        else f"端口 {port} 由当前应用用户占用（升级期间将重启复用）"
+                        if by_user
                         else f"端口 {port} 由当前实例占用（升级期间将重启复用）"
                         if (port in listening and port in own_ports)
                         else f"端口 {port} 可用"
