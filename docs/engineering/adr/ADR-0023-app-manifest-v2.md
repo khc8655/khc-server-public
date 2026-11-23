@@ -39,6 +39,7 @@
 5. **版本协商与 v1 兼容 / 下线条件**：
    - 清单所需能力由 `requiredAgentFeatures(defV2)` 自动推导（基于 `AGENT_MANIFEST_FEATURES` 常量），与节点上报的 `agent.capabilities.appManifest` 比对，不满足在安装前返回 409。
    - 提供纯函数 `toManifestV2(def)` 在内存将 v1 清单归一化为 v2（`publish` → `endpoints[0]`）；若 v1 同时存在 `publish` 与 `key === 'public_url'` 参数，自动附加 `derive: 'endpoint:web.publicUrl'`。待所有存量清单与 D1 记录均升级为 `schema: 2` 且停止支持 v1 清单时，该兼容规则随 v1 支持一并下线。
+6. **安装参数随安装记录保存（2026-11-23 补充，主人拍板）**：节点安装记录保存本次生效的参数值（含 secret，文件 0600 / root），不经状态、`/state`、日志或结果外传；升级按「本次值 > 记录值 > 新清单默认值」合并，Worker 对 upgrade 转发原始 `values` 不补默认值。控制面步骤拿不到安装值。详见提案 §15。
 
 ## 影响 / 迁移 / 回滚
 

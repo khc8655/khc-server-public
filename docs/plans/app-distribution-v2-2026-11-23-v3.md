@@ -107,13 +107,14 @@
 `app_catalog.status()` 与 `manifest_installed` 的每个已装条目增加：
 
 ```jsonc
-{ "units": [{ "name": "…", "scope": "system", "active": "active" }],
-  "health": { "ok": true, "checkedAt": 1764000000, "version": "…" } }
+{ "units": [{ "name": "…", "scope": "system", "active": true, "state": "active" }],
+  "lastHealth": { "ok": true, "checkedAt": "2026-11-23T09:06:30Z", "version": "…" } }
 ```
 
 - 每个条目的单元状态与健康探测并发执行，单项 ≤1s；结果缓存 5s。
 - 整体受 B4 的适配器截止时间（默认 2s）约束：超时走 B4 已有的过期兜底，不得拖慢 `/state`。
 - 健康探测只读，不改记录里的 `lastHealth`（`lastHealth` 只在安装 / 升级后写）。
+- 2026-11-23 勘误：上面示例原写作 `active: "active"` 与 `health`；以已合入实现为准——`active` 为布尔、`state` 为 `is-active` 原文，状态字段名为 `lastHealth`、`checkedAt` 为 ISO 字符串（V4 真机证据 §五-3）。
 
 ## 8. 能力上报
 
