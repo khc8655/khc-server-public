@@ -19,6 +19,7 @@ import {
   readSessionEpoch,
   signSession,
 } from '../lib/session';
+import { buildClearD1BookmarkCookie } from '../lib/d1-session';
 import { verifyTotp } from '../lib/totp';
 import { requireAuth, verifyAdminPassword } from '../middleware/auth';
 
@@ -87,15 +88,19 @@ export function authRoutes(): Hono<AppBindings> {
   });
 
   router.post('/auth/logout', (c) => {
-    c.header('set-cookie', buildClearSessionCookie(isSecureRequest(c)));
+    const secure = isSecureRequest(c);
+    c.header('set-cookie', buildClearSessionCookie(secure));
+    c.header('set-cookie', buildClearD1BookmarkCookie(secure), { append: true });
     return c.json(okResponseSchema.parse({ ok: true }));
   });
 
-  /** 显式「全部登出」：递增会话版本号，撤销全部既有会话（含当前会话） */
+  /** 显式「全部登出」：递增会话版本号，尽可能撤销既有会话（含当前会话；受 15s epoch 缓存与副本同步延迟约束） */
   router.post('/auth/logout-all', requireAuth, async (c) => {
     const settings = c.get('settings');
     if (settings) await bumpSessionEpoch(settings);
-    c.header('set-cookie', buildClearSessionCookie(isSecureRequest(c)));
+    const secure = isSecureRequest(c);
+    c.header('set-cookie', buildClearSessionCookie(secure));
+    c.header('set-cookie', buildClearD1BookmarkCookie(secure), { append: true });
     return c.json(okResponseSchema.parse({ ok: true }));
   });
 

@@ -4,6 +4,7 @@ import type { AppBindings, Env } from '../src/types';
 import { getWorkerRuntime } from '../src/index';
 import {
   D1_BOOKMARK_COOKIE,
+  buildClearD1BookmarkCookie,
   buildD1BookmarkCookie,
   createSessionAwareD1,
   currentD1Session,
@@ -380,6 +381,101 @@ describe('d1-session: 书签校验与请求级 Session 代理', () => {
       const listBody = (await listRes.json()) as { nodes: Array<{ name: string }> };
       expect(listBody.nodes.map((n) => n.name)).toEqual(['replica-test-node']);
       expect(listRes.headers.get('server-timing')).toContain('d1;dur=');
+    } finally {
+      raw.close();
+    }
+  });
+
+  it('6. buildClearD1BookmarkCookie 与 logout / logout-all 同步清除 khc_d1bm 且不被中间件覆盖', async () => {
+    const clearHttps = buildClearD1BookmarkCookie(true);
+    expect(clearHttps).toBe(
+      `${D1_BOOKMARK_COOKIE}=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0; Secure`,
+    );
+    expect(clearHttps).not.toContain('Domain=');
+    expect(buildClearD1BookmarkCookie(false)).toBe(
+      `${D1_BOOKMARK_COOKIE}=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0`,
+    );
+
+    const raw = openRawDatabase();
+    try {
+      applyMigrations(raw);
+      const withSessionCalls: Array<string | undefined> = [];
+      const db = toD1(raw, {
+        onWithSession: (arg) => withSessionCalls.push(arg),
+      });
+      const env = {
+        DB: db,
+        ENVIRONMENT: 'development',
+        ADMIN_PASSWORD: 'test-password-1234',
+        SESSION_SECRET: 'test-secret-0123456789abcdef0123456789',
+        MASTER_ENC_KEY: 'test-master-key-0123456789',
+        ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
+      } as unknown as Env;
+
+      const runtime = getWorkerRuntime(env);
+
+      // (a) POST /auth/logout（无 D1 查询）：同时清除 khc_sess 与 khc_d1bm
+      const logoutRes = await runtime.app.fetch(
+        new Request('https://panel.example.com/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        }),
+        env,
+        EXEC_CTX,
+      );
+      expect(logoutRes.status).toBe(200);
+      const logoutCookies = logoutRes.headers.getSetCookie();
+      expect(logoutCookies).toHaveLength(2);
+      const logoutSess = logoutCookies.find((c) => c.startsWith('khc_sess='));
+      const logoutBm = logoutCookies.find((c) => c.startsWith('khc_d1bm='));
+      expect(logoutSess).toContain('Max-Age=0');
+      expect(logoutBm).toBe(clearHttps);
+
+      // (b) 登录后执行 POST /auth/logout-all（内部写 D1 auth.session_epoch）：
+      // 响应仅含 1 条清理 khc_d1bm= 的 Set-Cookie，不得被中间件追加新书签覆盖
+      const loginRes = await runtime.app.fetch(
+        new Request('https://panel.example.com/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password: 'test-password-1234' }),
+        }),
+        env,
+        EXEC_CTX,
+      );
+      expect(loginRes.status).toBe(200);
+      const loginCookies = loginRes.headers.getSetCookie();
+      const sessPair = loginCookies.find((c) => c.startsWith('khc_sess='))?.split(';')[0] ?? '';
+      const bmPair = loginCookies.find((c) => c.startsWith('khc_d1bm='))?.split(';')[0] ?? '';
+
+      const logoutAllRes = await runtime.app.fetch(
+        new Request('https://panel.example.com/api/v1/auth/logout-all', {
+          method: 'POST',
+          headers: { cookie: `${sessPair}; ${bmPair}` },
+        }),
+        env,
+        EXEC_CTX,
+      );
+      expect(logoutAllRes.status).toBe(200);
+      const allCookies = logoutAllRes.headers.getSetCookie();
+      expect(allCookies.filter((c) => c.startsWith('khc_d1bm='))).toEqual([clearHttps]);
+      expect(allCookies.find((c) => c.startsWith('khc_sess='))).toContain('Max-Age=0');
+
+      // (c) 清掉 khc_d1bm 后重新登录：走 first-primary 并重新下发有效会话与书签
+      const reloginRes = await runtime.app.fetch(
+        new Request('https://panel.example.com/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password: 'test-password-1234' }),
+        }),
+        env,
+        EXEC_CTX,
+      );
+      expect(reloginRes.status).toBe(200);
+      expect(withSessionCalls.at(-1)).toBe('first-primary');
+      const reloginBm = reloginRes.headers
+        .getSetCookie()
+        .find((c) => c.startsWith('khc_d1bm='));
+      expect(reloginBm).toContain('Max-Age=28800');
     } finally {
       raw.close();
     }

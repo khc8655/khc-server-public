@@ -34,6 +34,18 @@ export function readD1BookmarkCookie(cookieHeader: string | undefined): string |
   return isValidD1Bookmark(raw) ? raw : null;
 }
 
+function formatD1BookmarkCookie(value: string, maxAgeSec: number, secure: boolean): string {
+  const parts = [
+    `${D1_BOOKMARK_COOKIE}=${value}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/api',
+    `Max-Age=${maxAgeSec}`,
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
 /** 构造 khc_d1bm Set-Cookie 头：固定 Path=/api、无 Domain，防干扰静态资源缓存。 */
 export function buildD1BookmarkCookie(
   bookmark: string,
@@ -43,15 +55,12 @@ export function buildD1BookmarkCookie(
   if (!isValidD1Bookmark(bookmark)) {
     throw new Error('invalid d1 bookmark');
   }
-  const parts = [
-    `${D1_BOOKMARK_COOKIE}=${bookmark}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/api',
-    `Max-Age=${maxAgeSec}`,
-  ];
-  if (secure) parts.push('Secure');
-  return parts.join('; ');
+  return formatD1BookmarkCookie(bookmark, maxAgeSec, secure);
+}
+
+/** 构造清理 khc_d1bm 的 Set-Cookie 头（登出时与 khc_sess 一并清除）。 */
+export function buildClearD1BookmarkCookie(secure: boolean): string {
+  return formatD1BookmarkCookie('', 0, secure);
 }
 
 interface SessionWithOptionalExec extends D1DatabaseSession {

@@ -14,7 +14,7 @@
  */
 import crypto from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { renderMarkdown, sessionCookie, summarize } from './lib/relay-latency.mjs';
+import { cookieValue, renderMarkdown, sessionCookie, summarize } from './lib/relay-latency.mjs';
 
 const SNAPSHOT_DEDUPE_WAIT_MS = 2100;
 
@@ -51,9 +51,33 @@ function parseArgs(argv) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function timedFetch(base, path, { method = 'GET', cookie = null, body = undefined } = {}) {
+function makeCookieJar() {
+  let sess = null;
+  let d1bm = null;
+  return {
+    header() {
+      return [sess, d1bm].filter(Boolean).join('; ') || null;
+    },
+    update(headers) {
+      const nextSess = sessionCookie(headers);
+      if (nextSess) sess = nextSess;
+      const nextBm = cookieValue(headers, 'khc_d1bm');
+      if (nextBm) d1bm = nextBm;
+    },
+    hasSession() {
+      return Boolean(sess);
+    },
+  };
+}
+
+async function timedFetch(
+  base,
+  path,
+  { method = 'GET', cookie = null, jar = null, body = undefined } = {},
+) {
   const headers = {};
-  if (cookie) headers.Cookie = cookie;
+  const cookieHeader = cookie ?? jar?.header() ?? null;
+  if (cookieHeader) headers.Cookie = cookieHeader;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const start = performance.now();
   const res = await fetch(`${base}${path}`, {
@@ -61,6 +85,7 @@ async function timedFetch(base, path, { method = 'GET', cookie = null, body = un
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  jar?.update(res.headers);
   const text = await res.text();
   const wallMs = performance.now() - start;
   let json = null;
@@ -78,13 +103,12 @@ async function timedFetch(base, path, { method = 'GET', cookie = null, body = un
   };
 }
 
-async function login(base, password, totp) {
+async function login(base, password, totp, jar) {
   const payload = totp ? { password, totp } : { password };
-  const res = await timedFetch(base, '/api/v1/auth/login', { method: 'POST', body: payload });
-  if (res.status !== 200 || !res.setCookie) {
+  const res = await timedFetch(base, '/api/v1/auth/login', { method: 'POST', jar, body: payload });
+  if (res.status !== 200 || !jar.hasSession()) {
     throw new Error(`登录 ${base} 失败（status=${res.status}）`);
   }
-  return res.setCookie;
 }
 
 async function sampleSeries(runs, fn, gapMs = 0) {
@@ -109,10 +133,11 @@ async function main() {
 
   for (const base of opts.bases) {
     const entryHost = new URL(base).host;
-    const cookie = await login(base, password, totp);
+    const jar = makeCookieJar();
+    await login(base, password, totp, jar);
 
     const nodesSamples = await sampleSeries(opts.runs, () =>
-      timedFetch(base, '/api/v1/nodes', { cookie }),
+      timedFetch(base, '/api/v1/nodes', { jar }),
     );
     allSummaries.push(summarize(entryHost, 'GET /api/v1/nodes', nodesSamples));
 
@@ -123,30 +148,30 @@ async function main() {
         : nodeList;
 
     const certsSamples = await sampleSeries(opts.runs, () =>
-      timedFetch(base, '/api/v1/certs', { cookie }),
+      timedFetch(base, '/api/v1/certs', { jar }),
     );
     allSummaries.push(summarize(entryHost, 'GET /api/v1/certs', certsSamples));
 
     const probeSamples = await sampleSeries(opts.runs, () =>
-      timedFetch(base, '/api/v1/nodes/probe', { method: 'POST', cookie }),
+      timedFetch(base, '/api/v1/nodes/probe', { method: 'POST', jar }),
     );
     allSummaries.push(summarize(entryHost, 'POST /api/v1/nodes/probe', probeSamples));
 
     for (const node of targetNodes) {
       const label = node.name || node.id;
       const stateSamples = await sampleSeries(opts.runs, () =>
-        timedFetch(base, `/api/v1/nodes/${node.id}/state`, { cookie }),
+        timedFetch(base, `/api/v1/nodes/${node.id}/state`, { jar }),
       );
       allSummaries.push(summarize(entryHost, `GET /nodes/${label}/state`, stateSamples));
 
       const overviewSamples = await sampleSeries(opts.runs, () =>
-        timedFetch(base, `/api/v1/nodes/${node.id}/overview`, { cookie }),
+        timedFetch(base, `/api/v1/nodes/${node.id}/overview`, { jar }),
       );
       allSummaries.push(summarize(entryHost, `GET /nodes/${label}/overview`, overviewSamples));
 
       const snapSamples = await sampleSeries(
         opts.runs,
-        () => timedFetch(base, `/api/v1/nodes/${node.id}/snapshot`, { cookie }),
+        () => timedFetch(base, `/api/v1/nodes/${node.id}/snapshot`, { jar }),
         SNAPSHOT_DEDUPE_WAIT_MS,
       );
       allSummaries.push(summarize(entryHost, `GET /nodes/${label}/snapshot`, snapSamples));
@@ -155,7 +180,7 @@ async function main() {
         const svcSamples = await sampleSeries(opts.runs, () =>
           timedFetch(base, `/api/v1/nodes/${node.id}/apps/host-ops/call`, {
             method: 'POST',
-            cookie,
+            jar,
             body: {
               params: { target: 'self', verb: 'svc.list', params: {} },
               idempotencyKey: crypto.randomUUID(),

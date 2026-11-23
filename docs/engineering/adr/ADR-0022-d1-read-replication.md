@@ -27,13 +27,15 @@
 1. **按请求开启 D1 会话（`apps/api/src/middleware/d1-session.ts`）**：
    - 若请求带有效 `khc_d1bm` Cookie（过滤空白、控制字符与 `first-*` 保留关键词），调用 `env.DB.withSession(bookmark)`，确保本次读或写至少能看到该浏览器此前确认的最新状态；
    - 无合法书签时，`GET` / `HEAD` 调用 `withSession('first-unconstrained')`（就近副本优先），写方法（`POST`/`PUT`/`PATCH`/`DELETE` 等）调用 `withSession('first-primary')`（直连主库并获取新书签）；
-   - 请求完成后若 `session.getBookmark()` 非空，通过追加 `Set-Cookie: khc_d1bm=<bookmark>; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800`（HTTPS 加 `Secure`，不设 `Domain`）回写浏览器。不触发 D1 查询的接口（如 `/api/v1/health`）不回写该 Cookie。
+   - 请求完成后若 `session.getBookmark()` 非空，且响应尚未显式下发/清理 `khc_d1bm`（例如 `/api/v1/auth/logout` 与 `/logout-all` 主动以 `Max-Age=0` 清除 `khc_d1bm`），则追加 `Set-Cookie: khc_d1bm=<bookmark>; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800`（HTTPS 加 `Secure`，不设 `Domain`）回写浏览器。不触发 D1 查询的接口（如 `/api/v1/health`）不回写该 Cookie。
 2. **异步上下文透明代理（`apps/api/src/lib/d1-session.ts`）**：
    - 在 `apps/api/src/index.ts` 通过 `instrumentD1(createSessionAwareD1(env.DB))` 注入仓储：`prepare`、`batch` 与（若会话实现则包括）`exec` 自动转发到当前 `AsyncLocalStorage` 会话，不挂载在 isolate 单例状态上，无请求上下文时直接回退原生 `env.DB`。
 3. **直连主库例外**：
    - 登录防爆破限流（`apps/api/src/routes/auth.ts` 的 `allowRequest({ db: c.env.DB })`）继续使用原始 `c.env.DB` 原子 upsert，不经读副本会话。
 4. **一致性边界**：
-   - 单个浏览器在同一会话期内通过 `khc_d1bm` 书签获得**顺序一致（Read-Your-Writes）**体验；不同浏览器/设备之间对刚提交的配置可能出现几秒内副本复制滞后，结合本系统“低频单运维遥控器”定位属于可接受权衡。
+   - **顺序一致与跨设备延迟**：单个浏览器在同一会话期内通过 `khc_d1bm` 书签获得**顺序一致（Read-Your-Writes）**体验；不同浏览器/设备之间对刚提交的配置可能出现数秒内副本复制滞后，结合本系统“低频单运维遥控器”定位属于可接受权衡。
+   - **会话撤销延迟窗口**：「全部登出」或启用/禁用 TOTP 递增 `auth.session_epoch` 后，当前浏览器立刻清除会话且当前 isolate 刷新缓存，但其他设备 / 其他 isolate 上的既有旧会话受 `SESSION_EPOCH_CACHE_TTL_MS`（15 秒 isolate 缓存）叠加 D1 读副本同步延迟（通常数秒）影响，最多还可继续生效该窗口时长。
+   - **带书签写请求的并发边界**：浏览器携带 `khc_d1bm` 发起写请求时同样经由 `withSession(bookmark)` 会话（写前读取可能落在不低于该书签的读副本）。若两台设备并发修改同一份应用配置，读副本侧可能短暂读到旧版本号；但在主库写入侧，`D1AppConfigRepo.put` 在 `revisions` 插入子查询中原子分配递增 `rev` 并以 `WHERE excluded.rev > app_configs.rev` 单调更新，且 Agent 按版本冲突拒绝（409），最坏结果仅操作失败报错、不会静默覆盖数据；单人运维场景基本不会触发，属于可接受权衡。
 
 ## 影响 / 迁移 / 回滚
 
@@ -44,6 +46,6 @@
 
 ## 验证
 
-- 单测（`apps/api/test/d1-session.test.ts` + `apps/api/test/helpers/sqlite-d1.ts`）：验证 GET/HEAD 走 `first-unconstrained`、写请求走 `first-primary`、带合法 `khc_d1bm` 复用书签、畸形/保留字符串被忽略、`khc_sess` 与 `khc_d1bm` 共存不互相覆盖、限流直连主库、`prepare`/`batch`/`exec` 与无请求上下文回退、以及 `Server-Timing` `d1` 计时正确；
+- 单测（`apps/api/test/d1-session.test.ts` + `apps/api/test/helpers/sqlite-d1.ts`）：验证 GET/HEAD 走 `first-unconstrained`、写请求走 `first-primary`、带合法 `khc_d1bm` 复用书签、畸形/保留字符串被忽略、`khc_sess` 与 `khc_d1bm` 登录共存与登出/全部登出同步清除、限流直连主库、`prepare`/`batch`/`exec` 与无请求上下文回退、以及 `Server-Timing` `d1` 计时正确；
 - `./scripts/verify.sh && node scripts/docs-lint.mjs --strict` 全绿；
 - 生产部署后实测 `khc_d1bm` 下发属性与 `GET /api/v1/nodes`、`GET /api/v1/certs` 等接口 `Server-Timing` 的 `d1` 耗时变化并归档验证报告。
