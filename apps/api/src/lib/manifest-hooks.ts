@@ -93,6 +93,14 @@ function normalizeHost(hostname: string): string {
 
 function mapTemplateError(err: unknown): never {
   if (err instanceof TemplateRenderError) {
+    // 升级 / 卸载步骤引用了拿不到值的 params.<key>：按参数错误返回，前端可据 details.field 定位。
+    if (err.variable?.startsWith('params.')) {
+      const field = err.variable.slice('params.'.length).split('.')[0]!;
+      throw new AppError(400, 'param_invalid', err.message, undefined, {
+        field,
+        variable: err.variable,
+      });
+    }
     throw new AppError(
       400,
       err.code,

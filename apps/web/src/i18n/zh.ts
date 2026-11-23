@@ -1179,6 +1179,7 @@ export const zh = {
     upgradeKeepOriginal: '保持原值',
     upgradeKeepPlaceholder: '留空保持原值',
     upgradeDeriveHelp: '安装时自动推导，升级不会重新推导',
+    upgradeOldAgentTitle: '节点 Agent 不记得安装参数',
     upgradeOldAgentHint: '节点 Agent < 0.8.1 时不会记住安装参数；安装时改过的参数请在下面填回。',
     upgradeRetryAfterFill: '补填后重试升级',
     upgradeBoolYes: '是',

@@ -25,6 +25,7 @@
 - `runtime`：`{mode: 'root' | 'create', user?, linger?}`。`create` 在节点新建 `khc-app-*` 专用账号运行。
 - `params[]`：声明式表单字段（`string` / `integer` / `boolean` / `enum`）。支持 `secret: true`（遮罩与显隐）、`enum` 选项 `requires` 资源提示，以及 `derive`（如 `endpoint:<id>.publicUrl`，表单隐藏并由发布地址自动推导，提交时注入 `values`）。
 - `secrets[]` / `hooks` / `sources[]`（v2）：分别声明控制面加密凭据（`app.<id>.<name>` + `allowHosts`）、控制面前置 HTTPS 步骤（`preInstall` / `preUpgrade` / `preUninstall`）与外部下载来源（`pinned` 标识是否固定校验，无固定校验会触发「动态脚本」徽标与保存提醒 `warnings[]`）。
+- 规则：`hooks.preUpgrade` / `hooks.preUninstall` 在 Worker 渲染，拿不到节点上的安装值，所以只能引用**有默认值**的 `{{params.*}}`；引用无默认值（含 `derive`）的参数时保存返回 400 `manifest_invalid`。引用有默认值的参数只给保存提醒。`preInstall` 不受限。
 - `endpoints[]`（v2，替代 v1 `publish`）：多端点声明，每个端点定义 `protocol`（`http`/`tcp`）、`port` / `portParam`、`bind`（`loopback`/`any`）与 `publish`（`caddy`/`direct`/`none`）。
 - `units[]` / `health` / `requires` / `scripts.upgrade`（v2）：声明式 systemd 单元管理、本机健康检查、节点预检门槛与升级脚本。
 
@@ -88,3 +89,4 @@ curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 600 \
 - 仓内内置应用清单与前端实现严格解耦：面板不硬编码任何具体应用名或字段逻辑，全部由清单契约与 Agent 上报能力驱动。
 - 发布成功只代表**站点已应用**，不代表证书已签发：Caddy 自动 TLS 证书在首次访问时申请；节点没有域名时无法发布 Caddy 站点，需先到节点设置「接入」配置域名。
 - Agent 0.8.0 不记得安装参数：含无默认值参数的应用卸载会报「缺少参数」（升级可在确认里补填）；Agent 0.8.1 起用安装记录里的值，不再需要填写。升级与卸载时 Worker 都转发请求里的原始参数，默认值由 Agent 合并。
+- 升级或卸载返回 `param_invalid`（`details.field` 是参数名）：旧清单的控制面步骤引用了没有默认值的参数。升级时在确认里补填该参数；卸载时到「设置 → 应用管理」为该参数设置默认值后重试。

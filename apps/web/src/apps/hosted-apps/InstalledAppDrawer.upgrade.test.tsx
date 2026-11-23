@@ -164,6 +164,8 @@ function stubUpgradeNode(opts: {
   manifests?: unknown[];
   agentVersion?: string;
   upgradeTaskError?: Record<string, unknown>;
+  upgradeHttpError?: Record<string, unknown>;
+  uninstallHttpError?: Record<string, unknown>;
   calls: Call[];
 }) {
   let upgradeCount = 0;
@@ -181,6 +183,10 @@ function stubUpgradeNode(opts: {
           makeOverviewResponse({ installedDetail: opts.installedDetail ?? upInstalled }, opts.agentVersion),
         );
       }
+      if (url.endsWith('/manifest_upgrade') && opts.upgradeHttpError && upgradeCount === 0) {
+        upgradeCount += 1;
+        return json({ error: opts.upgradeHttpError }, 400);
+      }
       if (url.endsWith('/manifest_upgrade')) {
         upgradeCount += 1;
         return json({ ok: true, taskId: `task-up-${upgradeCount}` });
@@ -197,6 +203,9 @@ function stubUpgradeNode(opts: {
             error: failing ? opts.upgradeTaskError : null,
           },
         });
+      }
+      if (url.endsWith('/manifest_uninstall') && opts.uninstallHttpError) {
+        return json({ error: opts.uninstallHttpError }, 400);
       }
       if (url.endsWith('/recipe_uninstall') || url.endsWith('/manifest_uninstall')) {
         return json({ ok: true, taskId: 'task-un-1' });
@@ -425,5 +434,75 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     expect(within(drawer).getByText('v2')).toBeTruthy();
     const failed = within(drawer).getByText('failed');
     expect(failed.className).toContain('ui-badge-danger');
+  });
+
+  it('同步错误 param_invalid（Worker 400）也定位字段：折叠区展开、字段标红、确认条保持打开，补填后重试成功', async () => {
+    const calls: Call[] = [];
+    stubUpgradeNode({
+      calls,
+      upgradeHttpError: {
+        code: 'param_invalid',
+        message: '模板缺少变量：params.link',
+        details: { field: 'link', variable: 'params.link' },
+      },
+    });
+    renderWithRouter(<Harness />);
+    const drawer = await openDrawerAndUpgrade();
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+
+    expect(await within(drawer).findByRole('button', { name: '补填后重试升级' })).toBeTruthy();
+    const linkInput = within(drawer).getByLabelText('访问地址') as HTMLInputElement;
+    expect(linkInput.getAttribute('aria-invalid') === 'true' || linkInput.className.includes('invalid')).toBe(true);
+    expect(within(drawer).getAllByText('模板缺少变量：params.link').length).toBeGreaterThanOrEqual(1);
+
+    await userEvent.type(linkInput, 'https://app.example.com');
+    await userEvent.click(within(drawer).getByRole('button', { name: '补填后重试升级' }));
+    await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(2));
+    expect(upgradeCallsOf(calls)[1]!.body!.params!.values).toEqual({ link: 'https://app.example.com' });
+  });
+
+  it('卸载遇到 param_invalid：提示去应用管理设置默认值，并带 ?manifest=<id> 链接', async () => {
+    const calls: Call[] = [];
+    stubUpgradeNode({
+      calls,
+      uninstallHttpError: {
+        code: 'param_invalid',
+        message: '模板缺少变量：params.tag',
+        details: { field: 'tag', variable: 'params.tag' },
+      },
+    });
+    renderWithRouter(<Harness />);
+    expect(await screen.findByText('→ 2.0.0')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '详情' }));
+    const drawer = await screen.findByRole('dialog');
+    await userEvent.click(within(drawer).getByRole('button', { name: '卸载' }));
+    const btns = within(drawer).getAllByRole('button', { name: '卸载' });
+    await userEvent.click(btns[btns.length - 1]!);
+
+    expect(await within(drawer).findByText('该应用清单的卸载步骤缺少参数 tag')).toBeTruthy();
+    expect(within(drawer).getByText('到「设置 → 应用管理」为它设置默认值后重试。')).toBeTruthy();
+    const link = within(drawer).getByRole('link', { name: '去应用管理设置默认值' }) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toContain('tab=manifests');
+    expect(link.getAttribute('href')).toContain('manifest=demo-up');
+    // 升级路径不出现这条卸载提示
+    expect(within(drawer).queryByRole('button', { name: '补填后重试升级' })).toBeNull();
+  });
+
+  it('390 宽：旧 Agent 提示与确认标题只放短句在 title，长句在可换行的 description', async () => {
+    const calls: Call[] = [];
+    stubUpgradeNode({ calls });
+    renderWithRouter(<Harness />);
+    const drawer = await openDrawerAndUpgrade();
+
+    const hintDesc = within(drawer).getByText(/节点 Agent < 0\.8\.1 时不会记住安装参数/);
+    expect(hintDesc.className).toContain('ui-banner-desc');
+    const hintBanner = hintDesc.closest('.ui-banner')!;
+    expect(hintBanner.querySelector('.ui-banner-title')?.textContent).toBe('节点 Agent 不记得安装参数');
+    expect(hintBanner.querySelector('.ui-banner-action')).toBeNull();
+
+    const confirmTitle = within(drawer).getByText('确认升级到 2.0.0？');
+    expect(confirmTitle.className).toContain('ui-banner-title');
+    expect(confirmTitle.closest('.ui-banner')!.querySelector('.ui-banner-action')).toBeNull();
+    expect(within(drawer).getByText(/当前版本 1\.0\.0 → 目标版本 2\.0\.0/).className).toContain('ui-banner-desc');
   });
 });
