@@ -330,7 +330,7 @@ run_preflight() {
   ck_writable "$DATA_DIR"
   ck_writable "$UNIT_DIR"
 
-  # 6) 安装包完整性（recipes 为可选：旧版包没有时只降级食谱功能）
+  # 6) 安装包完整性
   local item
   for item in khc_agent.py khc adapters khc-agent.service; do
     if [ -e "$SCRIPT_DIR/$item" ]; then
@@ -339,11 +339,6 @@ run_preflight() {
       ck_fail "安装包不完整，缺少: ${item}（请使用完整 tar.gz 解压后的目录）"
     fi
   done
-  if [ -f "$SCRIPT_DIR/recipes/catalog.json" ]; then
-    ck_pass "安装包包含 recipes"
-  else
-    ck_warn "安装包未包含 recipes/catalog.json（旧版包）；食谱功能不可用，其余功能正常"
-  fi
 
   # 7) 端口占用（只提示，不阻塞）
   if command -v ss >/dev/null 2>&1; then
@@ -661,7 +656,6 @@ esac
 for item in khc_agent.py khc adapters khc-agent.service; do
   [ -e "$SCRIPT_DIR/$item" ] || fail "安装包不完整，缺少: $item"
 done
-[ -f "$SCRIPT_DIR/recipes/catalog.json" ] || log "WARN: 安装包未包含 recipes/catalog.json（旧版包），食谱功能不可用"
 
 log "模式: ${PROFILE}，安装目录: ${PREFIX}，监听: $HOST:$PORT"
 
@@ -712,14 +706,10 @@ fi
 # 1. 复制程序
 # ---------------------------------------------------------------------------
 install -d -m 0755 "$PREFIX"
+# $PREFIX/recipes 是已移除的旧目录，升级时顺带清掉
 rm -rf -- "$PREFIX/khc" "$PREFIX/adapters" "$PREFIX/recipes" "$PREFIX/khc_agent.py"
 cp -R -- "$SCRIPT_DIR/khc" "$PREFIX/khc"
 cp -R -- "$SCRIPT_DIR/adapters" "$PREFIX/adapters"
-if [ -f "$SCRIPT_DIR/recipes/catalog.json" ]; then
-  cp -R -- "$SCRIPT_DIR/recipes" "$PREFIX/recipes"
-else
-  log "WARN: 安装包未包含 recipes/catalog.json（旧版包），跳过食谱目录"
-fi
 install -m 0644 -- "$SCRIPT_DIR/khc_agent.py" "$PREFIX/khc_agent.py"
 find "$PREFIX" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 

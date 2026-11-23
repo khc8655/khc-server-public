@@ -113,7 +113,6 @@ export function checkArchive(archive) {
 const PACKAGED_ITEMS = [
   'khc',
   'adapters',
-  'recipes',
   'khc_agent.py',
   'install.sh',
   'uninstall.sh',

@@ -134,17 +134,17 @@ class CliTests(unittest.TestCase):
         for relative in required:
             self.assertTrue(os.path.isfile(os.path.join(agent_dir, relative)), relative)
 
-    def test_installer_copies_recipes(self) -> None:
-        """回归：recipes/ 必须随包落盘到 $PREFIX/recipes，否则 recipe_install 找不到 catalog.json。"""
+    def test_package_has_no_recipes(self) -> None:
+        """旧 recipe 通道已删除：安装包不再含 recipes/，安装脚本也不再复制它。"""
         agent_dir = os.path.dirname(self.entry)
+        self.assertFalse(os.path.exists(os.path.join(agent_dir, "recipes")))
         with open(os.path.join(agent_dir, "install.sh"), encoding="utf-8") as handle:
             install = handle.read()
-        self.assertIn('cp -R -- "$SCRIPT_DIR/recipes" "$PREFIX/recipes"', install)
-        self.assertIn('"$PREFIX/recipes"', install)
-        self.assertIn('"$SCRIPT_DIR/recipes/catalog.json"', install)
+        self.assertNotIn('"$SCRIPT_DIR/recipes', install)
+        self.assertNotIn("catalog.json", install)
         with open(os.path.join(agent_dir, "package.sh"), encoding="utf-8") as handle:
             package = handle.read()
-        self.assertIn("recipes", package)
+        self.assertNotIn("recipes", package)
 
     def test_parser_defaults(self) -> None:
         parser = khc_agent.build_parser()
