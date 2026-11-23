@@ -203,3 +203,10 @@ curl -s http://<ip>:<port>/health          # 唯一无鉴权端点，只回 ok+v
   - 回滚依赖 Peer 侧定时器，**必须在加载路由之前布防**，布防失败要中止操作。
     Hub 侧撤销只能保证配置一致，救不回已失联的路由表。
     已在真实 Ubuntu + systemd 上用 `systemd-run --on-active` 验证通过（同上 §2）。
+
+## 13. 控制面步骤与应用凭据（manifest v2）
+
+- **凭据存储与权限隔离**：`PUT /api/v1/settings/app.<manifestId>.<name>` 强制按 `{ value, allowHosts }` 校验并经 `MASTER_ENC_KEY` AES-GCM 加密落库，审计仅记键名；新增 `GET /api/v1/app-manifests/:id/secrets` 只返回 `{ configured, allowHosts, updatedAt }`，绝不回显 `value`。
+- **主机白名单（`allowHosts`）**：控制面执行 `hooks` 前提取全部引用的 `{{secret.*}}`，仅当 hook 目标主机（小写、去尾点）精确命中该凭据的 `allowHosts` 时才渲染并发送；越界时返回 403 `secret_host_not_allowed` 且不发出请求。
+- **出站约束与零回显**：hook 仅允许 `https://`，`redirect: 'manual'` 拒绝 3xx，10s 超时、响应体流式上限 64KB 且不重试；无论成功失败均写 `app.hook` 审计（含 `status`/`durationMs`/`outcome`），`expectStatus` 失败只提取第三方响应体中的 `error` 字符串前 200 字符，不回显 URL 查询串、请求头/体或原始响应体；审计与日志均不含任何凭据或提取值；同一 Worker 实例内 10 分钟去重；跨实例重试仍可能重复执行。
+- **明文控制通道限制**：`hooks` 提取的 `hookOutputs` 非空时沿用 `assertSecureChannelForRawSecrets` 口径——生产环境下节点任一候选入口为 `http://` 即拒绝下发（400 `insecure_channel_secret`）。

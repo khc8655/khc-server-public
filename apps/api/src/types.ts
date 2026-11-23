@@ -64,6 +64,8 @@ export interface AppDeps {
   /** ACME DNS-01 签发/续期的可注入 fetch 与等待函数（测试 mock） */
   acmeFetch?: import('./lib/acme-dns01').AcmeFetch;
   acmeSleep?: import('./lib/acme-dns01').AcmeSleep;
+  /** 应用清单 v2 控制面步骤的可注入 fetch（测试 mock；缺省用全局 fetch） */
+  hookFetch?: typeof fetch;
 }
 
 export type AppBindings = {

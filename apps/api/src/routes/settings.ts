@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import {
+  appSecretValueSchema,
   putSettingRequestSchema,
   settingKeySchema,
   settingsListResponseSchema,
@@ -9,11 +10,13 @@ import {
 } from '@khc/contracts';
 import type { AppBindings, AppDeps } from '../types';
 import type { SettingsRepo } from '../domain/repos';
-import { AppError, conflict, notFound } from '../lib/errors';
+import { AppError, badRequest, conflict, notFound } from '../lib/errors';
 import { parseJsonBody, parseParams } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { buildOtpauthUri, generateTotpSecret, verifyTotp } from '../lib/totp';
 import { TOTP_PENDING_KEY, TOTP_SECRET_KEY, bumpSessionEpoch } from '../lib/session';
+
+const APP_SECRET_KEY_RE = /^app\.[a-z][a-z0-9-]{0,47}\.[a-z][a-z0-9_]{0,31}$/;
 
 async function readSecret(settings: SettingsRepo, key: string): Promise<string | null> {
   const value = await settings.getValue(key);
@@ -33,6 +36,17 @@ export function settingsRoutes(deps: AppDeps): Hono<AppBindings> {
   router.put('/settings/:key', async (c) => {
     const key = parseParams(c.req.param('key'), settingKeySchema);
     const body = await parseJsonBody(c, putSettingRequestSchema);
+    if (key.startsWith('app.')) {
+      if (!APP_SECRET_KEY_RE.test(key)) {
+        throw badRequest('应用凭据键格式须为 app.<manifestId>.<name>');
+      }
+      const parsedSecret = appSecretValueSchema.safeParse(body.value);
+      if (!parsedSecret.success) {
+        throw badRequest(
+          `应用凭据格式不正确：${parsedSecret.error.issues[0]?.message ?? '请提供 { value, allowHosts }'}`,
+        );
+      }
+    }
     const setting = await deps.settings.put(key, body.value);
     await deps.audit.log({
       actor: c.get('user').name,

@@ -1,20 +1,24 @@
-import { manifestActionParamsSchema } from '@khc/contracts';
-import type { AppManifestDefinition } from '@khc/contracts';
+import { manifestActionParamsSchema, toManifestV2 } from '@khc/contracts';
+import type { AppManifestAnyDefinition } from '@khc/contracts';
 import type { AppDeps } from '../types';
-import { badRequest, notFound } from './errors';
+import { AppError, badRequest, notFound } from './errors';
 
 /**
- * 写入时校验脚本正文与声明的 sha256 是否一致。
+ * 写入时校验全部脚本正文与声明的 sha256 是否一致（支持 v1 与 v2 optional upgrade）。
  * Worker 侧先挡一次，让填错哈希的人在保存时就看到错误；节点侧落盘前再校一次。
  */
 export async function assertManifestSha256(
-  manifest: AppManifestDefinition,
+  manifest: AppManifestAnyDefinition,
 ): Promise<void> {
-  for (const action of ['install', 'uninstall'] as const) {
-    const actual = await sha256Hex(manifest.scripts[action]);
-    if (actual !== manifest.sha256[action]) {
+  const scripts = manifest.scripts as Record<string, string | undefined>;
+  const hashes = manifest.sha256 as Record<string, string | undefined>;
+  for (const [action, script] of Object.entries(scripts)) {
+    if (typeof script !== 'string') continue;
+    const expected = hashes[action]?.toLowerCase();
+    const actual = await sha256Hex(script);
+    if (!expected || actual !== expected) {
       throw badRequest(
-        `${action} 脚本与 sha256 不一致（expected=${manifest.sha256[action]} actual=${actual}）`,
+        `${action} 脚本与 sha256 不一致（expected=${hashes[action] ?? ''} actual=${actual}）`,
       );
     }
   }
@@ -51,17 +55,15 @@ export async function resolveManifestParams(
   }
   const record = await deps.appManifests.get(parsed.data.manifestId);
   if (!record) throw notFound('应用不存在');
+  if (record.invalid || !record.manifest) {
+    throw new AppError(400, 'manifest_invalid', record.error ?? '应用清单格式不合法');
+  }
   if (!record.enabled) throw badRequest('该应用已停用，不能发起安装');
 
-  // 运行身份以安装时的选择为准，未选则用 manifest 的默认值；显式转发给节点。
-  // 凭据只在「新建用户」模式下允许，且必须成对。密码绝不写 D1、审计或日志，
-  // 这里只在内存里随请求转发给节点，用完即弃。
-  // 校验口径：明确选了就用选的，否则用 manifest 默认值。D1 里的旧定义可能仍是
-  // shared：只有明确写 root 才算 root，其余一律 create。
-  // 只转发明确选择的身份：没选时由节点决定（安装用默认值，卸载用安装时的记录）。
+  const v2 = toManifestV2(record.manifest);
   const explicitMode = parsed.data.runtimeMode;
   const runtimeMode =
-    explicitMode ?? (record.manifest.runtime.mode === 'root' ? 'root' : 'create');
+    explicitMode ?? (v2.runtime.mode === 'root' ? 'root' : 'create');
   const hasUser = Boolean(parsed.data.runtimeUser);
   const hasPassword = Boolean(parsed.data.runtimePassword);
   if (runtimeMode === 'root' && (hasUser || hasPassword)) {

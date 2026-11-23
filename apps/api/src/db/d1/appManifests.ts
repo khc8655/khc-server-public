@@ -1,4 +1,7 @@
-import type { AppManifest, AppManifestDefinition } from '@khc/contracts';
+import {
+  appManifestAnyDefinitionSchema,
+  type AppManifest,
+} from '@khc/contracts';
 import type { AppManifestPatch, AppManifestRepo, NewAppManifest } from '../../domain/repos';
 import { nowSec } from '../../lib/ids';
 
@@ -13,10 +16,41 @@ interface AppManifestRow {
 
 const COLUMNS = 'id, manifest_json, version, enabled, created_at, updated_at';
 
+function formatFirstZodIssue(error: { issues: Array<{ path: Array<string | number | symbol>; message: string }> }): string {
+  const issue = error.issues[0];
+  if (!issue) return '应用清单格式不合法';
+  const path = issue.path.map(String).join('.');
+  return path ? `${path}: ${issue.message}` : issue.message;
+}
+
 function mapAppManifest(row: AppManifestRow): AppManifest {
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(row.manifest_json);
+  } catch (err) {
+    return {
+      id: row.id,
+      invalid: true,
+      error: `manifest_json: ${err instanceof Error ? err.message : 'JSON 解析失败'}`,
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+  const checked = appManifestAnyDefinitionSchema.safeParse(parsedJson);
+  if (!checked.success) {
+    return {
+      id: row.id,
+      invalid: true,
+      error: formatFirstZodIssue(checked.error),
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
   return {
     id: row.id,
-    manifest: JSON.parse(row.manifest_json) as AppManifestDefinition,
+    manifest: checked.data,
     enabled: Boolean(row.enabled),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

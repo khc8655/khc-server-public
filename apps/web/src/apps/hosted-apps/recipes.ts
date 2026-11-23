@@ -5,7 +5,13 @@
  * （`agent/khc/recipes.py`：必填、整数、范围、长度、pattern），以及解析任务结果里的
  * access 卡片。安装/发布这些带副作用的动作不在这里。
  */
-import type { AgentEnvelope, AppManifest, TaskResponse } from '@khc/contracts';
+import {
+  toManifestV2,
+  type AgentEnvelope,
+  type AppManifest,
+  type AppManifestDefinition,
+  type TaskResponse,
+} from '@khc/contracts';
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime } from '../../i18n/format';
 
@@ -51,10 +57,10 @@ export interface CatalogRecipe {
   requiresRoot: boolean;
   params: RecipeParam[];
   access: unknown;
-  runtimeMode: AppManifest['manifest']['runtime']['mode'];
+  runtimeMode: 'root' | 'create';
   runtimeUser?: string;
-  /** 原始清单：发布计划要读 `publish` 声明与参数默认值 */
-  manifest: AppManifest['manifest'];
+  /** 归一化后的清单视图：endpoints[0] 映射到 publish，兼容既有发布向导 */
+  manifest: AppManifestDefinition;
 }
 
 export interface AccessItem {
@@ -72,7 +78,7 @@ export interface InstalledEntry {
 }
 
 /** 列表与卡片里的运行身份文案；旧值 shared 按「新建用户」显示。 */
-export function runtimeLabel(runtime: AppManifest['manifest']['runtime']): string {
+export function runtimeLabel(runtime: { mode: string; user?: string }): string {
   if (runtime.mode === 'root') return zh.catalog.runtimeRootShort;
   return runtime.user
     ? fmt(zh.catalog.runtimeCreateShort, { user: runtime.user })
@@ -80,19 +86,70 @@ export function runtimeLabel(runtime: AppManifest['manifest']['runtime']): strin
 }
 
 export function toCatalogRecipe(item: AppManifest): CatalogRecipe {
+  if (!item.manifest) {
+    return {
+      id: item.id,
+      name: item.id,
+      version: '—',
+      description: item.error ?? '清单格式异常',
+      requiresRoot: false,
+      runtimeMode: 'create',
+      manifest: {
+        name: item.id,
+        version: '0.0.0',
+        runtime: { mode: 'create', linger: true },
+        params: [],
+        scripts: { install: '', uninstall: '' },
+        sha256: { install: '', uninstall: '' },
+        writes: [],
+      },
+      params: [],
+      access: [],
+    };
+  }
+  const v2 = toManifestV2(item.manifest);
+  const firstEndpoint = v2.endpoints?.find((ep) => ep.publish === 'caddy') ?? v2.endpoints?.[0];
+  const publish = firstEndpoint
+    ? {
+        ...(firstEndpoint.portParam !== undefined ? { portParam: firstEndpoint.portParam } : {}),
+        ...(firstEndpoint.port !== undefined ? { port: firstEndpoint.port } : {}),
+        host: firstEndpoint.bind === 'any' ? '0.0.0.0' : '127.0.0.1',
+        label: firstEndpoint.label,
+      }
+    : undefined;
+  const legacyLikeManifest: AppManifestDefinition = {
+    name: v2.name,
+    version: v2.version,
+    runtime: v2.runtime,
+    params: v2.params.map((p) => ({
+      key: p.key,
+      type: p.type === 'enum' ? 'string' : p.type,
+      ...(p.label !== undefined ? { label: p.label } : {}),
+      ...(p.default !== undefined ? { default: p.default } : {}),
+      ...(p.min !== undefined ? { min: p.min } : {}),
+      ...(p.max !== undefined ? { max: p.max } : {}),
+      ...(p.maxLength !== undefined ? { maxLength: p.maxLength } : {}),
+      ...(p.pattern !== undefined ? { pattern: p.pattern } : {}),
+      ...(p.secret !== undefined ? { secret: p.secret } : {}),
+    })),
+    scripts: { install: v2.scripts.install, uninstall: v2.scripts.uninstall },
+    sha256: { install: v2.sha256.install, uninstall: v2.sha256.uninstall },
+    writes: v2.writes,
+    ...(publish ? { publish } : {}),
+  };
   return {
     id: item.id,
-    name: item.manifest.name,
-    version: item.manifest.version,
-    description: runtimeLabel(item.manifest.runtime),
+    name: v2.name,
+    version: v2.version,
+    description: runtimeLabel(v2.runtime),
     requiresRoot: false,
-    runtimeMode: item.manifest.runtime.mode,
-    runtimeUser: item.manifest.runtime.user,
-    manifest: item.manifest,
-    params: item.manifest.params.map((param) => ({
+    runtimeMode: v2.runtime.mode,
+    runtimeUser: v2.runtime.user,
+    manifest: legacyLikeManifest,
+    params: v2.params.map((param) => ({
       key: param.key,
       label: param.label,
-      type: param.type,
+      type: param.type === 'enum' ? 'string' : param.type,
       default: param.default,
       required: param.default === undefined,
       min: param.min,

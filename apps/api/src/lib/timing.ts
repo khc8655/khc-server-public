@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgentCallOptions, AgentClient, AgentNode, AgentResponse } from './node-client';
 
-export type TimingMetric = 'auth' | 'd1' | 'agent';
+export type TimingMetric = 'auth' | 'd1' | 'agent' | 'ext';
 export type Clock = () => number;
 
-const METRIC_ORDER: readonly TimingMetric[] = ['auth', 'd1', 'agent'];
+const METRIC_ORDER: readonly TimingMetric[] = ['auth', 'd1', 'agent', 'ext'];
 const MAX_INTERVALS_PER_METRIC = 500;
 const TOKEN_RE = /^[a-z0-9_-]{1,32}$/;
 
@@ -24,6 +24,7 @@ export interface TimingSummary {
   auth?: MetricSummary;
   d1?: MetricSummary;
   agent?: MetricSummary;
+  ext?: MetricSummary;
   total: number;
 }
 

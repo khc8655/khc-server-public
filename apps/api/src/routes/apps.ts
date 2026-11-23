@@ -20,11 +20,17 @@ import { nowSec } from '../lib/ids';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError } from '../lib/node-client';
-import { nodeToken, requireNode } from './helpers';
 import { resolveSecretRefs } from '../lib/secret-refs';
 import { assertSecureChannelForSecrets } from '../lib/secure-channel';
 import { redactAgentEnvelope } from '../lib/redact';
 import { manifestAuditDetail, resolveManifestParams } from '../lib/app-manifests';
+import {
+  isManifestLifecycleAction,
+  prepareManifestLifecycleAction,
+  throwAgentUpgradeRequired,
+  type PreparedManifestAction,
+} from '../lib/manifest-lifecycle';
+import { getNodeCached, nodeToken, requireNode } from './helpers';
 import { throwAgentError } from './nodes';
 
 /** 内置动作 + 适配器自定义动作（如 client_config / rotate_peer） */
@@ -208,10 +214,29 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
     // 含 $cert/$dnsCred 引用且存在明文候选通道时拒绝（HMAC 不提供保密性），不调用 Agent。
     assertSecureChannelForSecrets(c.env, node, record?.config, body.params);
     // 转发前解析 $cert / $dnsCred 占位符（只发生在内存；缺失即 400，不调用 Agent）
-    // R1：带 manifestId 的动作，从 D1 读出脚本正文附上；浏览器直传正文会被拒绝。
-    // 按字段做通用注入，路由不认识任何应用名。
+    // V2：app-catalog + manifestId 走声明式编排（预检 / 控制面步骤 / 版本协商）；v1 recipe 保持原样。
     const resolvedParams = (await resolveSecretRefs(deps, body.params)) as Record<string, unknown>;
-    const actionParams = await resolveManifestParams(deps, resolvedParams);
+    const token = await nodeToken(c.env, node);
+    let prepared: PreparedManifestAction | null = null;
+    let actionParams: Record<string, unknown>;
+    if (isManifestLifecycleAction(app, action, resolvedParams)) {
+      prepared = await prepareManifestLifecycleAction({
+        env: c.env,
+        deps,
+        node,
+        token,
+        actor: c.get('user').name,
+        app,
+        action,
+        params: resolvedParams,
+        idempotencyKey,
+        getNodeForSyncCheck: () => getNodeCached(deps, node.id),
+        onAgentFailure: throwAgentError,
+      });
+      actionParams = prepared.actionParams;
+    } else {
+      actionParams = await resolveManifestParams(deps, resolvedParams);
+    }
     const payload = {
       config: (await resolveSecretRefs(deps, record?.config ?? {})) as Record<string, unknown>,
       expectRev: record?.rev ?? 0,
@@ -223,11 +248,12 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       idempotencyKey,
     };
 
-    const token = await nodeToken(c.env, node);
     let response;
     try {
+      prepared?.markReplayAccepted?.();
       response = await callWithSyncPoll(deps, node, token, app, action, payload, idempotencyKey);
     } catch (error) {
+      prepared?.clearReplayOnUnreachable?.(error instanceof HubUnreachableError && error.timedOut);
       if (action === 'apply') {
         await recordApplyFailure(deps, node.id, app, {
           code: error instanceof AppError ? error.code : 'hub_unreachable',
@@ -241,6 +267,14 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       throw new HubUnreachableError(unreachableMessage(error), {});
     }
     if (response.status >= 400) {
+      if (
+        prepared?.isSyncCapabilityCheckOnly &&
+        (response.status === 404 ||
+          (response.status === 400 &&
+            (response.body as { error?: { code?: unknown } } | null)?.error?.code === 'invalid_action'))
+      ) {
+        throwAgentUpgradeRequired(prepared.neededFeatures);
+      }
       if (action === 'apply') {
         await recordApplyFailure(deps, node.id, app, extractAgentError(response.body));
       }

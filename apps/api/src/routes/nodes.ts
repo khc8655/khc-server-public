@@ -29,6 +29,7 @@ import {
   projectNodeProbe,
 } from '../lib/node-overview';
 import { summarizeAppSummaries, summarizeNodeApps } from '../lib/node-summary';
+import { recordNodeAppManifestCapabilities } from '../lib/manifest-lifecycle';
 import { parseJsonBody } from '../lib/validate';
 import { requireAuth } from '../middleware/auth';
 import { HubUnreachableError, formatRouteErrors } from '../lib/node-client';
@@ -260,6 +261,13 @@ async function fetchNodeState(
         // 拿到了响应 = TLS 握手已通过（https 时即证书有效）
         tls: classifyTlsProbe({ endpoint: probeEndpoint, reachable: true }),
       };
+    }
+    if (parsed.data.agent?.capabilities?.appManifest) {
+      recordNodeAppManifestCapabilities(
+        deps.nodes,
+        node.id,
+        parsed.data.agent.capabilities.appManifest,
+      );
     }
     // 只更新轻量可达租约（60 秒节流，避免高频切页放大 D1 写）；运行快照不写入 D1。
     const seenAt = nowSec();
