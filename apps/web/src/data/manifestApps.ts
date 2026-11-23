@@ -32,7 +32,10 @@ export interface AppView {
 export interface InstalledUnit {
   name: string;
   scope: 'system' | 'user';
-  active?: string;
+  /** Agent 上报的布尔值（是否在运行） */
+  active?: boolean;
+  /** `systemctl is-active` 文本：active / inactive / failed / activating … */
+  state?: string;
 }
 
 export interface InstalledHealth {
@@ -190,6 +193,29 @@ export function installActionForSchema(schema: 1 | 2): 'recipe_install' | 'manif
   return schema === 2 ? 'manifest_install' : 'recipe_install';
 }
 
+/**
+ * 条目的有效 schema：以 D1 清单为准（Agent 0.8.0 会把 v1 清单归一执行并记成 schema 2），
+ * 清单已被删除时退回安装记录里的 schema。
+ */
+export function effectiveSchema(
+  view: Pick<AppView, 'schema'> | undefined,
+  entry: Pick<InstalledApp, 'schema'>,
+): 1 | 2 {
+  return view?.schema ?? entry.schema;
+}
+
+/** 单元状态展示：有 state 文本显示文本，否则按布尔值，都没有才是「未知」。 */
+export function unitStatusView(unit: Pick<InstalledUnit, 'active' | 'state'>): {
+  tone: Tone;
+  label: string;
+} {
+  const label =
+    unit.state ?? (unit.active === true ? '运行中' : unit.active === false ? '未运行' : '未知');
+  const tone: Tone =
+    unit.active === true ? 'ok' : unit.state === 'failed' ? 'danger' : 'neutral';
+  return { tone, label };
+}
+
 export function uninstallActionForSchema(schema: 1 | 2): 'recipe_uninstall' | 'manifest_uninstall' {
   return schema === 2 ? 'manifest_uninstall' : 'recipe_uninstall';
 }
@@ -207,10 +233,21 @@ function parseUnits(raw: unknown): InstalledUnit[] {
     const rec = asRecord(item);
     if (!rec || typeof rec.name !== 'string' || !rec.name) continue;
     const scope = rec.scope === 'system' ? 'system' : 'user';
+    // Agent 实际形状：{ active: <bool>, state: '<is-active 文本>' }；兼容旧数据里 active 为字符串。
+    const legacyText = typeof rec.active === 'string' && rec.active ? rec.active : undefined;
+    const state =
+      typeof rec.state === 'string' && rec.state ? rec.state : legacyText;
+    const active =
+      typeof rec.active === 'boolean'
+        ? rec.active
+        : legacyText !== undefined
+          ? legacyText === 'active'
+          : undefined;
     units.push({
       name: rec.name,
       scope,
-      ...(typeof rec.active === 'string' ? { active: rec.active } : {}),
+      ...(active !== undefined ? { active } : {}),
+      ...(state !== undefined ? { state } : {}),
     });
   }
   return units;
@@ -323,14 +360,12 @@ export function appStatus(
   if (catalogState?.stale || catalogState?.pending) {
     return { tone: 'neutral', label: '未读取' };
   }
-  const hasUnitFailure = entry.units.some(
-    (unit) => unit.active !== undefined && unit.active !== 'active',
-  );
+  const hasUnitFailure = entry.units.some((unit) => unit.active === false);
   if (entry.lastHealth?.ok === false || hasUnitFailure) {
     return { tone: 'danger', label: '异常' };
   }
   const unitsAllActive =
-    entry.units.length > 0 && entry.units.every((unit) => unit.active === 'active');
+    entry.units.length > 0 && entry.units.every((unit) => unit.active === true);
   if (entry.lastHealth?.ok === true || (entry.lastHealth === undefined && unitsAllActive)) {
     return { tone: 'ok', label: '运行中' };
   }

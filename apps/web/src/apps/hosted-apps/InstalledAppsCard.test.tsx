@@ -243,7 +243,7 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
         mode: 'create',
         user: 'khc-app-v2',
         installedAt: '2026-11-23T00:00:00Z',
-        units: [{ name: 'demo-v2.service', scope: 'user', active: 'active' }],
+        units: [{ name: 'demo-v2.service', scope: 'user', active: true, state: 'active' }],
         lastHealth: { ok: true, checkedAt: '2026-11-23T00:00:00Z', version: '1.0.0' },
         facts: { node_id: 'ext-1' },
       },

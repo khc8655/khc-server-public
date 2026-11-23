@@ -9,13 +9,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AgentState, TaskResponse } from '@khc/contracts';
+import { compareSemver } from '../../data/agent';
 import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
 import {
   appStatus,
   canUpgrade,
+  effectiveSchema,
   installedTime,
   normalizeResultCards,
   uninstallActionForSchema,
+  unitStatusView,
+  validateManifestValues,
   type AppCatalogStatusState,
   type AppView,
   type InstalledApp,
@@ -40,6 +44,7 @@ import {
 } from '../../ui';
 import { ManifestErrorAlert } from './ManifestErrorAlert';
 import { ResultCardsView } from './ResultCardsView';
+import { UpgradeParamsForm, type UpgradeValues } from './UpgradeParamsForm';
 
 type InlineConfirm =
   | { kind: 'stop'; unit: string }
@@ -79,6 +84,12 @@ export function InstalledAppDrawer({
   const [lingerDisabled, setLingerDisabled] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const [task, setTask] = useState<TaskResponse | null>(null);
+
+  // 升级时可选修改的参数：只保存用户改动过的键（含 secret 值，仅存于本组件状态）。
+  const [upgradeParamsOpen, setUpgradeParamsOpen] = useState(false);
+  const [upgradeValues, setUpgradeValues] = useState<UpgradeValues>({});
+  const [upgradeErrors, setUpgradeErrors] = useState<Record<string, string>>({});
+  const [upgradeNeedsFill, setUpgradeNeedsFill] = useState(false);
 
   const [logsOpen, setLogsOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState(() => entry.units[0]?.name ?? '');
@@ -129,10 +140,16 @@ export function InstalledAppDrawer({
     (entry.instance && entry.instance !== entry.manifestId ? ` (${entry.instance})` : '');
   const status = appStatus(entry, catalogState);
   const isManifest = entry.source === 'manifest';
-  const isV2 = isManifest && entry.schema === 2;
+  const schema = effectiveSchema(view, entry);
+  const isV2 = isManifest && schema === 2;
   const upgradeable = canUpgrade(view, entry, state);
   const hasPreUpgradeHook = Boolean(view && !view.invalid && view.def.hooks?.preUpgrade);
   const actionDisabled = Boolean(offlineReason) || busy || unitBusy !== null;
+  const agentVersion = state?.agent?.version;
+  // 0.8.1 起 Agent 才保存安装参数值；版本无法解析时不提示。
+  const agentForgetsInstallValues = Boolean(
+    agentVersion && compareSemver('0.8.1', agentVersion) > 0,
+  );
 
   const pollTask = async (taskId: string): Promise<TaskResponse> => {
     let current = await fetchTask(hubId, taskId);
@@ -182,15 +199,49 @@ export function InstalledAppDrawer({
     }
   };
 
+  const setUpgradeValue = (key: string, value: unknown | undefined) => {
+    setUpgradeValues((prev) => {
+      const next = { ...prev };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+    setUpgradeErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const resetUpgradeForm = () => {
+    setUpgradeParamsOpen(false);
+    setUpgradeValues({});
+    setUpgradeErrors({});
+    setUpgradeNeedsFill(false);
+  };
+
   const runUpgrade = async () => {
+    // 只校验用户填了的键；缺失由 Agent 判定。
+    if (view && !view.invalid) {
+      const all = validateManifestValues(view.def, upgradeValues);
+      const errs = Object.fromEntries(Object.entries(all).filter(([key]) => key in upgradeValues));
+      if (Object.keys(errs).length > 0) {
+        setUpgradeErrors(errs);
+        setUpgradeParamsOpen(true);
+        return;
+      }
+    }
     setConfirm(null);
     setBusy(true);
     setActionError(null);
     setTask(null);
+    setUpgradeErrors({});
+    setUpgradeNeedsFill(false);
     try {
       const env = await runAppAction(hubId, 'app-catalog', 'manifest_upgrade', {
         manifestId: entry.manifestId,
-        values: {},
+        values: upgradeValues,
       });
       if (!mountedRef.current) return;
       if (!env.ok || !env.taskId) {
@@ -202,9 +253,34 @@ export function InstalledAppDrawer({
         throw finalTask.task.error ?? new Error('升级任务失败');
       }
       toast.show({ message: `${displayName} 升级完成` });
+      resetUpgradeForm();
       await refreshHubRuntime(queryClient, hubId, { force: true });
     } catch (cause) {
-      if (mountedRef.current) setActionError(cause);
+      if (!mountedRef.current) return;
+      setActionError(cause);
+      // 0.8.0 的「缺少参数」错误 code 是 internal_error：只认 details.field，不看 code 与文本。
+      const details = (cause as { details?: unknown } | null)?.details;
+      const field =
+        details && typeof details === 'object'
+          ? (details as { field?: unknown }).field
+          : undefined;
+      if (
+        typeof field === 'string' &&
+        view &&
+        !view.invalid &&
+        view.def.params.some((param) => param.key === field)
+      ) {
+        const message =
+          cause instanceof Error && cause.message
+            ? cause.message
+            : typeof (cause as { message?: unknown }).message === 'string'
+              ? String((cause as { message: string }).message)
+              : '该参数缺失，请补填';
+        setUpgradeErrors({ [field]: message });
+        setUpgradeParamsOpen(true);
+        setUpgradeNeedsFill(true);
+        setConfirm({ kind: 'upgrade' });
+      }
     } finally {
       if (mountedRef.current) setBusy(false);
     }
@@ -216,7 +292,7 @@ export function InstalledAppDrawer({
     setActionError(null);
     setTask(null);
     try {
-      const actionName = uninstallActionForSchema(entry.schema);
+      const actionName = uninstallActionForSchema(schema);
       const env = await runAppAction(hubId, 'app-catalog', actionName, {
         manifestId: entry.manifestId,
         values: {},
@@ -239,7 +315,7 @@ export function InstalledAppDrawer({
       setActionError(cause);
       if (
         !skipHooks &&
-        entry.schema === 2 &&
+        schema === 2 &&
         cause instanceof ApiError &&
         (cause.code === 'hook_failed' || cause.code === 'hook_extract_failed')
       ) {
@@ -292,7 +368,7 @@ export function InstalledAppDrawer({
     : [];
 
   const resultCards = normalizeResultCards(
-    entry.schema,
+    schema,
     (task?.task.result as { cards?: unknown } | null | undefined)?.cards,
   );
 
@@ -308,7 +384,7 @@ export function InstalledAppDrawer({
       <Stack gap={4}>
         <Row gap={2} align="center" wrap>
           <Badge tone={status.tone} label={status.label} />
-          <Badge tone="neutral" label={isManifest ? `v${entry.schema}` : '旧版目录'} />
+          <Badge tone="neutral" label={isManifest ? `v${schema}` : '旧版目录'} />
         </Row>
 
         {offlineReason ? (
@@ -389,19 +465,14 @@ export function InstalledAppDrawer({
                 />
               ) : null}
               {entry.units.map((unit) => {
-                const activeTone =
-                  unit.active === 'active'
-                    ? 'ok'
-                    : unit.active === undefined
-                      ? 'neutral'
-                      : 'danger';
+                const unitStatus = unitStatusView(unit);
                 return (
                   <Stack key={unit.name} gap={2}>
                     <div className="ui-row-between">
                       <Row gap={2} align="center" wrap>
                         <span className="ui-text-mono">{unit.name}</span>
                         <Badge tone="neutral" label={unit.scope} />
-                        <Badge tone={activeTone} label={unit.active ?? '未知'} />
+                        <Badge tone={unitStatus.tone} label={unitStatus.label} />
                       </Row>
                       <Row gap={1}>
                         <Button
@@ -558,25 +629,61 @@ export function InstalledAppDrawer({
               </Row>
 
               {confirm?.kind === 'upgrade' && view ? (
-                <Banner
-                  tone="info"
-                  title={`确认升级到 ${view.def.version}？`}
-                  description={
-                    `当前版本 ${entry.version} → 目标版本 ${view.def.version}` +
-                    (hasPreUpgradeHook ? '；将执行控制面步骤 preUpgrade' : '')
-                  }
-                  action={
-                    <Row gap={2}>
-                      <Button
-                        label="确认升级"
-                        variant="primary"
-                        size="sm"
-                        onClick={() => void runUpgrade()}
-                      />
-                      <Button label="取消" size="sm" onClick={() => setConfirm(null)} />
-                    </Row>
-                  }
-                />
+                <Stack gap={3}>
+                  <Banner
+                    tone="info"
+                    title={`确认升级到 ${view.def.version}？`}
+                    description={
+                      `当前版本 ${entry.version} → 目标版本 ${view.def.version}` +
+                      (hasPreUpgradeHook ? '；将执行控制面步骤 preUpgrade' : '')
+                    }
+                    action={
+                      <Row gap={2}>
+                        <Button
+                          label={upgradeNeedsFill ? zh.catalog.upgradeRetryAfterFill : '确认升级'}
+                          variant="primary"
+                          size="sm"
+                          onClick={() => void runUpgrade()}
+                        />
+                        <Button
+                          label="取消"
+                          size="sm"
+                          onClick={() => {
+                            resetUpgradeForm();
+                            setConfirm(null);
+                          }}
+                        />
+                      </Row>
+                    }
+                  />
+                  {agentForgetsInstallValues ? (
+                    <Banner tone="warn" title={zh.catalog.upgradeOldAgentHint} />
+                  ) : null}
+                  {!view.invalid ? (
+                    <Stack gap={3}>
+                      <Row gap={2}>
+                        <Button
+                          label={
+                            upgradeParamsOpen
+                              ? zh.catalog.upgradeParamsHide
+                              : zh.catalog.upgradeParamsToggle
+                          }
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setUpgradeParamsOpen((prev) => !prev)}
+                        />
+                      </Row>
+                      {upgradeParamsOpen ? (
+                        <UpgradeParamsForm
+                          def={view.def}
+                          values={upgradeValues}
+                          errors={upgradeErrors}
+                          onChange={setUpgradeValue}
+                        />
+                      ) : null}
+                    </Stack>
+                  ) : null}
+                </Stack>
               ) : null}
 
               {confirm?.kind === 'uninstall' ? (

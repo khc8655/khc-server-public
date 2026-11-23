@@ -310,7 +310,12 @@ export async function prepareManifestLifecycleAction(
     }
   }
 
+  // hooks 渲染始终用「清单默认值 + 本次值」（Worker 拿不到节点上的安装值）。
   const mergedValues = mergeParamDefaults(defV2, parsed.data.values);
+  // 只有 install 转发「清单默认值 + 本次值」。upgrade / uninstall 转发请求原值（任务参数与预检一致）：
+  // 默认值与安装记录值由 Agent 合并（本次值 > 安装记录值 > 清单默认值），
+  // Worker 预先塞默认值会被当成「本次值」盖掉安装记录值。
+  const forwardValues = stage === 'install' ? mergedValues : parsed.data.values;
   const replayKey = replayCacheKey(node.id, app, action, idempotencyKey);
   const replayed = getHookReplay(deps.agent, replayKey);
   if (replayed) {
@@ -323,7 +328,7 @@ export async function prepareManifestLifecycleAction(
         manifest: defV2,
         manifestId: parsed.data.manifestId,
         instance,
-        values: mergedValues,
+        values: forwardValues,
         ...(explicitMode ? { runtimeMode: explicitMode } : {}),
         ...(Object.keys(replayed.hookOutputs).length > 0 ? { hookOutputs: replayed.hookOutputs } : {}),
         ...(Object.keys(replayed.hookFacts).length > 0 ? { hookFacts: replayed.hookFacts } : {}),
@@ -347,7 +352,7 @@ export async function prepareManifestLifecycleAction(
         manifest: defV2,
         manifestId: parsed.data.manifestId,
         instance,
-        values: mergedValues,
+        values: forwardValues,
         stage,
       },
     },
@@ -475,7 +480,7 @@ export async function prepareManifestLifecycleAction(
       manifest: defV2,
       manifestId: parsed.data.manifestId,
       instance,
-      values: mergedValues,
+      values: forwardValues,
       ...(explicitMode ? { runtimeMode: explicitMode } : {}),
       ...(Object.keys(hookOutputs).length > 0 ? { hookOutputs } : {}),
       ...(Object.keys(hookFacts).length > 0 ? { hookFacts } : {}),
