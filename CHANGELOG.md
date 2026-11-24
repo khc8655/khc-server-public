@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.43.2] - 2026-11-24
+### Fixed
+- 修复边缘回源下 `install-command` 的 `--tls-bootstrap-url` 误用 `*.workers.dev` 导致国内 VM 无法拉取证书的问题，优先解析公开面板域名。
+- Agent `0.9.2`：`install.sh --tls-bootstrap-url` 显式携带 `User-Agent: khc-agent-bootstrap/1`，避免边缘拦截默认 `Python-urllib`（`403/1010`）。
+
 ## [0.43.1] - 2026-11-24
 ### Fixed
 - 精简站点发布表单：合并「选择已有域名」与域名输入框，新建隐藏「启用」开关，移除向导横幅、只读「上游地址」灰框并把路径路由收进高级区。

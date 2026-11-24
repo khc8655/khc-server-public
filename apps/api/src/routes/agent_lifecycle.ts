@@ -54,6 +54,63 @@ function packageHost(packageUrl: string): string {
   }
 }
 
+function isWorkersDevHostname(hostname: string): boolean {
+  return hostname.toLowerCase().endsWith('.workers.dev');
+}
+
+function parseLiveOrigins(raw: string | undefined): URL[] {
+  const urls: URL[] = [];
+  for (const part of (raw ?? '').split(',')) {
+    const value = part.trim();
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        urls.push(url);
+      }
+    } catch {
+      // 忽略非法配置项
+    }
+  }
+  return urls;
+}
+
+/**
+ * 解析对外可达的面板 origin（供目标 VM 执行安装命令反连控制面拉取证书）：
+ * 第三方边缘回源会把请求 URL 的 Host 改写成 *.workers.dev（国内 VM 常无法直连），
+ * 因此优先取非 *.workers.dev 的可信 Origin 或 LIVE_ORIGINS 公开入口，再回退请求 URL。
+ */
+function resolvePublicPanelOrigin(
+  reqUrl: string,
+  originHeader: string | undefined,
+  liveOriginsRaw: string | undefined,
+): string {
+  const requestUrl = new URL(reqUrl);
+  const liveOrigins = parseLiveOrigins(liveOriginsRaw);
+  const allowedSet = new Set(liveOrigins.map((url) => url.origin.toLowerCase()));
+
+  if (originHeader) {
+    try {
+      const parsed = new URL(originHeader);
+      const allowed = parsed.host === requestUrl.host || allowedSet.has(parsed.origin.toLowerCase());
+      if (
+        allowed &&
+        (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        !isWorkersDevHostname(parsed.hostname)
+      ) {
+        return parsed.origin;
+      }
+    } catch {
+      // 忽略非法 Origin 头
+    }
+  }
+
+  const primaryPublic = liveOrigins.find((url) => !isWorkersDevHostname(url.hostname));
+  if (primaryPublic) return primaryPublic.origin;
+
+  return requestUrl.origin;
+}
+
 function unreachableMessage(error: unknown): string {
   if (error instanceof HubUnreachableError) return error.message;
   return error instanceof Error ? error.message : String(error);
@@ -217,7 +274,11 @@ export function agentLifecycleRoutes(deps: AppDeps): Hono<AppBindings> {
       origin: new URL(c.req.url).origin,
     });
     const target = await commandTarget(deps, c.env, node);
-    const origin = new URL(c.req.url).origin;
+    const origin = resolvePublicPanelOrigin(
+      c.req.url,
+      c.req.header('origin'),
+      c.env.LIVE_ORIGINS,
+    );
     const tlsBootstrapUrl =
       node.accessMode === 'domain' && node.tlsCertId
         ? `${origin}/api/v1/nodes/${encodeURIComponent(node.id)}/bootstrap/tls`
