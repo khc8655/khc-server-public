@@ -809,6 +809,15 @@ class UnitsControlLogsAndStatusTests(unittest.TestCase):
             self.assertEqual(finished["state"], "done")
             self.assertEqual(finished["result"]["facts"], {"hub_node_id": "hn_42"})
 
+            code, access, _ = harness.request(
+                "POST",
+                "/apps/app-catalog/manifest_access",
+                {"params": {"manifestId": "demo"}},
+            )
+            self.assertEqual(code, 200)
+            self.assertTrue(access["ok"])
+            self.assertIsInstance(access["cards"], list)
+
             code, installed, _ = harness.request("POST", "/apps/app-catalog/manifest_installed", {"params": {}})
             self.assertEqual(code, 200)
             self.assertIn("demo", installed["installed"])

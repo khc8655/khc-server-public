@@ -13,7 +13,12 @@ from unittest import mock
 from khc.adapters import Ctx, RunResult
 from khc import app_manifests as mod
 from khc.app_manifests import (
-    APP_ROOT, ManifestError, read_installed_manifests, run_manifest, validate_manifest,
+    APP_ROOT,
+    ManifestError,
+    read_installed_manifests,
+    read_manifest_access,
+    run_manifest,
+    validate_manifest,
 )
 
 from .support import make_paths
@@ -398,6 +403,34 @@ class ManifestTests(unittest.TestCase):
         env = runner.envs[-1] or {}
         self.assertEqual(env["KHC_PARAM_DOWNLOAD_MIRROR"], "https://mirror.example.com/")
         self.assertEqual(env["KHC_PARAM_HTTP_PROXY"], "http://u:secretpass@127.0.0.1:7890")
+
+    def test_cards_persisted_in_record_excluded_from_state_and_readable_on_demand(self):
+        cards_json = (
+            '{"cards":['
+            '{"title":"Web 管理页","value":"https://app.example.com/?k=tok123","kind":"url","primary":true,"copy":true},'
+            '{"title":"Web 登录 Key","value":"tok123","kind":"secret","copy":true}'
+            ']}'
+        )
+        runner = RecordingRunner(stdout=f"KHC_RESULT={cards_json}\n")
+        self.install(runner)
+        ctx = self.ctx(runner)
+
+        rec_path = mod._record_path(ctx, "test-app", "test-app")
+        self.assertEqual(os.stat(rec_path).st_mode & 0o777, 0o600)
+
+        state_entries = read_installed_manifests(ctx)
+        self.assertIn("test-app", state_entries)
+        self.assertNotIn("cards", state_entries["test-app"])
+        self.assertNotIn("tok123", repr(state_entries))
+
+        access = read_manifest_access(ctx, manifest_id="test-app")
+        self.assertTrue(access["ok"])
+        self.assertEqual(len(access["cards"]), 2)
+        self.assertEqual(access["cards"][1], {"title": "Web 登录 Key", "value": "tok123", "kind": "secret", "copy": True})
+
+        with self.assertRaises(ManifestError) as caught:
+            read_manifest_access(ctx, manifest_id="missing-app")
+        self.assertEqual(caught.exception.code, "not_installed")
 
 
 if __name__ == "__main__":

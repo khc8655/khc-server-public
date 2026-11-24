@@ -80,6 +80,8 @@ function mockApi(
     sites?: Record<string, unknown>[];
     withCerts?: boolean;
     listening?: { proto: string; address: string; port: number; process?: string }[];
+    installedDetail?: Record<string, unknown>;
+    appManifests?: unknown[];
   } = {},
 ) {
   currentNode = options.nodeOverride ?? node;
@@ -114,6 +116,7 @@ function mockApi(
       if (url === '/api/v1/nodes/tyo-1') return json({ node: currentNode });
       if (url === '/api/v1/certs') return json({ certificates: withCerts ? [certificate] : [] });
       if (url === '/api/v1/settings') return json({ settings: [] });
+      if (url === '/api/v1/app-manifests') return json({ appManifests: options.appManifests ?? [] });
       if (url === '/api/v1/nodes/tyo-1/apps') {
         return json({
           apps: [appConfig()],
@@ -200,6 +203,15 @@ function mockApi(
                   sites: [{ name: 'blog', domain: 'blog.example.dev', active: true }],
                 },
               },
+              ...(options.installedDetail
+                ? [
+                    {
+                      name: 'app-catalog',
+                      version: '1.0.0',
+                      status: { installedDetail: options.installedDetail },
+                    },
+                  ]
+                : []),
             ],
             ports: [],
           },
@@ -437,7 +449,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(screen.getByRole('button', { name: '添加第一个应用' })).toBeTruthy();
   });
 
-  it('有未发布本机监听端口时渲染卡片，支持行点击与「发布」按钮预填站点抽屉（IPv4/IPv6）', async () => {
+  it('有未发布本机监听端口时收进「高级」区，支持行点击与「发布」按钮预填站点抽屉（IPv4/IPv6）', async () => {
     mockApi({
       withCerts: false,
       nodeOverride: { ...node, domain: 'vm.example.com', endpoint: 'https://vm.example.com' },
@@ -448,6 +460,9 @@ describe('应用页分段与本机监听端口（U3）', () => {
       ],
     });
     await renderRoute('/hubs/tyo-1/sites');
+    expect(await screen.findByRole('heading', { name: '应用' })).toBeTruthy();
+    expect(screen.queryByText('本机监听端口')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: '高级' }));
     expect(await screen.findByText('本机监听端口')).toBeTruthy();
     expect((await screen.findAllByText('9000 · python3')).length).toBeGreaterThan(0);
     expect(screen.queryByText('22')).toBeNull();
@@ -571,6 +586,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
     await renderRoute('/hubs/tyo-1/sites');
     expect(await screen.findByText('外部配置（未托管）')).toBeTruthy();
     expect((await screen.findAllByText('legacy.example.com')).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole('button', { name: '高级' }));
     expect(screen.queryByText('2083 · socat')).toBeNull();
     expect((await screen.findAllByText('9099 · python3')).length).toBeGreaterThan(0);
   });
@@ -767,5 +783,63 @@ describe('应用页分段与本机监听端口（U3）', () => {
     await userEvent.click(within(drawer).getByRole('button', { name: '保存并生效' }));
     expect(await within(drawer).findByText(/caddy\.service is not active, cannot reload\./)).toBeTruthy();
     expect(within(drawer).getByText(/节点上的 Caddy 服务当前未启动/)).toBeTruthy();
+  });
+
+  it('统一应用表合并已装托管应用与反代站点、隐藏 publish:none 内部端口并支持从站点抽屉切到服务与凭据', async () => {
+    mockApi({
+      withCerts: false,
+      sites: [
+        {
+          name: 'magpie',
+          domains: ['un.example.com'],
+          listenPort: 2083,
+          kind: 'proxy',
+          upstreams: ['127.0.0.1:3430'],
+          enabled: true,
+        },
+      ],
+      installedDetail: {
+        magpie: {
+          manifestId: 'magpie',
+          instance: 'magpie',
+          version: 'latest',
+          schema: 2,
+          source: 'manifest',
+          mode: 'create',
+          user: 'khc-app-magpie',
+          units: [{ name: 'khc-magpie-default.service', scope: 'user', active: true, state: 'active' }],
+          endpoints: [
+            { id: 'web', label: 'Web 管理页', protocol: 'http', port: 3430, bind: 'loopback', publish: 'caddy' },
+            { id: 'gateway', label: '网关', protocol: 'http', port: 3425, bind: 'loopback', publish: 'none' },
+          ],
+        },
+      },
+      listening: [
+        { proto: 'tcp', address: '127.0.0.1', port: 3425, process: 'magpie' },
+        { proto: 'tcp', address: '127.0.0.1', port: 3430, process: 'magpie' },
+        { proto: 'tcp', address: '127.0.0.1', port: 9099, process: 'python3' },
+      ],
+    });
+
+    await renderRoute('/hubs/tyo-1/sites');
+    expect((await screen.findAllByText('magpie')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('已安装的托管应用')).toBeNull();
+    expect(screen.queryByText('本机监听端口')).toBeNull();
+
+    // 展开「高级」后仅见未纳管端口 9099，magpie 内部网关 3425 (publish:none) 与已发布 3430 均不露出
+    await userEvent.click(screen.getByRole('button', { name: '高级' }));
+    expect(await screen.findByText('本机监听端口')).toBeTruthy();
+    expect((await screen.findAllByText('9099 · python3')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('3425 · magpie')).toBeNull();
+
+    // 点击 magpie 行打开站点抽屉，经「管理服务与登录凭据」无缝切到托管应用抽屉（只存在 1 个 Dialog）
+    const link = screen.getByRole('link', { name: /https:\/\/un\.example\.com:2083/ });
+    await userEvent.click(link.closest('tr')!);
+    const siteDrawer = await screen.findByRole('dialog');
+    expect(within(siteDrawer).getByText(/托管应用 · magpie/)).toBeTruthy();
+
+    await userEvent.click(within(siteDrawer).getByRole('button', { name: '管理服务与登录凭据' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(await screen.findByRole('button', { name: '查看访问凭据' })).toBeTruthy();
   });
 });

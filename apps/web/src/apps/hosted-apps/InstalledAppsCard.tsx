@@ -10,14 +10,13 @@ import type { AgentState } from '@khc/contracts';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import {
   appStatus,
-  canUpgrade,
   installedCatalogState,
   toAppView,
   type InstalledApp,
 } from '../../data/manifestApps';
 import { refreshHubRuntime } from '../../data/queries';
 import { zh } from '../../i18n/zh';
-import { Badge, Banner, Button, Card, InlineError, Row, Stack, Table, type ColumnDef } from '../../ui';
+import { Banner, Button, Card, InlineError, Stack, Table, type ColumnDef } from '../../ui';
 import { InstalledAppDrawer } from './InstalledAppDrawer';
 
 function entryIdentity(entry: Pick<InstalledApp, 'manifestId' | 'instance'>): string {
@@ -116,18 +115,6 @@ export function InstalledAppsCard({
       header: '版本',
       width: '34%',
       value: (entry) => entry.version,
-      render: (entry) => {
-        const view = viewMap.get(entry.manifestId);
-        const upgradeable = canUpgrade(view, entry, effectiveState);
-        return (
-          <Row gap={1} align="center">
-            <span className="ui-text-mono">{entry.version}</span>
-            {upgradeable && view ? (
-              <Badge tone="info" label={`→ ${view.def.version}`} />
-            ) : null}
-          </Row>
-        );
-      },
     },
     {
       key: 'status',

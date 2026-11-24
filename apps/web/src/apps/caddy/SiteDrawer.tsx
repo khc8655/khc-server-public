@@ -23,6 +23,7 @@ import {
   Stack,
   TextInput,
   Toggle,
+  type Tone,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { formatExpiry } from '../../i18n/format';
@@ -175,6 +176,7 @@ export function SiteDrawer({
   onClose,
   onSave,
   onDelete: _onDelete,
+  linkedInstalledApp,
 }: {
   form: SiteFormState;
   errors: SiteErrors;
@@ -194,6 +196,12 @@ export function SiteDrawer({
   onClose: () => void;
   onSave: (apply: boolean) => void;
   onDelete?: () => Promise<void>;
+  linkedInstalledApp?: {
+    name: string;
+    statusLabel: string;
+    statusTone: Tone;
+    onManage: () => void;
+  };
 }) {
   const dirty = siteSignature(form) !== form.initial;
   const parsedUpstream = splitUpstream(form.upstreams);
@@ -372,6 +380,21 @@ export function SiteDrawer({
             <span className="ui-route-preview-target">{previewTarget}</span>
           </div>
         </div>
+
+        {linkedInstalledApp ? (
+          <Banner
+            tone={linkedInstalledApp.statusTone === 'danger' ? 'danger' : 'info'}
+            title={`托管应用 · ${linkedInstalledApp.name}（${linkedInstalledApp.statusLabel}）`}
+            description="可在应用详情里启停服务、查看日志、更新或读取登录凭据。"
+            action={
+              <Button
+                label="管理服务与登录凭据"
+                size="sm"
+                onClick={linkedInstalledApp.onManage}
+              />
+            }
+          />
+        ) : null}
 
         <GroupCard title={zh.sites.groupBasic}>
           <Field

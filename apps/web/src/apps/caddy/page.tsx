@@ -72,6 +72,7 @@ import {
   Segmented,
   Skeleton,
   Stack,
+  SyncStatus,
   Table,
   downloadTextFile,
   useToast,
@@ -84,13 +85,22 @@ import { daysUntil, formatAbsoluteTime, formatExpiry } from '../../i18n/format';
 import { SiteDrawer } from './SiteDrawer';
 import { InstallAndPublishDrawer } from './InstallAndPublishDrawer';
 import { diagnoseSiteIssues } from './siteDiagnostics';
-import { InstalledAppsCard } from '../hosted-apps/InstalledAppsCard';
+import { InstalledAppDrawer } from '../hosted-apps/InstalledAppDrawer';
+import { appManifestsQueryOptions } from '../../data/appManifests';
+import {
+  appStatus,
+  installedCatalogState,
+  toAppView,
+  type AppView,
+  type InstalledApp,
+} from '../../data/manifestApps';
 import { installTaskText } from '../installTaskText';
 import {
   buildSite,
   createForm,
   editForm,
   healthBadge,
+  isLocalUpstreamHost,
   parseEndpointPort,
   pickRecommendedListenPort,
   siteAccessUrl,
@@ -103,6 +113,76 @@ import {
   type SiteFormState,
   type SiteRow,
 } from './siteForm';
+
+type UnifiedAppRow =
+  | {
+      kind: 'site';
+      site: CaddySite;
+      health: SiteRow['health'];
+      installed?: InstalledApp;
+      view?: AppView;
+    }
+  | {
+      kind: 'installed';
+      installed: InstalledApp;
+      view?: AppView;
+    };
+
+function installedIdentity(entry: Pick<InstalledApp, 'manifestId' | 'instance'>): string {
+  return `${entry.manifestId}::${entry.instance}`;
+}
+
+function installedDisplayName(entry: InstalledApp, view?: AppView): string {
+  const base = !view?.invalid && view?.def.name ? view.def.name : entry.manifestId;
+  return entry.instance && entry.instance !== entry.manifestId
+    ? `${base} (${entry.instance})`
+    : base;
+}
+
+function primaryPublishPort(entry: InstalledApp): number | null {
+  const caddyEp = entry.endpoints.find((ep) => ep.publish === 'caddy' && typeof ep.port === 'number');
+  if (caddyEp?.port !== undefined) return caddyEp.port;
+  const pubEp = entry.endpoints.find((ep) => ep.publish !== 'none' && typeof ep.port === 'number');
+  if (pubEp?.port !== undefined) return pubEp.port;
+  const anyEp = entry.endpoints.find((ep) => typeof ep.port === 'number');
+  return anyEp?.port ?? null;
+}
+
+function installedTargetText(entry: InstalledApp): string {
+  const port = primaryPublishPort(entry);
+  if (port !== null) return `${zh.sites.targetLocal} 127.0.0.1:${port}`;
+  return entry.units.length > 0 ? `${entry.units.length} 个服务单元` : '—';
+}
+
+function matchInstalledSite(entry: InstalledApp, sites: readonly CaddySite[]): CaddySite | null {
+  const proxySites = sites.filter((site) => site.kind === 'proxy');
+  const candidatePorts = new Set(
+    entry.endpoints
+      .filter((ep) => ep.publish !== 'none' && typeof ep.port === 'number')
+      .map((ep) => ep.port as number),
+  );
+  if (candidatePorts.size > 0) {
+    const byPort = proxySites.find((site) =>
+      site.upstreams.some((upstream) => {
+        const parsed = splitUpstreamHostPort(upstream);
+        const host = parsed.host;
+        const isLoopback = !host || isLocalUpstreamHost(host) || host === 'localhost' || host === '::1';
+        return isLoopback && parsed.port !== null && candidatePorts.has(parsed.port);
+      }),
+    );
+    if (byPort) return byPort;
+  }
+  const byName = proxySites.find(
+    (site) =>
+      (site.name === entry.manifestId ||
+        entry.endpoints.some((ep) => site.name === `${entry.manifestId}-${ep.id}`)) &&
+      site.upstreams.some((upstream) => {
+        const host = splitUpstreamHostPort(upstream).host;
+        return !host || isLocalUpstreamHost(host) || host === 'localhost' || host === '::1';
+      }),
+  );
+  return byName ?? null;
+}
 
 type ApplyConfirm = { kind: 'page' };
 
@@ -344,7 +424,7 @@ export default function SitesPage() {
 
   const configState = caddyQuery.data;
   const config = configState?.config ?? emptyCaddyConfig();
-  const { channels, stateQuery, runtimePending } = useHubChannelsContext();
+  const { channels, stateQuery } = useHubChannelsContext();
   const liveState = stateQuery.data?.state as
     | { adapters?: { name: string; status?: Record<string, unknown> }[] }
     | undefined;
@@ -444,6 +524,22 @@ export default function SitesPage() {
 
   const forwardConfig = forwardQuery.data?.config ?? emptyForwardConfig();
   const forwardRuntime = normalizeForwardStatus(liveState?.adapters);
+  const manifestsQuery = useQuery(appManifestsQueryOptions());
+  const appViews = useMemo(() => (manifestsQuery.data ?? []).map(toAppView), [manifestsQuery.data]);
+  const viewMap = useMemo(() => new Map(appViews.map((v) => [v.id, v])), [appViews]);
+  const installedCatalog = useMemo(
+    () => installedCatalogState(stateQuery.data?.state ?? null),
+    [stateQuery.data?.state],
+  );
+  const privateManifestPorts = useMemo(
+    () =>
+      installedCatalog.entries.flatMap((entry) =>
+        entry.endpoints
+          .filter((ep) => ep.publish === 'none' && typeof ep.port === 'number')
+          .map((ep) => ({ port: ep.port as number })),
+      ),
+    [installedCatalog.entries],
+  );
   const claimedTcpPorts = (stateQuery.data?.state?.ports ?? [])
     .filter((entry) => entry.proto.toLowerCase().startsWith('tcp'))
     .map((entry) => ({ port: entry.port }));
@@ -454,6 +550,7 @@ export default function SitesPage() {
         ...forwardConfig.forwards,
         ...(forwardRuntime?.rules ?? []),
         ...claimedTcpPorts,
+        ...privateManifestPorts,
         ...(nodeAgentPort ? [{ port: nodeAgentPort }] : []),
       ]),
     [
@@ -462,6 +559,7 @@ export default function SitesPage() {
       forwardConfig.forwards,
       forwardRuntime?.rules,
       stateQuery.data?.state?.ports,
+      privateManifestPorts,
       nodeAgentPort,
     ],
   );
@@ -1249,6 +1347,76 @@ export default function SitesPage() {
     );
   };
 
+  const siteInstalledMap = useMemo(() => {
+    const bySiteName = new Map<string, InstalledApp>();
+    const byInstalledId = new Map<string, CaddySite>();
+    for (const entry of installedCatalog.entries) {
+      const matched = matchInstalledSite(entry, config.sites);
+      if (matched) {
+        bySiteName.set(matched.name, entry);
+        byInstalledId.set(installedIdentity(entry), matched);
+      }
+    }
+    return { bySiteName, byInstalledId };
+  }, [installedCatalog.entries, config.sites]);
+
+  const selectedInstalledEntry = useMemo(
+    () =>
+      selectedInstalledKey
+        ? (installedCatalog.entries.find((e) => installedIdentity(e) === selectedInstalledKey) ??
+          null)
+        : null,
+    [selectedInstalledKey, installedCatalog.entries],
+  );
+
+  const unifiedRows: UnifiedAppRow[] = useMemo(() => {
+    const siteItems: UnifiedAppRow[] = proxyRows.map((row) => {
+      const installed = siteInstalledMap.bySiteName.get(row.site.name);
+      return {
+        kind: 'site',
+        site: row.site,
+        health: row.health,
+        installed,
+        view: installed ? viewMap.get(installed.manifestId) : undefined,
+      };
+    });
+    const standaloneInstalled: UnifiedAppRow[] = installedCatalog.entries
+      .filter((entry) => !siteInstalledMap.byInstalledId.has(installedIdentity(entry)))
+      .map((entry) => ({
+        kind: 'installed',
+        installed: entry,
+        view: viewMap.get(entry.manifestId),
+      }));
+    return [...siteItems, ...standaloneInstalled];
+  }, [proxyRows, siteInstalledMap, installedCatalog.entries, viewMap]);
+
+  const openInstalled = (entry: InstalledApp) => {
+    closeDrawer();
+    setWizardOpen(false);
+    setServiceOpen(false);
+    setImportView(null);
+    setSelectedInstalledKey(installedIdentity(entry));
+  };
+
+  const publishInstalledEntry = (entry: InstalledApp) => {
+    const port = primaryPublishPort(entry);
+    openCreate(
+      port !== null
+        ? { upstreams: `127.0.0.1:${port}`, process: entry.manifestId, port }
+        : { process: entry.manifestId },
+    );
+  };
+
+  const siteSyncProps = (row: Pick<SiteRow, 'site' | 'health'>): SyncStatusProps => {
+    if (!unapplied) return { state: 'synced' };
+    const rowChanged =
+      pendingSiteNames.includes(row.site.name) ||
+      (status !== null && !row.health);
+    return rowChanged
+      ? { state: 'pending', rev: configState?.rev ?? undefined, label: zh.sites.syncPending }
+      : { state: 'synced' };
+  };
+
   const columns: ColumnDef<SiteRow>[] = [
     {
       key: 'name',
@@ -1324,14 +1492,111 @@ export default function SitesPage() {
       type: 'sync',
       header: zh.sites.colStatus,
       width: '12%',
-      sync: (row): SyncStatusProps => {
-        if (!unapplied) return { state: 'synced' };
-        const rowChanged =
-          pendingSiteNames.includes(row.site.name) ||
-          (status !== null && !row.health);
-        return rowChanged
-          ? { state: 'pending', rev: configState?.rev ?? undefined, label: zh.sites.syncPending }
-          : { state: 'synced' };
+      sync: (row): SyncStatusProps => siteSyncProps(row),
+    },
+    { key: 'actions', type: 'actions', header: '' },
+  ];
+
+  const unifiedColumns: ColumnDef<UnifiedAppRow>[] = [
+    {
+      key: 'name',
+      type: 'name',
+      header: zh.sites.colApp,
+      width: '22%',
+      value: (row) =>
+        row.kind === 'site'
+          ? row.site.name
+          : installedDisplayName(row.installed, row.view),
+      dot: (row) => {
+        if (row.kind === 'installed') {
+          return appStatus(row.installed, installedCatalog).tone;
+        }
+        if (row.health?.state === 'down') return 'danger';
+        if (row.installed) {
+          const instTone = appStatus(row.installed, installedCatalog).tone;
+          if (instTone === 'danger') return 'danger';
+          if (!row.health) return instTone;
+        }
+        return healthBadge({ site: row.site, health: row.health }).tone;
+      },
+      narrow: (row) =>
+        row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
+    },
+    {
+      key: 'url',
+      type: 'mono',
+      header: zh.sites.colAccessUrl,
+      width: '36%',
+      value: (row) =>
+        row.kind === 'site'
+          ? siteAccessUrl(row.site) || row.site.domains.join(', ')
+          : '仅本机',
+      render: (row) => {
+        if (row.kind === 'installed') {
+          return <span className="ui-text-caption">仅本机（未发布）</span>;
+        }
+        const url = siteAccessUrl(row.site);
+        const tlsLabel = tlsShortLabel(row.site.tls.mode);
+        const extraDomains =
+          row.site.domains.length > 1 ? ` · +${row.site.domains.length - 1}` : '';
+        return (
+          <div className="ui-site-url-cell">
+            <div className="ui-site-url-row">
+              {url ? (
+                <a
+                  className="ui-site-url-link"
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={url}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {url} ↗
+                </a>
+              ) : (
+                <span>—</span>
+              )}
+              {url ? (
+                <span onClick={(event) => event.stopPropagation()}>
+                  <Button
+                    label={zh.sites.copyUrl}
+                    icon="copy"
+                    iconOnly
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => copyAccessUrl(url)}
+                  />
+                </span>
+              ) : null}
+            </div>
+            <span className="ui-site-url-sub">
+              {tlsLabel}
+              {extraDomains}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'target',
+      type: 'mono',
+      header: zh.sites.colTargetSummary,
+      width: '26%',
+      value: (row) =>
+        row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
+      priority: 'low',
+    },
+    {
+      key: 'sync',
+      type: 'sync',
+      header: zh.sites.colStatus,
+      width: '12%',
+      render: (row) => {
+        if (row.kind === 'site') {
+          return <SyncStatus {...siteSyncProps(row)} />;
+        }
+        const st = appStatus(row.installed, installedCatalog);
+        return <Badge tone={st.tone} label={st.label} />;
       },
     },
     { key: 'actions', type: 'actions', header: '' },
@@ -1388,6 +1653,48 @@ export default function SitesPage() {
       return;
     }
     if (ref.id === 'site.delete') setConfirmDelete(row.site);
+  };
+
+  const unifiedRowActions = (row: UnifiedAppRow): ActionRef[] => {
+    if (row.kind === 'installed') {
+      return [
+        action('app.manage'),
+        ...(primaryPublishPort(row.installed) !== null ? [action('app.publishSite')] : []),
+      ];
+    }
+    return [
+      action('site.update'),
+      ...(row.installed ? [action('app.manage')] : []),
+      row.site.enabled ? action('site.disable') : action('site.enable'),
+      action('site.delete'),
+    ];
+  };
+
+  const unifiedRowActionDisabled = (ref: ActionRef): string | undefined => {
+    if (!unreachable) return undefined;
+    if (
+      ref.id === 'site.disable' ||
+      ref.id === 'site.enable' ||
+      ref.id === 'site.delete' ||
+      ref.id === 'app.publishSite'
+    ) {
+      return writeDisabledReason;
+    }
+    return undefined;
+  };
+
+  const handleUnifiedRowAction = (ref: ActionRef, row: UnifiedAppRow) => {
+    if (ref.id === 'app.manage' && row.installed) {
+      openInstalled(row.installed);
+      return;
+    }
+    if (ref.id === 'app.publishSite' && row.kind === 'installed') {
+      publishInstalledEntry(row.installed);
+      return;
+    }
+    if (row.kind === 'site') {
+      handleRowAction(ref, row);
+    }
   };
 
   const handlePageAction = (ref: ActionRef) => {
@@ -1783,10 +2090,36 @@ export default function SitesPage() {
               </Stack>
             </Card>
           ) : null}
+          {installedCatalog.stale ? (
+            <Banner
+              tone="warn"
+              title="应用状态可能不是最新"
+              description="节点采集超时，展示最近一次成功缓存。"
+              action={
+                <Button
+                  label="刷新"
+                  size="sm"
+                  onClick={() => void refreshHubRuntime(queryClient, hubId, { force: true })}
+                />
+              }
+            />
+          ) : null}
+          {installedCatalog.pending ? (
+            <Banner
+              tone="info"
+              title="应用状态读取中"
+              description="Agent 正在后台采集应用状态，请稍后刷新。"
+            />
+          ) : null}
+          {installedCatalog.error && !installedCatalog.pending ? (
+            <InlineError message={installedCatalog.error} />
+          ) : null}
           <Table
-            rows={caddyQuery.isLoading ? undefined : proxyRows}
-            columns={columns}
-            rowKey={(row) => row.site.name}
+            rows={caddyQuery.isLoading ? undefined : unifiedRows}
+            columns={unifiedColumns}
+            rowKey={(row) =>
+              row.kind === 'site' ? `site:${row.site.name}` : `app:${installedIdentity(row.installed)}`
+            }
             objectLabel={zh.nav.sites}
             search={{ value: searchText, onChange: setSearchText, placeholder: zh.sites.searchPlaceholder }}
             empty={{
@@ -1804,59 +2137,43 @@ export default function SitesPage() {
                 />
               ),
             }}
-            rowActions={rowActions}
-            rowActionDisabled={rowActionDisabled}
-            onRowAction={handleRowAction}
-            onRowOpen={(row) => openEdit(row.site)}
+            rowActions={unifiedRowActions}
+            rowActionDisabled={unifiedRowActionDisabled}
+            onRowAction={handleUnifiedRowAction}
+            onRowOpen={(row) =>
+              row.kind === 'site' ? openEdit(row.site) : openInstalled(row.installed)
+            }
           />
-
-          <InstalledAppsCard
-            hubId={hubId}
-            hubName={hubName}
-            state={stateQuery.data?.state ?? null}
-            stateLoading={runtimePending}
-            offlineReason={writeDisabledReason}
-            selectedKey={selectedInstalledKey}
-            onSelectEntry={(key) => {
-              closeDrawer();
-              setWizardOpen(false);
-              setServiceOpen(false);
-              setImportView(null);
-              setSelectedInstalledKey(key);
-            }}
-            onCloseDrawer={() => setSelectedInstalledKey(null)}
-          />
-
-          {listeningPorts.length > 0 ? (
-            <Card title={zh.services.listeningTitle}>
-              <Stack gap={2}>
-                <span className="ui-field-help">{zh.services.listeningHint}</span>
-                <Table
-                  rows={listeningPorts}
-                  columns={listeningColumns}
-                  rowKey={(row) => String(row.port)}
-                  objectLabel={zh.services.listeningTitle}
-                  empty={{
-                    icon: 'activity',
-                    title: zh.services.listeningEmpty,
-                    description: zh.services.listeningHint,
-                  }}
-                  onRowOpen={(row) =>
-                    openCreate({
-                      upstreams: listeningUpstream(row),
-                      process: row.process ?? undefined,
-                      port: row.port,
-                    })
-                  }
-                />
-              </Stack>
-            </Card>
-          ) : null}
 
           {hasActionableExternal ? externalConfigCard : null}
 
           <AdvancedSection title={zh.common.advancedSection}>
             <Stack gap={3}>
+              {listeningPorts.length > 0 ? (
+                <Card title={zh.services.listeningTitle}>
+                  <Stack gap={2}>
+                    <span className="ui-field-help">{zh.services.listeningHint}</span>
+                    <Table
+                      rows={listeningPorts}
+                      columns={listeningColumns}
+                      rowKey={(row) => String(row.port)}
+                      objectLabel={zh.services.listeningTitle}
+                      empty={{
+                        icon: 'activity',
+                        title: zh.services.listeningEmpty,
+                        description: zh.services.listeningHint,
+                      }}
+                      onRowOpen={(row) =>
+                        openCreate({
+                          upstreams: listeningUpstream(row),
+                          process: row.process ?? undefined,
+                          port: row.port,
+                        })
+                      }
+                    />
+                  </Stack>
+                </Card>
+              ) : null}
               {!hasActionableExternal ? externalConfigCard : null}
               <Row gap={2} wrap>
                 <Button
@@ -1937,9 +2254,37 @@ export default function SitesPage() {
               .filter((site) => site.tls.mode !== 'off')
               .flatMap((site) => site.domains),
           ]}
+          linkedInstalledApp={(() => {
+            if (form.mode !== 'edit') return undefined;
+            const linked = siteInstalledMap.bySiteName.get(form.originalName ?? form.name);
+            if (!linked) return undefined;
+            const st = appStatus(linked, installedCatalog);
+            return {
+              name: installedDisplayName(linked, viewMap.get(linked.manifestId)),
+              statusLabel: st.label,
+              statusTone: st.tone,
+              onManage: () => openInstalled(linked),
+            };
+          })()}
           onChange={(patch) => setForm((prev) => (prev ? { ...prev, ...patch } : prev))}
           onClose={closeDrawer}
           onSave={(apply) => void save(apply)}
+        />
+      ) : null}
+
+      {selectedInstalledEntry ? (
+        <InstalledAppDrawer
+          hubId={hubId}
+          hubName={hubName}
+          entry={selectedInstalledEntry}
+          view={viewMap.get(selectedInstalledEntry.manifestId)}
+          state={stateQuery.data?.state ?? null}
+          catalogState={installedCatalog}
+          offlineReason={writeDisabledReason}
+          linkedSite={siteInstalledMap.byInstalledId.get(installedIdentity(selectedInstalledEntry)) ?? null}
+          onEditSite={(site) => openEdit(site)}
+          onPublish={publishInstalledEntry}
+          onClose={() => setSelectedInstalledKey(null)}
         />
       ) : null}
 

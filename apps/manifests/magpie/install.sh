@@ -12,7 +12,7 @@
 #   KHC_RESULT_FILE  也可把结果写这里
 set -euo pipefail
 
-VER="0.1.4265"
+VER_PARAM="${KHC_PARAM_VERSION:-}"
 PORT="${KHC_PARAM_PORT:-3425}"
 WEB_PORT="${KHC_PARAM_WEB_PORT:-3430}"
 PUBLIC_URL="${KHC_PARAM_PUBLIC_URL:-}"
@@ -33,7 +33,7 @@ CONF_DIR="$USER_HOME/.config"
 UNIT_DIR="$CONF_DIR/systemd/user"
 STATE_DIR="$USER_HOME/.local"
 KEY_FILE="$CONF_DIR/khc-magpie-${INSTANCE}.web.key"
-BIN="$BIN_DIR/magpie-$VER"
+BIN="$BIN_DIR/magpie"
 UNIT="$UNIT_DIR/$UNIT_NAME"
 
 mkdir -p "$BIN_DIR" "$CONF_DIR" "$UNIT_DIR" "$STATE_DIR/data" "$STATE_DIR/state" "$STATE_DIR/cache"
@@ -42,17 +42,26 @@ if [ ! -s "$KEY_FILE" ] && [ -s "$APP_HOME/config/web.key" ]; then
   cp "$APP_HOME/config/web.key" "$KEY_FILE"
 fi
 
-# ---- 1. 下载并校验二进制（固定版本 + 固定 sha256，不用官方 install.sh，避免自更新）----
+# ---- 1. 下载二进制（默认拉取 latest，也可填 version 锁定；不用官方 install.sh 避免自更新）----
 case "$(uname -m)" in
-  x86_64|amd64)
-    ARCH=amd64
-    SHA="21120a89b1683b1c4445856caed7cf2b0c5805cdf0fb7c96b03ee620114cd87e" ;;
-  aarch64|arm64)
-    ARCH=arm64
-    SHA="c855bc06c4bcd97a9a8230f39f9da165f98964d6725a7d08abfc87ea4f677fbb" ;;
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
   *) echo "不支持的 CPU 架构: $(uname -m)" >&2; exit 1 ;;
 esac
-URL="https://github.com/yetone/magpie-releases/releases/download/v${VER}/magpie-cli-linux-${ARCH}"
+
+VER_TRIMMED="${VER_PARAM//[[:space:]]/}"
+if [ -z "$VER_TRIMMED" ] || [ "$VER_TRIMMED" = "latest" ]; then
+  VER_LABEL="latest"
+  URL="https://github.com/yetone/magpie-releases/releases/latest/download/magpie-cli-linux-${ARCH}"
+else
+  VER_CLEAN="${VER_TRIMMED#[vV]}"
+  if [[ ! "$VER_CLEAN" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]]; then
+    echo "version 格式非法：${VER_PARAM}" >&2
+    exit 1
+  fi
+  VER_LABEL="$VER_CLEAN"
+  URL="https://github.com/yetone/magpie-releases/releases/download/v${VER_CLEAN}/magpie-cli-linux-${ARCH}"
+fi
 DOWNLOAD_URL="$URL"
 if [ -n "$DOWNLOAD_MIRROR" ]; then
   if [[ ! "$DOWNLOAD_MIRROR" =~ ^https?://[^[:space:]]+$ ]]; then
@@ -72,7 +81,8 @@ if [ -n "$HTTP_PROXY_URL" ]; then
   fi
 fi
 
-if [ ! -x "$BIN" ]; then
+# 首次安装缺二进制、指定了 version、或点「更新 / 重装」（KHC_ACTION=upgrade）时重新下载
+if [ ! -x "$BIN" ] || [ -n "$VER_TRIMMED" ] || [ "${KHC_ACTION:-install}" = "upgrade" ]; then
   TMP="$(mktemp "${TMPDIR:-/tmp}/khc-magpie.XXXXXX")"
   ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/khc-magpie-err.XXXXXX")"
   WATCHER_PID=""
@@ -106,7 +116,7 @@ if [ ! -x "$BIN" ]; then
     echo "排查（国内 VM 常因直连 GitHub 阻断/限速失败）：" >&2
     echo "  1) 安装参数填写 download_mirror（如 https://gh-proxy.org/ ）或 http_proxy（如 http://127.0.0.1:7890）；" >&2
     echo "  2) 或在机器测试：curl -I --connect-timeout 10 $DOWNLOAD_URL" >&2
-    echo "  3) 或手工下载二进制到 $BIN（chmod 0755，sha256=${SHA}）后重试。" >&2
+    echo "  3) 或手工下载二进制到 $BIN（chmod 0755）后重试。" >&2
     exit 1
   }
 
@@ -195,13 +205,9 @@ if [ ! -x "$BIN" ]; then
   fi
 
   [ -s "$TMP" ] || dl_fail "下载到的是空文件"
-  echo "KHC_PROGRESS=85 下载完成，校验 sha256..."
-  ACTUAL="$(sha256sum "$TMP" | awk '{print $1}')"
-  if [ "$ACTUAL" != "$SHA" ]; then
-    echo "sha256 校验失败（expected=$SHA actual=$ACTUAL），不安装" >&2
-    exit 1
-  fi
+  echo "KHC_PROGRESS=85 下载完成，安装二进制..."
   install -m 0755 "$TMP" "$BIN"
+  rm -f "$BIN_DIR"/magpie-* 2>/dev/null || true
   cleanup_dl
   trap - EXIT
   echo "二进制已就位：$BIN"
@@ -280,7 +286,10 @@ else
   LOGIN_URL="$LOGIN_LOCAL"
 fi
 
-python3 - "$LOGIN_URL" "$PORT" "$WEB_KEY" "$VER" <<'PY'
+INSTALLED_VER="$("$BIN" --version 2>/dev/null | head -n1 | tr -dc '0-9A-Za-z._- ' || true)"
+INSTALLED_VER="${INSTALLED_VER:-$VER_LABEL}"
+
+python3 - "$LOGIN_URL" "$PORT" "$WEB_KEY" "$INSTALLED_VER" <<'PY'
 import json, sys
 login, port, key, version = sys.argv[1:5]
 # 只输出 cards（kind 供面板决定展示与脱敏，primary 标出完成页主按钮）

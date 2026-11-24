@@ -26,8 +26,8 @@ systemctl --user reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
 # ---- 2. unit 与二进制 ----
 rm -f "$UNIT_DIR/$UNIT_NAME"
 rm -f "$UNIT_DIR/default.target.wants/$UNIT_NAME"
-# 只删 magpie 自己的二进制，不动同目录下别的应用
-rm -rf "$BIN_DIR"/magpie-* 2>/dev/null || true
+# 只删 magpie 自己的二进制（含旧版本命名），不动同目录下别的应用
+rm -f "$BIN_DIR/magpie" "$BIN_DIR"/magpie-* 2>/dev/null || true
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 
 # ---- 3. 配置、登录 key、数据与缓存（magpie 会在这里放索引与模型）----
@@ -40,6 +40,7 @@ fi
 # ---- 4. 复查：不假装清干净 ----
 LEFTOVERS=()
 for path in \
+  "$BIN_DIR/magpie" \
   "$UNIT_DIR/$UNIT_NAME" \
   "$UNIT_DIR/default.target.wants/$UNIT_NAME" \
   "$KEY_FILE" \

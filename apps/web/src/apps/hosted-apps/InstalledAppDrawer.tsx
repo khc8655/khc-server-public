@@ -19,9 +19,9 @@ import {
 } from '../../data/apps';
 import {
   appStatus,
-  canUpgrade,
   effectiveSchema,
   installedTime,
+  nodeAppCapabilities,
   normalizeResultCards,
   uninstallActionForSchema,
   unitStatusView,
@@ -29,7 +29,10 @@ import {
   type AppCatalogStatusState,
   type AppView,
   type InstalledApp,
+  type ResultCardView,
 } from '../../data/manifestApps';
+import type { CaddySite } from '../../data/sites';
+import { siteAccessUrl } from '../caddy/siteForm';
 import { refreshHubRuntime } from '../../data/queries';
 import { zh } from '../../i18n/zh';
 import { ApiError } from '../../data/client';
@@ -69,6 +72,9 @@ export interface InstalledAppDrawerProps {
   catalogState?: Pick<AppCatalogStatusState, 'stale' | 'pending'>;
   offlineReason?: string;
   pollIntervalMs?: number;
+  linkedSite?: CaddySite | null;
+  onEditSite?: (site: CaddySite) => void;
+  onPublish?: (entry: InstalledApp) => void;
   onClose: () => void;
 }
 
@@ -81,6 +87,9 @@ export function InstalledAppDrawer({
   catalogState,
   offlineReason,
   pollIntervalMs = 800,
+  linkedSite,
+  onEditSite,
+  onPublish,
   onClose,
 }: InstalledAppDrawerProps) {
   const toast = useToast();
@@ -102,6 +111,9 @@ export function InstalledAppDrawer({
 
   const [logsOpen, setLogsOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState(() => entry.units[0]?.name ?? '');
+  const [accessCards, setAccessCards] = useState<ResultCardView[] | null>(null);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessError, setAccessError] = useState<unknown>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -110,6 +122,11 @@ export function InstalledAppDrawer({
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    setAccessCards(null);
+    setAccessError(null);
+  }, [entry.manifestId, entry.instance]);
 
   useEffect(() => {
     setSelectedUnit((prev) =>
@@ -151,7 +168,12 @@ export function InstalledAppDrawer({
   const isManifest = entry.source === 'manifest';
   const schema = effectiveSchema(view, entry);
   const isV2 = isManifest && schema === 2;
-  const upgradeable = canUpgrade(view, entry, state);
+  const upgradeable = Boolean(
+    view &&
+      !view.invalid &&
+      isV2 &&
+      (!state || nodeAppCapabilities(state)?.features.includes('upgrade')),
+  );
   const hasPreUpgradeHook = Boolean(view && !view.invalid && view.def.hooks?.preUpgrade);
   const actionDisabled = Boolean(offlineReason) || busy || unitBusy !== null;
   const agentVersion = state?.agent?.version;
@@ -295,7 +317,14 @@ export function InstalledAppDrawer({
       if (finalTask.task.state !== 'done') {
         throw finalTask.task.error ?? new Error('升级任务失败');
       }
-      toast.show({ message: `${displayName} 升级完成` });
+      toast.show({ message: `${displayName} 更新完成` });
+      const freshCards = normalizeResultCards(
+        schema,
+        (finalTask.task.result as { cards?: unknown } | null | undefined)?.cards,
+      );
+      if (freshCards.length > 0) {
+        setAccessCards(freshCards);
+      }
       resetUpgradeForm();
       await refreshHubRuntime(queryClient, hubId, { force: true });
     } catch (cause) {
@@ -369,10 +398,33 @@ export function InstalledAppDrawer({
     }
   };
 
+  const loadAccessCards = async () => {
+    setAccessLoading(true);
+    setAccessError(null);
+    try {
+      const env = await runAppAction(hubId, 'app-catalog', 'manifest_access', {
+        manifestId: entry.manifestId,
+      });
+      if (!mountedRef.current) return;
+      if (!env.ok) {
+        throw env.error ?? new Error('读取访问凭据失败');
+      }
+      const cards = normalizeResultCards(
+        schema,
+        (env.result as { cards?: unknown } | null | undefined)?.cards,
+      );
+      setAccessCards(cards);
+    } catch (cause) {
+      if (mountedRef.current) setAccessError(cause);
+    } finally {
+      if (mountedRef.current) setAccessLoading(false);
+    }
+  };
+
   const summaryItems: KeyValueItem[] = [
     {
       key: '版本',
-      value: upgradeable && view ? `${entry.version} → ${view.def.version}` : entry.version,
+      value: entry.version,
       mono: true,
     },
     { key: '安装时间', value: installedTime(entry.installedAt) },
@@ -488,6 +540,73 @@ export function InstalledAppDrawer({
         <Card title="概要">
           <KeyValue items={summaryItems} />
         </Card>
+
+        {linkedSite || onPublish ? (
+          <Card title="对外发布">
+            {linkedSite ? (
+              <div className="ui-row-between">
+                <Link
+                  to={siteAccessUrl(linkedSite) || '#'}
+                  label={siteAccessUrl(linkedSite) || linkedSite.domains.join(', ')}
+                  external={Boolean(siteAccessUrl(linkedSite))}
+                />
+                {onEditSite ? (
+                  <Button label="编辑发布设置" size="sm" onClick={() => onEditSite(linkedSite)} />
+                ) : null}
+              </div>
+            ) : (
+              <div className="ui-row-between">
+                <span className="ui-text-caption">仅在本机运行，尚未配置域名或端口对外发布。</span>
+                {onPublish ? (
+                  <Button
+                    label="对外发布"
+                    size="sm"
+                    variant="primary"
+                    disabled={Boolean(offlineReason)}
+                    disabledReason={offlineReason}
+                    onClick={() => onPublish(entry)}
+                  />
+                ) : null}
+              </div>
+            )}
+          </Card>
+        ) : null}
+
+        {isManifest ? (
+          <Card
+            title="访问凭据"
+            action={
+              <Button
+                label={accessCards ? '刷新凭据' : '查看访问凭据'}
+                size="sm"
+                loading={accessLoading}
+                disabled={actionDisabled}
+                disabledReason={offlineReason}
+                onClick={() => void loadAccessCards()}
+              />
+            }
+          >
+            <Stack gap={3}>
+              {accessError ? (
+                <ManifestErrorAlert
+                  error={accessError}
+                  hubId={hubId}
+                  manifestId={entry.manifestId}
+                />
+              ) : accessCards === null ? (
+                <p className="ui-text-caption">
+                  按需从节点读取安装时保存的登录密钥与访问地址（不在常驻状态中广播）。
+                </p>
+              ) : accessCards.length === 0 ? (
+                <p className="ui-text-caption">
+                  暂无已保存的访问凭据；点击下方「更新 / 重装」后将自动保存。
+                </p>
+              ) : (
+                <ResultCardsView bare cards={accessCards} title="访问凭据" />
+              )}
+            </Stack>
+          </Card>
+        ) : null}
 
         {factItems.length > 0 ? (
           <Card title="安装信息">
@@ -667,7 +786,7 @@ export function InstalledAppDrawer({
               <Row gap={2} wrap>
                 {upgradeable && view ? (
                   <Button
-                    label={`升级到 ${view.def.version}`}
+                    label="更新 / 重装"
                     variant="primary"
                     size="sm"
                     disabled={actionDisabled}
@@ -689,15 +808,15 @@ export function InstalledAppDrawer({
                 <Stack gap={3}>
                   <Banner
                     tone="info"
-                    title={`确认升级到 ${view.def.version}？`}
+                    title={`确认更新 / 重装 ${displayName}？`}
                     description={
-                      `当前版本 ${entry.version} → 目标版本 ${view.def.version}` +
+                      '将拉取最新版并重启服务（可选在下方修改参数）' +
                       (hasPreUpgradeHook ? '；将执行控制面步骤 preUpgrade' : '')
                     }
                   />
                   <Row gap={2}>
                     <Button
-                      label={upgradeNeedsFill ? zh.catalog.upgradeRetryAfterFill : '确认升级'}
+                      label={upgradeNeedsFill ? zh.catalog.upgradeRetryAfterFill : '确认更新'}
                       variant="primary"
                       size="sm"
                       onClick={() => void runUpgrade()}

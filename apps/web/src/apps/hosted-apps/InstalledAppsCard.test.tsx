@@ -315,7 +315,8 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
 
     renderWithRouter(<Harness />);
 
-    expect(await screen.findByText('→ 2.0.0')).toBeTruthy();
+    expect((await screen.findAllByText('demo-v2')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('→ 2.0.0')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: '详情' }));
     const drawer = await screen.findByRole('dialog');
 
@@ -347,10 +348,10 @@ describe('InstalledAppsCard 已安装的托管应用（V4）', () => {
     expect(await within(drawer).findByText(/service started/)).toBeTruthy();
     expect(logsRequested).toBe(1);
 
-    // 升级（带 preUpgrade 提示）
-    await userEvent.click(within(drawer).getByRole('button', { name: '升级到 2.0.0' }));
+    // 更新 / 重装（带 preUpgrade 提示）
+    await userEvent.click(within(drawer).getByRole('button', { name: '更新 / 重装' }));
     expect(await within(drawer).findByText(/将执行控制面步骤 preUpgrade/)).toBeTruthy();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() =>
       expect(calls.some((c) => c.url.endsWith('/manifest_upgrade'))).toBe(true),
     );

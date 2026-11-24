@@ -793,6 +793,8 @@ def read_installed_manifests(ctx: Ctx) -> dict[str, dict[str, Any]]:
             entry["health"] = dict(data["health"])
         if isinstance(data.get("facts"), Mapping):
             entry["facts"] = dict(data["facts"])
+        # 注意：values 与 cards（含登录密钥等 secret 卡片）只保留在 0600 落盘记录中，
+        # 绝不放进 read_installed_manifests / /state；cards 仅通过 manifest_access 按需读取。
         if isinstance(data.get("lastHealth"), Mapping):
             entry["lastHealth"] = dict(data["lastHealth"])
         out[key] = entry
@@ -1735,6 +1737,16 @@ def run_manifest(
     cards = _normalize_cards(payload, hooks_skipped=bool(hooks_skipped))
     access = list(payload["access"]) if isinstance(payload.get("access"), list) else []
 
+    saved_cards = (
+        cards
+        if cards
+        else (
+            list(recorded_map["cards"])
+            if action == "upgrade" and recorded_map and isinstance(recorded_map.get("cards"), list)
+            else []
+        )
+    )
+
     if action == "uninstall":
         try:
             os.unlink(record_path)
@@ -1769,6 +1781,8 @@ def run_manifest(
             record["health"] = rendered_health
         if facts:
             record["facts"] = facts
+        if saved_cards:
+            record["cards"] = saved_cards
         ensure_dir(os.path.dirname(record_path), mode=0o700)
         # 脚本成功即先落安装记录，后续健康检查若失败仍保留记录以便卸载或排障。
         save_json(record_path, record, mode=0o600)
@@ -2375,6 +2389,32 @@ def read_manifest_logs(
         "logs": text,
         "truncated": truncated,
         "mayContainSecrets": True,
+    }
+
+
+def read_manifest_access(
+    ctx: Ctx,
+    *,
+    manifest_id: str,
+    instance: Optional[str] = None,
+) -> dict[str, Any]:
+    """按需从 0600 安装记录读取已保存的访问凭据卡片（不随 /state 广播）。"""
+
+    manifest_id, name = _validate_manifest_ids(manifest_id, instance)
+    data = load_json(_record_path(ctx, manifest_id, name), default=None)
+    if not isinstance(data, Mapping):
+        raise ManifestError(
+            f"未找到已安装的应用记录：{manifest_id}",
+            status=409,
+            code="not_installed",
+        )
+    raw_cards = data.get("cards")
+    cards = [dict(c) for c in raw_cards if isinstance(c, Mapping)] if isinstance(raw_cards, list) else []
+    return {
+        "ok": True,
+        "manifestId": manifest_id,
+        "instance": name,
+        "cards": cards,
     }
 
 

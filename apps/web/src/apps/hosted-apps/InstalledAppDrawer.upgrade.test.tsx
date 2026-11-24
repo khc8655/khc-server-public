@@ -219,10 +219,10 @@ function stubUpgradeNode(opts: {
 }
 
 async function openDrawerAndUpgrade() {
-  expect(await screen.findByText('→ 2.0.0')).toBeTruthy();
+  expect((await screen.findAllByText('demo-up')).length).toBeGreaterThanOrEqual(1);
   await userEvent.click(screen.getByRole('button', { name: '详情' }));
   const drawer = await screen.findByRole('dialog');
-  await userEvent.click(within(drawer).getByRole('button', { name: '升级到 2.0.0' }));
+  await userEvent.click(within(drawer).getByRole('button', { name: '更新 / 重装' }));
   return drawer;
 }
 
@@ -243,7 +243,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
 
     expect(within(drawer).getByText(/节点 Agent < 0\.8\.1 时不会记住安装参数/)).toBeTruthy();
     expect(within(drawer).queryByLabelText('端口')).toBeNull();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(1));
     const params = upgradeCallsOf(calls)[0]!.body!.params!;
     expect(params).toEqual({ manifestId: 'demo-up', values: {} });
@@ -277,7 +277,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     await userEvent.type(within(drawer).getByLabelText('端口'), '9000');
     await userEvent.type(secret, 'UP-SECRET-777');
 
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(1));
     expect(upgradeCallsOf(calls)[0]!.body!.params).toEqual({
       manifestId: 'demo-up',
@@ -297,14 +297,14 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     await userEvent.click(within(drawer).getByRole('button', { name: '修改参数（可选）' }));
 
     await userEvent.type(within(drawer).getByLabelText('端口'), '80');
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     expect(await within(drawer).findByText(/端口.*1024/)).toBeTruthy();
     expect(upgradeCallsOf(calls)).toHaveLength(0);
     expect(within(drawer).queryByText('请填写访问密钥')).toBeNull();
 
     await userEvent.clear(within(drawer).getByLabelText('端口'));
     await userEvent.selectOptions(within(drawer).getByLabelText('详细日志'), '是');
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(1));
     expect(upgradeCallsOf(calls)[0]!.body!.params!.values).toEqual({ verbose: true });
   });
@@ -317,7 +317,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     });
     renderWithRouter(<Harness />);
     const drawer = await openDrawerAndUpgrade();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
 
     expect(await within(drawer).findByRole('button', { name: '补填后重试升级' })).toBeTruthy();
     const linkInput = within(drawer).getByLabelText('访问地址') as HTMLInputElement;
@@ -341,7 +341,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     });
     renderWithRouter(<Harness />);
     const drawer = await openDrawerAndUpgrade();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(1));
     expect(await within(drawer).findByText(/缺少参数 removed_param/)).toBeTruthy();
     expect(within(drawer).queryByRole('button', { name: '补填后重试升级' })).toBeNull();
@@ -356,7 +356,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     });
     renderWithRouter(<Harness />);
     const drawer = await openDrawerAndUpgrade();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
     await waitFor(() => expect(upgradeCallsOf(calls)).toHaveLength(1));
     expect(await within(drawer).findByText(/缺少参数 link/)).toBeTruthy();
     expect(within(drawer).queryByRole('button', { name: '补填后重试升级' })).toBeNull();
@@ -448,7 +448,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     });
     renderWithRouter(<Harness />);
     const drawer = await openDrawerAndUpgrade();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
 
     expect(await within(drawer).findByRole('button', { name: '补填后重试升级' })).toBeTruthy();
     const linkInput = within(drawer).getByLabelText('访问地址') as HTMLInputElement;
@@ -472,7 +472,7 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
       },
     });
     renderWithRouter(<Harness />);
-    expect(await screen.findByText('→ 2.0.0')).toBeTruthy();
+    expect((await screen.findAllByText('demo-up')).length).toBeGreaterThanOrEqual(1);
     await userEvent.click(screen.getByRole('button', { name: '详情' }));
     const drawer = await screen.findByRole('dialog');
     await userEvent.click(within(drawer).getByRole('button', { name: '卸载' }));
@@ -500,10 +500,10 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     expect(hintBanner.querySelector('.ui-banner-title')?.textContent).toBe('节点 Agent 不记得安装参数');
     expect(hintBanner.querySelector('.ui-banner-action')).toBeNull();
 
-    const confirmTitle = within(drawer).getByText('确认升级到 2.0.0？');
+    const confirmTitle = within(drawer).getByText('确认更新 / 重装 demo-up？');
     expect(confirmTitle.className).toContain('ui-banner-title');
     expect(confirmTitle.closest('.ui-banner')!.querySelector('.ui-banner-action')).toBeNull();
-    expect(within(drawer).getByText(/当前版本 1\.0\.0 → 目标版本 2\.0\.0/).className).toContain('ui-banner-desc');
+    expect(within(drawer).getByText(/将拉取最新版并重启服务/).className).toContain('ui-banner-desc');
   });
 
   it('升级轮询遇到短暂 502 hub_unreachable 时自动重试并在恢复后完成升级', async () => {
@@ -548,11 +548,66 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
 
     renderWithRouter(<Harness />);
     const drawer = await openDrawerAndUpgrade();
-    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认更新' }));
 
     expect(await within(drawer).findByText('upgraded ok')).toBeTruthy();
     await waitFor(() => expect(overviewCalls).toBeGreaterThanOrEqual(2));
     expect(taskPolls).toBe(3);
     expect(within(drawer).queryByText(/Hub 不可达/)).toBeNull();
+  });
+
+  it('按需查看访问凭据：打开抽屉不自动请求，点击后请求 manifest_access 并默认遮罩 secret', async () => {
+    let accessCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [upgradeManifest] });
+        if (url.includes('/overview')) {
+          return json(makeOverviewResponse({ installedDetail: upInstalled }, '0.9.3'));
+        }
+        if (url.endsWith('/manifest_access')) {
+          accessCalls += 1;
+          return json({
+            ok: true,
+            result: {
+              cards: [
+                {
+                  title: 'Web 管理页（点击登录）',
+                  value: 'https://vm.example.com:2083/?k=tok-secret-1',
+                  kind: 'url',
+                  primary: true,
+                  copy: true,
+                },
+                {
+                  title: 'Web 登录 Key',
+                  value: 'tok-secret-1',
+                  kind: 'secret',
+                  copy: true,
+                },
+              ],
+            },
+          });
+        }
+        return json({});
+      }),
+    );
+
+    renderWithRouter(<Harness />);
+    expect((await screen.findAllByText('demo-up')).length).toBeGreaterThanOrEqual(1);
+    await userEvent.click(screen.getByRole('button', { name: '详情' }));
+    const drawer = await screen.findByRole('dialog');
+
+    expect(accessCalls).toBe(0);
+    expect(within(drawer).queryByText('tok-secret-1')).toBeNull();
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '查看访问凭据' }));
+    expect(await within(drawer).findByText('Web 登录 Key')).toBeTruthy();
+    expect(accessCalls).toBe(1);
+    expect(within(drawer).queryByText('tok-secret-1')).toBeNull();
+    expect(within(drawer).getByText('••••••••••••')).toBeTruthy();
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '显示' }));
+    expect(within(drawer).getByText('tok-secret-1')).toBeTruthy();
   });
 });
