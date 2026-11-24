@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
+import { ConfirmAction } from '../../patterns';
 import { action, actionLabel } from '../../registry/actions';
 import {
   callHostOps,
   callHostOpsTask,
+  installHostOpsNftables,
   isHostOpsAbortError,
   normalizeFirewallShow,
   normalizeFirewallToken,
   normalizeVersion,
   type HostOpsError,
+  type HostOpsFirewallAppPort,
+  type HostOpsFirewallMode,
   type HostOpsFirewallRule,
   type HostOpsVersion,
 } from '../../data/hostOps';
@@ -16,8 +20,10 @@ import {
   Banner,
   Button,
   Card,
+  Checkbox,
   InlineError,
   Row,
+  Segmented,
   Skeleton,
   Stack,
   Table,
@@ -41,8 +47,16 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
   const [serverRules, setServerRules] = useState<HostOpsFirewallRule[]>([]);
   const [draft, setDraft] = useState<HostOpsFirewallRule[]>([]);
   const [baseRev, setBaseRev] = useState<string | null>(null);
+  const [mode, setMode] = useState<HostOpsFirewallMode>('open');
+  const [serverMode, setServerMode] = useState<HostOpsFirewallMode>('open');
+  const [closePublicSsh, setClosePublicSshState] = useState(false);
+  const [serverClosePublicSsh, setServerClosePublicSsh] = useState(false);
+  const [appPorts, setAppPorts] = useState<HostOpsFirewallAppPort[]>([]);
+  const [wgInterfaces, setWgInterfaces] = useState<string[]>([]);
+  const [wgSubnets, setWgSubnets] = useState<string[]>([]);
   const [version, setVersion] = useState<HostOpsVersion | null>(null);
   const [loading, setLoading] = useState(false);
+  const [installingNft, setInstallingNft] = useState(false);
   const [error, setError] = useState<HostOpsError | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [countdown, setCountdown] = useState(CONFIRM_SECONDS);
@@ -79,6 +93,13 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
       setServerRules(cloneRules(data.rules));
       setDraft(cloneRules(data.rules));
       setBaseRev(data.baseRev);
+      setMode(data.mode);
+      setServerMode(data.mode);
+      setClosePublicSshState(data.closePublicSsh);
+      setServerClosePublicSsh(data.closePublicSsh);
+      setAppPorts(data.appPorts);
+      setWgInterfaces(data.wgInterfaces);
+      setWgSubnets(data.wgSubnets);
       if (data.pending?.token) {
         setToken(data.pending.token);
         setCountdown(Math.max(1, data.pending.secondsLeft ?? CONFIRM_SECONDS));
@@ -108,10 +129,13 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
   }, [phase, countdown]);
 
   const readOnly = version?.root === false;
-  const unsupported = error?.code === 'E_UNSUPPORTED';
+  const unsupported = error?.code === 'E_UNSUPPORTED' || version?.nft === false;
   const canEdit = !readOnly && !unsupported && phase !== 'waiting';
   const dirtyDraft = JSON.stringify(draft) !== JSON.stringify(rules);
-  const pendingApply = JSON.stringify(rules) !== JSON.stringify(serverRules);
+  const pendingApply =
+    JSON.stringify(rules) !== JSON.stringify(serverRules) ||
+    mode !== serverMode ||
+    closePublicSsh !== serverClosePublicSsh;
   const changedCount = (() => {
     const current = new Map(rules.map((rule) => [rule.id, JSON.stringify(rule)]));
     let count = 0;
@@ -123,6 +147,18 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
     }
     return count;
   })();
+
+  const changeMode = (nextMode: HostOpsFirewallMode) => {
+    setMode(nextMode);
+    if (nextMode !== 'allowlist') setClosePublicSshState(false);
+    setError(null);
+  };
+
+  const setClosePublicSsh = (checked: boolean) => {
+    if (checked && mode !== 'allowlist') setMode('allowlist');
+    setClosePublicSshState(checked);
+    setError(null);
+  };
 
   const updateRule = (id: string, patch: Partial<HostOpsFirewallRule>) => {
     setValidationError(null);
@@ -172,7 +208,46 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
   const discardServer = () => {
     setRules(cloneRules(serverRules));
     setDraft(cloneRules(serverRules));
+    setMode(serverMode);
+    setClosePublicSshState(serverClosePublicSsh);
     setError(null);
+  };
+
+  const installNftables = async () => {
+    if (disabled) return false;
+    setInstallingNft(true);
+    setError(null);
+    const controller = new AbortController();
+    applyAbort.current = controller;
+    try {
+      const result = await installHostOpsNftables(hubId, { signal: controller.signal });
+      if (controller.signal.aborted) return false;
+      if (!result.ok) {
+        setError(
+          result.error ?? {
+            code: 'pkg_install_failed',
+            message: zh.hostOps.errors.pkg_install_failed,
+            details: null,
+          },
+        );
+        return false;
+      }
+      toast.show({ message: zh.hostOps.firewallRules.installedNft });
+      await load();
+      return true;
+    } catch (err) {
+      if (!isHostOpsAbortError(err)) {
+        setError({
+          code: 'pkg_install_failed',
+          message: err instanceof Error ? err.message : zh.hostOps.errors.pkg_install_failed,
+          details: null,
+        });
+      }
+      return false;
+    } finally {
+      if (applyAbort.current === controller) applyAbort.current = null;
+      setInstallingNft(false);
+    }
   };
 
   const apply = async () => {
@@ -200,6 +275,8 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
             source: rule.source.trim(),
             note: rule.note.trim(),
           })),
+          mode,
+          closePublicSsh: mode === 'allowlist' ? closePublicSsh : false,
           baseRev,
         },
         { signal: controller.signal },
@@ -255,26 +332,38 @@ export function useFirewallState(hubId: string, disabled: boolean, active: boole
   };
 
   return {
-    rules, draft, version, loading, error, phase, countdown,
+    rules, draft, version, loading, installingNft, error, phase, countdown,
+    mode, serverMode, closePublicSsh, serverClosePublicSsh, appPorts, wgInterfaces, wgSubnets,
     applying, confirming, validationError,
     readOnly, unsupported, canEdit, dirtyDraft, pendingApply, changedCount,
-    load, updateRule, addRule, removeRule, saveDraft, discardDraft, discardServer,
+    load, changeMode, setClosePublicSsh, installNftables,
+    updateRule, addRule, removeRule, saveDraft, discardDraft, discardServer,
     apply, confirm,
   };
 }
 
 export type FirewallState = ReturnType<typeof useFirewallState>;
 
-/** 防火墙分段：只读表格 + 待生效横幅 + 倒计时确认；编辑进入页面级唯一抽屉。 */
+/** 防火墙分段：只读表格 + 模式与待生效横幅 + 倒计时确认；编辑进入页面级唯一抽屉。 */
 export function FirewallSegment({
   fw,
+  hubName,
   disabled,
   onOpenEdit,
 }: {
   fw: FirewallState;
+  hubName: string;
   disabled: boolean;
   onOpenEdit: () => void;
 }) {
+  const [installConfirmOpen, setInstallConfirmOpen] = useState(false);
+  const [closeSshConfirmOpen, setCloseSshConfirmOpen] = useState(false);
+  const [vncConfirmed, setVncConfirmed] = useState(false);
+
+  const reason = fw.version?.nftUnavailableReason;
+  const canInstallNft = fw.version?.nftInstallable === true || reason === 'missing_pkg';
+  const wgTargetLabel = [...fw.wgInterfaces, ...fw.wgSubnets].join(' / ');
+
   const columns: ColumnDef<HostOpsFirewallRule>[] = [
     {
       key: 'action',
@@ -348,10 +437,108 @@ export function FirewallSegment({
       {fw.readOnly ? <Banner tone="warn" title={zh.hostOps.noPriv} /> : null}
       <Banner tone="info" title={zh.hostOps.firewallRules.allowHint} />
       {fw.unsupported ? (
-        <Banner tone="warn" title={zh.hostOps.firewallRules.unsupported} />
+        <Banner
+          tone="warn"
+          title={
+            canInstallNft
+              ? zh.hostOps.firewallRules.unsupportedMissingPkgTitle
+              : reason === 'no_kernel'
+                ? zh.hostOps.firewallRules.unsupportedNoKernelTitle
+                : zh.hostOps.firewallRules.unsupported
+          }
+          description={
+            canInstallNft
+              ? zh.hostOps.firewallRules.unsupportedMissingPkgDesc
+              : reason === 'no_kernel'
+                ? zh.hostOps.firewallRules.unsupportedNoKernelDesc
+                : undefined
+          }
+          action={
+            <Row gap={2} wrap>
+              {canInstallNft ? (
+                <Button
+                  label={
+                    fw.installingNft
+                      ? zh.hostOps.firewallRules.installingNft
+                      : actionLabel(action('hostOps.fwInstallNft'))
+                  }
+                  variant="primary"
+                  size="sm"
+                  loading={fw.installingNft}
+                  disabled={disabled || fw.installingNft}
+                  onClick={() => setInstallConfirmOpen(true)}
+                />
+              ) : null}
+              <Button
+                label={zh.common.retry}
+                size="sm"
+                loading={fw.loading}
+                disabled={disabled || fw.installingNft}
+                onClick={() => void fw.load()}
+              />
+            </Row>
+          }
+        />
       ) : null}
       {fw.validationError ? <InlineError message={fw.validationError} /> : null}
-      {fw.error ? <HostOpsErrorBanner error={fw.error} onRetry={() => void fw.load()} /> : null}
+      {fw.error && fw.error.code !== 'E_UNSUPPORTED' ? (
+        <HostOpsErrorBanner error={fw.error} onRetry={() => void fw.load()} />
+      ) : null}
+
+      {!fw.unsupported ? (
+        <Card>
+          <Stack gap={3}>
+            <Row gap={3} wrap>
+              <Segmented
+                value={fw.mode}
+                ariaLabel={zh.hostOps.firewallRules.modeTitle}
+                options={[
+                  { value: 'open', label: zh.hostOps.firewallRules.modeOpen },
+                  { value: 'allowlist', label: zh.hostOps.firewallRules.modeAllowlist },
+                ]}
+                onChange={(value) => {
+                  if (disabled || !fw.canEdit) return;
+                  fw.changeMode(value === 'allowlist' ? 'allowlist' : 'open');
+                }}
+              />
+            </Row>
+            <span className="ui-field-help">
+              {fw.mode === 'allowlist'
+                ? zh.hostOps.firewallRules.modeAllowlistHint
+                : zh.hostOps.firewallRules.modeOpenHint}
+            </span>
+            {fw.mode === 'allowlist' ? (
+              <Stack gap={2}>
+                <Row gap={2} wrap>
+                  <span className="ui-field-label">{zh.hostOps.firewallRules.appPortsTitle}</span>
+                  {fw.appPorts.length > 0 ? (
+                    fw.appPorts.map((item) => (
+                      <Badge
+                        key={`${item.proto}-${item.port}`}
+                        tone="neutral"
+                        label={`${item.proto.toUpperCase()}/${item.port} · ${item.app}`}
+                      />
+                    ))
+                  ) : (
+                    <span className="ui-field-help">{zh.hostOps.firewallRules.appPortsEmpty}</span>
+                  )}
+                </Row>
+                <Checkbox
+                  checked={fw.closePublicSsh}
+                  disabled={disabled || !fw.canEdit}
+                  label={zh.hostOps.firewallRules.closePublicSshLabel}
+                  description={
+                    wgTargetLabel
+                      ? `${zh.hostOps.firewallRules.closePublicSshDescWithWg}${wgTargetLabel}`
+                      : zh.hostOps.firewallRules.closePublicSshDescNoWg
+                  }
+                  onChange={(checked) => fw.setClosePublicSsh(checked)}
+                />
+              </Stack>
+            ) : null}
+          </Stack>
+        </Card>
+      ) : null}
 
       {fw.pendingApply && fw.phase === 'idle' ? (
         <Banner
@@ -426,7 +613,14 @@ export function FirewallSegment({
                 ? zh.hostOps.noPriv
                 : zh.hostOps.firewallRules.waitConfirmFirst
           }
-          onClick={() => void fw.apply()}
+          onClick={() => {
+            if (fw.closePublicSsh && !fw.serverClosePublicSsh) {
+              setVncConfirmed(false);
+              setCloseSshConfirmOpen(true);
+              return;
+            }
+            void fw.apply();
+          }}
         />
       </Row>
 
@@ -436,6 +630,49 @@ export function FirewallSegment({
           <Badge tone="neutral" label={zh.hostOps.firewallRules.lockedHint} />
         </Row>
       ) : null}
+
+      <ConfirmAction
+        open={installConfirmOpen}
+        action={action('hostOps.fwInstallNft')}
+        title={zh.hostOps.firewallRules.installNftTitle}
+        body={zh.hostOps.firewallRules.installNftBody}
+        confirmLabel={zh.hostOps.firewallRules.installNftConfirm}
+        onCancel={() => setInstallConfirmOpen(false)}
+        onConfirm={async () => {
+          setInstallConfirmOpen(false);
+          await fw.installNftables();
+        }}
+      />
+
+      <ConfirmAction
+        open={closeSshConfirmOpen}
+        action={action('hostOps.fwClosePublicSsh')}
+        title={fmt(zh.hostOps.firewallRules.closePublicSshTitle, { name: hubName })}
+        body={
+          fw.wgInterfaces.length > 0 || fw.wgSubnets.length > 0
+            ? zh.hostOps.firewallRules.closePublicSshBody
+            : zh.hostOps.firewallRules.closePublicSshBodyNoWg
+        }
+        confirmLabel={zh.hostOps.firewallRules.closePublicSshConfirm}
+        targetName={hubName}
+        nameLabel={fmt(zh.hostOps.firewallRules.closePublicSshNameLabel, { name: hubName })}
+        confirmDisabled={!vncConfirmed}
+        onCancel={() => {
+          setCloseSshConfirmOpen(false);
+          setVncConfirmed(false);
+        }}
+        onConfirm={async () => {
+          setCloseSshConfirmOpen(false);
+          setVncConfirmed(false);
+          await fw.apply();
+        }}
+      >
+        <Checkbox
+          checked={vncConfirmed}
+          label={zh.hostOps.firewallRules.closePublicSshVncCheck}
+          onChange={setVncConfirmed}
+        />
+      </ConfirmAction>
     </Stack>
   );
 }

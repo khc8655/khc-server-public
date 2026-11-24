@@ -120,7 +120,14 @@ export function PeerOpsPanel({
     cachedApplied.current = true;
     if (cached.status) setStatus(cached.status);
     if (cached.version) {
-      setVersion({ version: cached.version, python: null, root: null, nft: null });
+      setVersion({
+        version: cached.version,
+        python: null,
+        root: null,
+        nft: null,
+        nftInstallable: null,
+        nftUnavailableReason: null,
+      });
     }
     if (cached.fetchedAt) setFetchedAt(cached.fetchedAt);
   }, [cached]);

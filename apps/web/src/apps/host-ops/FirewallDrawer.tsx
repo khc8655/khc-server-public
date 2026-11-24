@@ -421,7 +421,7 @@ export function FirewallDrawer({
             <Banner tone="warn" title={zh.hostOps.firewallRules.unsupported} />
           ) : null}
           {validationError ? <InlineError message={validationError} /> : null}
-          {error ? (
+          {error && error.code !== 'E_UNSUPPORTED' ? (
             <HostOpsErrorBanner
               error={error}
               onRetry={() => {

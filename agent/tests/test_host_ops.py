@@ -75,6 +75,8 @@ SCRIPT_GLOBAL_NAMES = (
     "DATA_DIR",
     "NFT_BIN",
     "NFT_AVAILABLE",
+    "SYS_MODULE_NFT",
+    "MODULES_ROOT",
     "RUNNER",
     "SLEEP",
     "MONOTONIC",
@@ -210,13 +212,17 @@ class ScriptTestBase(unittest.TestCase):
         self.etc_root = os.path.join(self.tmp, "etc")
         self.state_dir = os.path.join(self.etc_root, "khc-host")
         self.unit_dir = os.path.join(self.tmp, "units")
-        for directory in (self.proc_root, self.etc_root, self.state_dir, self.unit_dir):
+        self.data_dir = os.path.join(self.tmp, "data")
+        for directory in (self.proc_root, self.etc_root, self.state_dir, self.unit_dir, self.data_dir):
             os.makedirs(directory, exist_ok=True)
         self.runner = HostRunner()
         self._saved = {name: SCRIPT_DEFAULTS[name] for name in SCRIPT_GLOBAL_NAMES}
         HOST_SCRIPT.PROC_ROOT = self.proc_root
         HOST_SCRIPT.ETC_ROOT = self.etc_root
         HOST_SCRIPT.STATE_DIR = self.state_dir
+        HOST_SCRIPT.DATA_DIR = self.data_dir
+        HOST_SCRIPT.SYS_MODULE_NFT = os.path.join(self.tmp, "sys-missing-nf-tables")
+        HOST_SCRIPT.MODULES_ROOT = os.path.join(self.tmp, "lib-modules")
         HOST_SCRIPT.SYSTEMD_UNIT_DIR = self.unit_dir
         HOST_SCRIPT.RUNNER = self.runner
         HOST_SCRIPT.SLEEP = lambda _seconds: None  # CPU 两次采样不真的等待
@@ -1206,6 +1212,170 @@ class ScriptFirewallTests(ScriptTestBase):
         self.assertEqual(pending["token"], applied["data"]["token"])
         self.assertGreaterEqual(pending["secondsLeft"], 0)
         self.assertLessEqual(pending["secondsLeft"], HOST_SCRIPT.FW_ROLLBACK_SECONDS)
+
+    def _write_ports_json(self, entries: list[dict]) -> None:
+        ports_map = {f"{item['proto']}:{item['port']}": item for item in entries}
+        _write(os.path.join(self.data_dir, "ports.json"), json.dumps({"ports": ports_map}), 0o600)
+
+    def test_version_nft_install_capability_matrix(self) -> None:
+        # 1) nft 可用：不提示可安装，原因 None
+        HOST_SCRIPT.NFT_AVAILABLE = True
+        ok_data = self.run_verb("version")["data"]
+        self.assertTrue(ok_data["nft"])
+        self.assertFalse(ok_data["nftInstallable"])
+        self.assertIsNone(ok_data["nftUnavailableReason"])
+
+        # 2) nft 缺失 + 内核不支持 nf_tables -> no_kernel
+        HOST_SCRIPT.NFT_AVAILABLE = False
+        self.runner.on("modinfo", lambda argv, _i: (1, "", "Module nf_tables not found"))
+        no_kernel = self.run_verb("version")["data"]
+        self.assertFalse(no_kernel["nft"])
+        self.assertFalse(no_kernel["nftInstallable"])
+        self.assertEqual(no_kernel["nftUnavailableReason"], "no_kernel")
+
+        # 3) /proc/modules 含 nf_tables + 非 root -> no_root
+        _write(os.path.join(self.proc_root, "modules"), "nf_tables 262144 0 - Live 0x0\n")
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        no_root = self.run_verb("version")["data"]
+        self.assertFalse(no_root["nftInstallable"])
+        self.assertEqual(no_root["nftUnavailableReason"], "no_root")
+
+        # 4) root + nf_tables + 无包管理器 -> no_pkg_mgr；有 apt-get -> missing_pkg + nftInstallable=True
+        HOST_SCRIPT.ROOT_OVERRIDE = True
+        with mock.patch.object(HOST_SCRIPT.shutil, "which", return_value=None):
+            no_mgr = self.run_verb("version")["data"]
+        self.assertFalse(no_mgr["nftInstallable"])
+        self.assertEqual(no_mgr["nftUnavailableReason"], "no_pkg_mgr")
+
+        with mock.patch.object(
+            HOST_SCRIPT.shutil,
+            "which",
+            side_effect=lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+        ):
+            installable = self.run_verb("version")["data"]
+        self.assertTrue(installable["nftInstallable"])
+        self.assertEqual(installable["nftUnavailableReason"], "missing_pkg")
+
+    def test_allowlist_mode_ports_icmp_and_readback(self) -> None:
+        self._write_ports_json(
+            [
+                {"app": "caddy-site", "proto": "tcp", "port": 443},
+                {"app": "port-forward", "proto": "tcp", "port": 9000},
+                {"app": "port-forward", "proto": "udp", "port": 5300},
+                {"app": "wireguard", "proto": "udp", "port": 51821},
+            ]
+        )
+        shown_open = self.run_verb("fw.show")["data"]
+        self.assertEqual(shown_open["mode"], "open")
+        self.assertFalse(shown_open["closePublicSsh"])
+        self.assertEqual(shown_open["wgInterfaces"], ["wg0"])
+        self.assertEqual(shown_open["wgSubnets"], ["10.8.0.0/24"])
+        self.assertEqual(
+            {(p["proto"], p["port"]) for p in shown_open["appPorts"]},
+            {("tcp", 443), ("tcp", 9000), ("udp", 5300), ("udp", 51821)},
+        )
+
+        # allowlist 模式规则集包含 policy drop、ICMP/ICMPv6、受管应用端口与自定义规则
+        applied = self.run_verb(
+            "fw.apply",
+            {
+                "mode": "allowlist",
+                "closePublicSsh": False,
+                "rules": [{"id": "custom1", "action": "allow", "proto": "tcp", "port": "8080", "source": "0.0.0.0/0", "note": ""}],
+                "baseRev": "none",
+            },
+        )
+        self.assertTrue(applied["ok"], applied)
+        self.assertEqual(applied["data"]["mode"], "allowlist")
+        self.assertFalse(applied["data"]["closePublicSsh"])
+        ruleset = self.nft_inputs[0]
+        self.assertIn("policy drop;", ruleset)
+        self.assertIn("meta l4proto icmp accept", ruleset)
+        self.assertIn("meta l4proto ipv6-icmp accept", ruleset)
+        self.assertIn("tcp dport { 443, 9000 } accept", ruleset)
+        self.assertIn("udp dport { 5300 } accept", ruleset)
+        self.assertIn("tcp dport 8080 accept", ruleset)
+
+        shown_allow = self.run_verb("fw.show")["data"]
+        self.assertEqual(shown_allow["mode"], "allowlist")
+        locked_ids = {rule["id"] for rule in shown_allow["lockedRules"]}
+        self.assertIn("__app_tcp_443", locked_ids)
+        self.assertIn("__app_tcp_9000", locked_ids)
+        self.assertIn("__app_udp_5300", locked_ids)
+        # 已在 __wg_51821 的端口不再重复生成 __app_udp_51821
+        self.assertNotIn("__app_udp_51821", locked_ids)
+
+        # 回读校验能检出 policy 不符（live 返回 policy accept 而期望 policy drop）
+        self.live_table = self.live_table.replace("policy drop;", "policy accept;")
+        issues = HOST_SCRIPT._fw_readback_issues(ruleset)
+        self.assertTrue(any("policy drop" in item for item in issues), issues)
+
+    def test_close_public_ssh_lockout_wg_keepalive_and_rollback(self) -> None:
+        # 1) open 模式下禁止关闭公网 SSH
+        bad = self.run_verb(
+            "fw.apply",
+            {"mode": "open", "closePublicSsh": True, "rules": [], "baseRev": "none"},
+        )
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["code"], "E_BAD_REQUEST")
+
+        # 2) 先建立 open 基线并确认，再切 allowlist + closePublicSsh=True，最后模拟超时回滚
+        first = self._apply([])
+        self.assertTrue(first["ok"])
+        self.assertTrue(self.run_verb("fw.confirm", {"token": first["data"]["token"]})["ok"])
+        rev1 = first["data"]["rev"]
+
+        # 关闭公网 SSH 时，即使配置仍保护 Agent/WG 端口
+        os.makedirs(os.path.join(self.proc_root, "net"), exist_ok=True)
+        _write(
+            os.path.join(self.proc_root, "net", "tcp"),
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 00000000:20FB 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9100 1 0\n",
+        )
+        write_proc(self.proc_root, 888, comm="python3", cmdline="/usr/bin/python3 /opt/khc-agent/khc_agent.py")
+        os.makedirs(os.path.join(self.proc_root, "888", "fd"), exist_ok=True)
+        os.symlink("socket:[9100]", os.path.join(self.proc_root, "888", "fd", "5"))
+
+        agent_deny = self.run_verb(
+            "fw.apply",
+            {
+                "mode": "allowlist",
+                "closePublicSsh": True,
+                "rules": [{"action": "deny", "proto": "tcp", "port": "8443", "source": "0.0.0.0/0"}],
+                "baseRev": rev1,
+            },
+        )
+        self.assertEqual(agent_deny["error"]["code"], "E_LOCKOUT")
+
+        # 合法开启 closePublicSsh=True：仅在 wg0 放行 SSH，不全局放行 22/2222
+        second = self.run_verb(
+            "fw.apply",
+            {
+                "mode": "allowlist",
+                "closePublicSsh": True,
+                "rules": [],
+                "baseRev": rev1,
+            },
+        )
+        self.assertTrue(second["ok"], second)
+        self.assertTrue(second["data"]["closePublicSsh"])
+        ruleset = self.nft_inputs[-1]
+        self.assertIn("policy drop;", ruleset)
+        self.assertIn('iifname "wg0" tcp dport { 22, 2222 } accept', ruleset)
+        self.assertNotIn("\n        tcp dport { 22, 2222 } accept", ruleset)
+        self.assertIn("tcp dport { 8443 } accept", ruleset)
+        self.assertIn("udp dport { 51820, 51821 } accept", ruleset)
+
+        shown_locked = {rule["id"]: rule for rule in self.run_verb("fw.show")["data"]["lockedRules"]}
+        self.assertIn("wg0", shown_locked["__ssh_22"]["source"])
+        self.assertIn("10.8.0.0/24", shown_locked["__ssh_22"]["source"])
+
+        # 未确认触发自动回滚 -> mode 与 closePublicSsh 回滚回 open / False
+        rb = self.run_verb("__fw_rollback", {"token": second["data"]["token"]})
+        self.assertTrue(rb["ok"])
+        restored = self.run_verb("fw.show")["data"]
+        self.assertEqual(restored["mode"], "open")
+        self.assertFalse(restored["closePublicSsh"])
 
 
 # ===========================================================================
@@ -2397,12 +2567,64 @@ class AdapterCallTaskMetadataTests(AdapterTestBase):
         self.assertEqual(spec["mode"], "task")
         self.assertTrue(spec["write"])
         self.assertTrue(spec["description"])
+        self.assertIn("install_nftables", metadata)
+        self.assertEqual(metadata["install_nftables"]["mode"], "task")
+        self.assertTrue(metadata["install_nftables"]["write"])
         # 原 call 保持 sync/write，四个旧动作不变
         self.assertEqual(metadata["call"]["mode"], "sync")
         self.assertTrue(metadata["call"]["write"])
         for name in ("hub_pubkey", "probe", "onboard"):
             self.assertEqual(metadata[name]["mode"], "sync", name)
             self.assertFalse(metadata[name]["write"], name)
+
+    def test_install_nftables_action_and_peer_restriction(self) -> None:
+        # 1) Peer target 被 E_PEER_FORBIDDEN 拒绝（含 install_nftables 与 fw.apply closePublicSsh）
+        peer_res = self.adapter.action_install_nftables(
+            self.ctx,
+            {"config": self.config("a"), "params": {"target": "a"}},
+        )
+        self.assertFalse(peer_res["ok"])
+        self.assertEqual(peer_res["error"]["code"], "E_PEER_FORBIDDEN")
+
+        peer_fw = self.adapter.action_call_task(
+            self.ctx,
+            {
+                "config": self.config("a"),
+                "params": {
+                    "target": "a",
+                    "verb": "fw.apply",
+                    "params": {"mode": "allowlist", "closePublicSsh": True, "rules": [], "baseRev": "none"},
+                },
+            },
+        )
+        self.assertFalse(peer_fw["ok"])
+        self.assertEqual(peer_fw["error"]["code"], "E_PEER_FORBIDDEN")
+
+        # 2) Hub self 调用 install_nftables：强制仅传 ("nftables",)，忽略外部传入包名
+        self.runner.overrides.append(
+            lambda argv: RunResult(cmd=argv, rc=0, stdout="nftables v1.0.9 (Old Docwash #3)\n")
+            if argv == ["nft", "--version"]
+            else None
+        )
+        with mock.patch("khc.pkg.ensure_packages", return_value={"nftables": "apt-get"}) as pkg_mock:
+            res = self.adapter.action_install_nftables(
+                self.ctx,
+                {"config": self.config(), "params": {"packages": ["nginx"], "target": "self"}},
+            )
+        pkg_mock.assert_called_once()
+        self.assertEqual(pkg_mock.call_args[0][1], ("nftables",))
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(res["installed"])
+        self.assertEqual(res["manager"], "apt-get")
+        self.assertIn("nftables", res["nftVersion"])
+
+        # 3) ensure_packages 抛 CommandFailed 时返回带 details 的结构化错误包
+        err = CommandFailed("安装 nftables 失败", code="pkg_install_failed", details={"stderr": "E: Unable to locate"})
+        with mock.patch("khc.pkg.ensure_packages", side_effect=err):
+            fail_res = self.adapter.action_install_nftables(self.ctx, {"config": self.config(), "params": {}})
+        self.assertFalse(fail_res["ok"])
+        self.assertEqual(fail_res["error"]["code"], "pkg_install_failed")
+        self.assertEqual(fail_res["error"]["details"], {"stderr": "E: Unable to locate"})
 
     def test_actions_mapping_declares_call_task(self) -> None:
         spec = HostOps.actions["call_task"]

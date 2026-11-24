@@ -154,6 +154,7 @@ def _call_host_script_in_process(
         # 每次调用前对齐运行期全局：模块是长驻的，不能假设它的状态还是上次的样子。
         module.STATE_DIR = state_dir
         module.PROC_ROOT = "/proc"
+        module.DATA_DIR = ctx.data
         try:
             payload_obj = module.main([verb], payload)
         except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
@@ -391,6 +392,11 @@ class HostOps(Adapter):
             "mode": "task",
             "write": True,
             "description": "异步调用 khc-host 白名单动词（长耗时：fw.apply；参数与 call 相同）；读写按 verb 判定",
+        },
+        "install_nftables": {
+            "mode": "task",
+            "write": True,
+            "description": "在 Hub 本机按固定白名单安装 nftables 系统包（不接受自定义包名，仅 Hub self）",
         },
     }
 
@@ -1317,6 +1323,43 @@ class HostOps(Adapter):
 
         return self._dispatch_call(ctx, body)
 
+    def action_install_nftables(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Hub 本机一键安装 nftables（固定白名单，仅 Hub self，不接受外部包名）。"""
+
+        params = action_params(body)
+        target = _text(params.get("target"))
+        if target and target != "self":
+            return self._err(
+                "E_PEER_FORBIDDEN",
+                "一键安装 nftables 仅限 Hub 本机执行",
+                target=target,
+            )
+        from khc.pkg import ensure_packages
+
+        try:
+            managers = ensure_packages(ctx, ("nftables",))
+        except ValidationFailed as exc:
+            return self._err("E_BAD_REQUEST", exc.message)
+        except CommandFailed as exc:
+            code_map = {
+                "pkg_root_required": "E_NO_PRIV",
+                "pkg_manager_missing": "pkg_manager_missing",
+                "pkg_install_failed": "pkg_install_failed",
+            }
+            payload = self._err(code_map.get(exc.code or "", "E_BAD_REQUEST"), exc.message)
+            if exc.details:
+                payload["error"]["details"] = exc.details
+            return payload
+
+        version_result = ctx.run(["nft", "--version"], timeout=5, check=False)
+        nft_version = (version_result.stdout or "").strip() if version_result.rc == 0 else None
+        return self._ok(
+            installed=True,
+            manager=managers.get("nftables"),
+            nftVersion=nft_version or None,
+            audit={"target": "self", "verb": "install_nftables", "write": True},
+        )
+
     def _dispatch_call(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         params = action_params(body)
         target = _text(params.get("target"))
@@ -1381,7 +1424,10 @@ class HostOps(Adapter):
                 input=payload,
                 timeout=SSH_TIMEOUT,
                 check=False,
-                env={"KHC_HOST_STATE_DIR": self.self_state_dir(ctx)},
+                env={
+                    "KHC_HOST_STATE_DIR": self.self_state_dir(ctx),
+                    "KHC_DATA_DIR": ctx.data,
+                },
             )
             return self._interpret_call(result, target, verb, write, audit, started)
 

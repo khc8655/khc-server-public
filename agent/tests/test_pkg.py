@@ -119,7 +119,7 @@ class PkgTests(unittest.TestCase):
         self.assertEqual(runner.systemd_calls(), [])
 
     def test_allowed_packages_are_fixed(self):
-        self.assertEqual(ALLOWED_PACKAGES, ("caddy", "wireguard-tools", "socat"))
+        self.assertEqual(ALLOWED_PACKAGES, ("caddy", "wireguard-tools", "socat", "nftables"))
 
     def test_installs_with_detected_manager(self):
         runner = PkgRunner(manager="dnf")
@@ -240,7 +240,7 @@ class PkgTests(unittest.TestCase):
         self.assertEqual(installs[0][-1], "socat")
 
     def test_already_installed_skips_systemd_run_and_network(self):
-        runner = PkgRunner(present={"caddy", "wg", "wg-quick", "socat"})
+        runner = PkgRunner(present={"caddy", "wg", "wg-quick", "socat", "nft"})
         with mock.patch("khc.pkg.shutil.which", return_value=None):
             ctx = ctx_with(runner)
             result = ensure_packages(ctx, list(ALLOWED_PACKAGES))
@@ -248,6 +248,17 @@ class PkgTests(unittest.TestCase):
         self.assertEqual(runner.systemd_calls(), [])
         self.assertEqual(runner.installs, [])
         self.assertFalse(any(inner[:2] == ["apt-get", "update"] for inner in runner.inner_calls()))
+
+    def test_nftables_installs_outside_sandbox_and_checks_binary(self):
+        runner = PkgRunner(present=set())
+        with mock.patch("khc.pkg.shutil.which", return_value=None):
+            ctx = ctx_with(runner)
+            result = ensure_packages(ctx, ["nftables"])
+        self.assertEqual(result, {"nftables": "apt-get"})
+        self.assertEqual(runner.installs, ["nftables"])
+        installs = [call for call in runner.systemd_calls() if unwrap(call)[:2] == ["apt-get", "install"]]
+        self.assertEqual(len(installs), 1)
+        self.assertEqual(installs[0][-1], "nftables")
 
     def test_failed_install_raises_pkg_install_failed_and_rolls_back(self):
         runner = PkgRunner(fail_install=True, install_stderr="boom")

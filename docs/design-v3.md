@@ -1,6 +1,6 @@
 # khc-server v3：冻结核心 + 应用适配器 + 无损密钥轮换
 
-> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：ADR-0001、ADR-0012、ADR-0021
 > 范围：架构与冻结契约（核心/适配器/连接/数据模型）
 > **取代**：`design-v1.md`（现 `docs/archive/2026-11/design-v1.md`）的连接层、插件包、transports 抽象；`design-v2-simple.md`（现 `docs/archive/2026-11/design-v2-simple.md`）的接口清单。v2 的原则（按需连接、无心跳、失败要快）继续有效。
 > **定位**：面板**不是监控面板**，是"替我安装 / 卸载 / 配置常用软件"的遥控器 + 配置仓库。一个月大约打开 10 次。
@@ -292,7 +292,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
 两个**知识层**能力。第 2 项的面板下发通道自 0.13.0 起由 Worker 的通用注入点与 D1 表 `app_manifests` 承载（见 `docs/hosted-apps.md`）：
 
 1. **受控系统包安装**（`agent/khc/pkg.py`，仅 system profile / root）
-   - 白名单固定：`caddy`、`wireguard-tools`、`socat`；其他包名一律拒绝。
+   - 白名单固定：`caddy`、`wireguard-tools`、`socat`、`nftables`；其他包名一律拒绝。
    - 自动识别 `apt-get` / `dnf` / `yum` / `apk`；命令全部是 argv 列表，经 `ctx.run()`，不拼 shell。unit 是 `ProtectSystem=full`，`/usr` 只读，故 update / 安装 / 回滚卸载包成 `systemd-run --wait --pipe --collect` 一次性 unit 在沙箱外执行，`APT_ENV` 经 `--setenv=` 传入。
    - 超时：探测 15s、`apt-get update` 180s、安装 300s；输出只保留尾部。
    - 失败回滚：安装前记录二进制是否存在；安装失败或装后二进制不可用 → 尝试卸载并报 `pkg_install_failed`。

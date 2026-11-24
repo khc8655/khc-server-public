@@ -93,6 +93,8 @@ export interface HostOpsVersion {
   python: string | null;
   root: boolean | null;
   nft: boolean | null;
+  nftInstallable: boolean | null;
+  nftUnavailableReason: string | null;
 }
 
 export interface HostOpsStatus {
@@ -125,6 +127,13 @@ export interface HostOpsProcess {
 }
 
 export type HostOpsFirewallAction = 'allow' | 'deny';
+export type HostOpsFirewallMode = 'open' | 'allowlist';
+
+export interface HostOpsFirewallAppPort {
+  app: string;
+  proto: string;
+  port: number;
+}
 
 export interface HostOpsFirewallRule {
   id: string;
@@ -153,6 +162,11 @@ export interface HostOpsFirewallAutoRule {
 export interface HostOpsFirewallShow {
   rules: HostOpsFirewallRule[];
   baseRev: string | null;
+  mode: HostOpsFirewallMode;
+  closePublicSsh: boolean;
+  appPorts: HostOpsFirewallAppPort[];
+  wgInterfaces: string[];
+  wgSubnets: string[];
   other: string[];
   pending: HostOpsFirewallPending | null;
   autoRules: HostOpsFirewallAutoRule[];
@@ -533,17 +547,10 @@ async function fetchTask(hubId: string, taskId: string): Promise<AgentTask> {
   return parsed.data.task;
 }
 
-/**
- * 任务模式调用（#17）：POST call_task 拿 taskId，按退避轮询 /tasks/:taskId。
- * done → 解析 task.result 为 HostOpsResult；error → task.error；取消/超时返回错误结果。
- * 只服务于用户主动发起的写操作进度回执，有硬超时与退避上限，不是后台定时轮询；
- * 关闭抽屉时通过 AbortSignal 立即终止。
- */
-export async function callHostOpsTask<T = unknown>(
+async function runHostOpsTaskAction<T = unknown>(
   hubId: string,
-  target: string,
-  verb: HostOpsVerb,
-  params: Record<string, unknown> = {},
+  actionName: string,
+  params: Record<string, unknown>,
   options: HostOpsTaskOptions = {},
 ): Promise<HostOpsResult<T>> {
   const signal = options.signal;
@@ -553,7 +560,7 @@ export async function callHostOpsTask<T = unknown>(
 
   let envelope: AgentEnvelope;
   try {
-    envelope = await runAppAction(hubId, HOST_OPS_APP, 'call_task', { target, verb, params }, {
+    envelope = await runAppAction(hubId, HOST_OPS_APP, actionName, params, {
       idempotencyKey: newIdempotencyKey(),
     });
   } catch (error) {
@@ -621,6 +628,35 @@ export async function callHostOpsTask<T = unknown>(
     await sleep(Math.min(delay, remaining), signal);
     delay = Math.min(delay * 2, HOST_OPS_TASK_POLL_MAX_MS);
   }
+}
+
+/**
+ * 任务模式调用（#17）：POST call_task 拿 taskId，按退避轮询 /tasks/:taskId。
+ * done → 解析 task.result 为 HostOpsResult；error → task.error；取消/超时返回错误结果。
+ * 只服务于用户主动发起的写操作进度回执，有硬超时与退避上限，不是后台定时轮询；
+ * 关闭抽屉时通过 AbortSignal 立即终止。
+ */
+export async function callHostOpsTask<T = unknown>(
+  hubId: string,
+  target: string,
+  verb: HostOpsVerb,
+  params: Record<string, unknown> = {},
+  options: HostOpsTaskOptions = {},
+): Promise<HostOpsResult<T>> {
+  return runHostOpsTaskAction<T>(hubId, 'call_task', { target, verb, params }, options);
+}
+
+/** 在 Hub 本机一键安装 nftables 系统包（task 模式，最长等待 300s）。 */
+export async function installHostOpsNftables(
+  hubId: string,
+  options: HostOpsTaskOptions = {},
+): Promise<HostOpsResult<{ installed?: boolean; manager?: string | null; nftVersion?: string | null }>> {
+  return runHostOpsTaskAction(
+    hubId,
+    'install_nftables',
+    {},
+    { timeoutMs: 300_000, ...options },
+  );
 }
 
 export async function onboardHostOps(
@@ -705,6 +741,8 @@ export function normalizeVersion(data: unknown): HostOpsVersion {
     python: asString(record.python) || null,
     root: asBoolean(record.root),
     nft: asBoolean(record.nft),
+    nftInstallable: asBoolean(record.nftInstallable),
+    nftUnavailableReason: asString(record.nftUnavailableReason) || null,
   };
 }
 
@@ -839,6 +877,28 @@ function normalizeOtherRules(value: unknown): string[] {
   return text ? [text] : [];
 }
 
+function normalizeFirewallAppPorts(value: unknown): HostOpsFirewallAppPort[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = asRecord(item);
+    const app = asString(record.app) || 'app';
+    const proto = asString(record.proto).toLowerCase();
+    const port = asNumber(record.port);
+    if ((proto !== 'tcp' && proto !== 'udp') || port === null || port < 1 || port > 65535) {
+      return [];
+    }
+    return [{ app, proto, port: Math.floor(port) }];
+  });
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const text = asString(item);
+    return text ? [text] : [];
+  });
+}
+
 export function normalizeFirewallShow(data: unknown): HostOpsFirewallShow {
   const record = asRecord(data);
   const pendingRecord = asRecord(record.pending);
@@ -854,6 +914,9 @@ export function normalizeFirewallShow(data: unknown): HostOpsFirewallShow {
     : Array.isArray(record.rules)
       ? record.rules
       : [];
+  const rawMode = asString(record.mode);
+  const mode: HostOpsFirewallMode = rawMode === 'allowlist' ? 'allowlist' : 'open';
+  const closePublicSsh = mode === 'allowlist' && asBoolean(record.closePublicSsh) === true;
   return {
     rules: rawRules.map(normalizeFirewallRule),
     baseRev:
@@ -861,6 +924,11 @@ export function normalizeFirewallShow(data: unknown): HostOpsFirewallShow {
       asString(record.rev) ||
       asString(record.hash) ||
       null,
+    mode,
+    closePublicSsh,
+    appPorts: normalizeFirewallAppPorts(record.appPorts),
+    wgInterfaces: normalizeStringList(record.wgInterfaces),
+    wgSubnets: normalizeStringList(record.wgSubnets),
     other: normalizeOtherRules(
       record.other ?? record.otherRules ?? record.tables ?? record.otherTables,
     ),

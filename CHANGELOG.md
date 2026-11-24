@@ -2,9 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
-## [0.45.3] - 2026-11-25
+## [0.46.0] - 2026-11-25
 ### Added
-- Agent `0.9.7`：`host-ops` 新增只读动词 `logs.security` 并在诊断中按需统计近 24 小时 SSH 爆破与扫描来源摘要，不写 D1、平时零流量。
+- Agent `0.10.0`：`host-ops` 新增只读动词 `logs.security` 并在诊断中按需统计近 24 小时 SSH 爆破与扫描来源摘要，不写 D1、平时零流量。
+- Agent `0.10.0`：防火墙支持「仅开面板应用」白名单模式与可选「关闭公网 SSH 22 端口」，自动保留面板应用、WireGuard 内网 SSH、Agent 与回环并延续 60 秒自动回滚（需 L3 确认）。
+- 新增 Hub 本机 `install_nftables` 任务动作，当内核支持 `nf_tables` 但缺失系统包时支持 L2 一键安装并去重防火墙不可用重复横幅。
 
 ## [0.45.2] - 2026-11-24
 ### Fixed

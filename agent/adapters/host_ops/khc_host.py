@@ -65,7 +65,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.6"
+SCRIPT_VERSION = "1.6.0"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -100,6 +100,8 @@ FW_TABLE = "khc_fw"
 FW_CHAIN = "input"
 FW_PRIORITY = "filter - 5"
 FW_ROLLBACK_SECONDS = 60
+FW_MODES = ("open", "allowlist")
+WG_IFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 
 MARK_BEGIN = "# >>> khc managed >>>"
 MARK_END = "# <<< khc managed <<<"
@@ -237,7 +239,9 @@ def _resolve_script_path() -> str:
 
 
 SCRIPT_PATH = _resolve_script_path()
-DATA_DIR = "/var/lib/khc-agent"
+DATA_DIR = os.environ.get("KHC_DATA_DIR") or "/var/lib/khc-agent"
+SYS_MODULE_NFT = "/sys/module/nf_tables"
+MODULES_ROOT = "/lib/modules"
 NFT_BIN = "nft"
 NFT_AVAILABLE: Optional[bool] = None
 ROOT_OVERRIDE: Optional[bool] = None
@@ -491,6 +495,8 @@ def normalize_public_key(public_key: Any) -> str:
 
 
 def version_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    nft_ok = _nft_available()
+    nft_installable, nft_reason = _nft_install_capability(nft_ok)
     return ok(
         {
             "version": SCRIPT_VERSION,
@@ -498,7 +504,9 @@ def version_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
             "protocol": PROTOCOL_VERSION,
             "python": "%d.%d.%d" % sys.version_info[:3],
             "root": is_root(),
-            "nft": _nft_available(),
+            "nft": nft_ok,
+            "nftInstallable": nft_installable,
+            "nftUnavailableReason": nft_reason,
             "verbs": list(PUBLIC_VERBS),
             "scriptPath": SCRIPT_PATH,
         }
@@ -1145,6 +1153,47 @@ def _nft_available() -> bool:
     return shutil.which(NFT_BIN) is not None
 
 
+def _nft_kernel_supported() -> bool:
+    """探测内核是否支持 nf_tables（sysfs / /proc/modules / 模块文件 / modinfo）。"""
+
+    if os.path.isdir(SYS_MODULE_NFT):
+        return True
+    proc_modules = _read_text(os.path.join(PROC_ROOT, "modules"), 512 * 1024)
+    for line in proc_modules.splitlines():
+        if line.split(" ", 1)[0].strip() == "nf_tables":
+            return True
+    try:
+        release = os.uname().release
+    except OSError:
+        release = ""
+    if release:
+        nf_dir = os.path.join(MODULES_ROOT, release, "kernel", "net", "netfilter")
+        try:
+            for entry in os.listdir(nf_dir):
+                if entry.startswith("nf_tables.ko"):
+                    return True
+        except OSError:
+            pass
+    rc, _, _ = _run(["modinfo", "nf_tables"], timeout=2.0)
+    return rc == 0
+
+
+def _pkg_manager_available() -> bool:
+    return any(shutil.which(manager) is not None for manager in ("apt-get", "dnf", "yum", "apk"))
+
+
+def _nft_install_capability(nft_ok: bool) -> tuple[bool, Optional[str]]:
+    if nft_ok:
+        return False, None
+    if not _nft_kernel_supported():
+        return False, "no_kernel"
+    if not is_root():
+        return False, "no_root"
+    if not _pkg_manager_available():
+        return False, "no_pkg_mgr"
+    return True, "missing_pkg"
+
+
 def _require_nft() -> None:
     if not _nft_available():
         raise HostError("E_UNSUPPORTED", "本机没有 nftables（nft），防火墙功能不可用")
@@ -1292,19 +1341,111 @@ def _agent_ports() -> list[int]:
     return sorted(ports)
 
 
+def _wg_ssh_access() -> dict[str, list[str]]:
+    """收集 WireGuard 接口名与内网网段，供关闭公网 SSH 时自动保留内网 SSH。"""
+
+    directory = os.path.join(ETC_ROOT, "wireguard")
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        names = []
+    interfaces: list[str] = []
+    v4_nets: list[str] = []
+    v6_nets: list[str] = []
+    for name in names:
+        if not name.endswith(".conf"):
+            continue
+        iface = name[:-5]
+        if not WG_IFACE_RE.match(iface):
+            continue
+        text = _read_text(os.path.join(directory, name), 256 * 1024)
+        section = ""
+        has_interface = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped[1:-1].strip().lower()
+                if section == "interface":
+                    has_interface = True
+                continue
+            if section != "interface":
+                continue
+            key, _, value = stripped.partition("=")
+            if key.strip().lower() != "address":
+                continue
+            for item in value.split(","):
+                candidate = item.strip()
+                if not candidate:
+                    continue
+                try:
+                    net = ipaddress.ip_interface(candidate).network
+                except ValueError:
+                    continue
+                target = v6_nets if net.version == 6 else v4_nets
+                text_net = str(net)
+                if text_net not in target:
+                    target.append(text_net)
+        if has_interface or text.strip():
+            if iface not in interfaces:
+                interfaces.append(iface)
+    return {
+        "interfaces": interfaces,
+        "v4Subnets": v4_nets,
+        "v6Subnets": v6_nets,
+    }
+
+
+def _managed_app_ports() -> list[dict[str, Any]]:
+    """读取 Agent 端口登记表（<DATA_DIR>/ports.json），返回白名单模式自动放行端口。"""
+
+    path = os.path.join(DATA_DIR, "ports.json")
+    payload = _load_json_file(path, default=None)
+    if not isinstance(payload, Mapping):
+        return []
+    raw_ports = payload.get("ports")
+    if isinstance(raw_ports, Mapping):
+        items = raw_ports.values()
+    elif isinstance(raw_ports, list):
+        items = raw_ports
+    else:
+        return []
+    dedup: dict[tuple[str, int], str] = {}
+    for entry in items:
+        if not isinstance(entry, Mapping):
+            continue
+        proto = _as_text(entry.get("proto")).lower()
+        port = entry.get("port")
+        app = _as_text(entry.get("app")) or "app"
+        if proto not in ("tcp", "udp"):
+            continue
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            continue
+        dedup.setdefault((proto, int(port)), app)
+    return [
+        {"app": app, "proto": proto, "port": port}
+        for (proto, port), app in sorted(dedup.items(), key=lambda kv: (kv[0][0], kv[0][1]))
+    ]
+
+
 def protected_ports() -> dict[str, list[int]]:
     return {"ssh": _ssh_ports(), "wg": _wg_ports(), "fixed": _agent_ports()}
 
 
-def _protected_by_proto() -> dict[str, list[int]]:
-    """按协议分组的受保护端口：tcp = SSH + Agent 入口，udp = WireGuard。
+def _protected_by_proto(*, include_ssh: bool = True) -> dict[str, list[int]]:
+    """按协议分组的受保护端口：tcp = SSH（可选）+ Agent 入口，udp = WireGuard。
 
     P1-B：锁定保护按协议匹配——deny udp/22 不再误拦（SSH 是 TCP），
-    deny tcp/51820 也不再误拦（WG 是 UDP）。
+    deny tcp/51820 也不再误拦（WG 是 UDP）。关闭公网 SSH 时允许不再锁定 SSH 端口，
+    Agent/WireGuard 入口仍无条件保护。
     """
 
+    tcp_ports = set(_agent_ports())
+    if include_ssh:
+        tcp_ports.update(_ssh_ports())
     return {
-        "tcp": sorted(set(_ssh_ports()) | set(_agent_ports())),
+        "tcp": sorted(tcp_ports),
         "udp": _wg_ports(),
     }
 
@@ -1369,12 +1510,40 @@ def normalize_rules(raw: Any) -> list[dict[str, Any]]:
     return rules
 
 
+def normalize_fw_mode(raw: Any) -> str:
+    mode = _as_text(raw) or "open"
+    if mode not in FW_MODES:
+        raise HostError("E_BAD_REQUEST", f"不支持的防火墙模式: {mode}（仅允许 open/allowlist）")
+    return mode
+
+
 def rules_rev(rules: list[dict[str, Any]]) -> str:
     canonical = json.dumps(rules, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def rule_lockout_reason(rule: Mapping[str, Any], protected: Mapping[str, list[int]]) -> Optional[str]:
+def fw_state_rev(
+    rules: list[dict[str, Any]],
+    mode: str = "open",
+    close_public_ssh: bool = False,
+) -> str:
+    if mode == "open" and not close_public_ssh:
+        return rules_rev(rules)
+    canonical = json.dumps(
+        {"mode": mode, "closePublicSsh": bool(close_public_ssh), "rules": rules},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def rule_lockout_reason(
+    rule: Mapping[str, Any],
+    protected: Mapping[str, list[int]],
+    *,
+    close_public_ssh: bool = False,
+) -> Optional[str]:
     """deny 规则是否会拦截受保护端口（按协议+端口两个维度匹配）。
 
     P1-B：此前 (a) 受保护端口不区分协议（deny udp/22 误拦）；(b) 只要
@@ -1388,7 +1557,13 @@ def rule_lockout_reason(rule: Mapping[str, Any], protected: Mapping[str, list[in
         return None
     proto = _as_text(rule.get("proto")) or "tcp"
     low, high = _parse_port_spec(rule.get("port"))
-    hits = sorted(port for port in protected.get(proto, []) if low <= port <= high)
+    target_ports = list(protected.get(proto, []))
+    if close_public_ssh and proto == "tcp":
+        # 测试或调用方传入全量受保护端口时，剔除未复用于 Agent 的 SSH 端口。
+        agent_set = set(_agent_ports())
+        ssh_only = set(_ssh_ports()) - agent_set
+        target_ports = [port for port in target_ports if port not in ssh_only]
+    hits = sorted(port for port in target_ports if low <= port <= high)
     if hits:
         return f"会拦截受保护端口 {', '.join(str(item) for item in hits)}（SSH/Agent/WireGuard）"
     return None
@@ -1423,32 +1598,68 @@ def _replace_table_prefix() -> str:
     return f"table inet {FW_TABLE} {{}}\ndelete table inet {FW_TABLE}\n"
 
 
-def build_ruleset(rules: list[dict[str, Any]]) -> str:
-    protected = _protected_by_proto()
+def build_ruleset(
+    rules: list[dict[str, Any]],
+    *,
+    mode: str = "open",
+    close_public_ssh: bool = False,
+) -> str:
+    fw_mode = normalize_fw_mode(mode)
+    close_ssh = bool(close_public_ssh)
+    if close_ssh and fw_mode != "allowlist":
+        raise HostError("E_BAD_REQUEST", "仅在白名单（allowlist）模式下允许关闭公网 SSH 22 端口")
+
+    protected = _protected_by_proto(include_ssh=not close_ssh)
     hub_ip = _hub_wg_ip()
     ssh_ports = _ssh_ports()
     wg_ports = _wg_ports()
     agent_ports = _agent_ports()
+    wg_access = _wg_ssh_access() if close_ssh else {"interfaces": [], "v4Subnets": [], "v6Subnets": []}
+    app_ports = _managed_app_ports() if fw_mode == "allowlist" else []
+    policy = "drop" if fw_mode == "allowlist" else "accept"
+
     lines = [
         _replace_table_prefix().rstrip("\n"),
         f"table inet {FW_TABLE} {{",
         f"    chain {FW_CHAIN} {{",
-        f"        type filter hook input priority {FW_PRIORITY}; policy accept;",
+        f"        type filter hook input priority {FW_PRIORITY}; policy {policy};",
         "        ct state established,related accept",
         '        iifname "lo" accept',
     ]
+    if fw_mode == "allowlist":
+        lines.append("        meta l4proto icmp accept")
+        lines.append("        meta l4proto ipv6-icmp accept")
     if hub_ip:
         family = "ip6" if ":" in hub_ip else "ip"
         lines.append(f"        {family} saddr {hub_ip} accept")
     if ssh_ports:
-        lines.append("        tcp dport { " + ", ".join(str(item) for item in ssh_ports) + " } accept")
+        port_expr = ", ".join(str(item) for item in ssh_ports)
+        if not close_ssh:
+            lines.append(f"        tcp dport {{ {port_expr} }} accept")
+        else:
+            for iface in wg_access["interfaces"]:
+                lines.append(f'        iifname "{iface}" tcp dport {{ {port_expr} }} accept')
+            if not wg_access["interfaces"]:
+                for net in wg_access["v4Subnets"]:
+                    lines.append(f"        ip saddr {net} tcp dport {{ {port_expr} }} accept")
+                for net in wg_access["v6Subnets"]:
+                    lines.append(f"        ip6 saddr {net} tcp dport {{ {port_expr} }} accept")
     if wg_ports:
         lines.append("        udp dport { " + ", ".join(str(item) for item in wg_ports) + " } accept")
-    fixed = [port for port in agent_ports if port not in ssh_ports]
+    fixed = list(agent_ports) if close_ssh else [port for port in agent_ports if port not in ssh_ports]
     if fixed:
         lines.append("        tcp dport { " + ", ".join(str(item) for item in fixed) + " } accept")
+    if fw_mode == "allowlist" and app_ports:
+        excluded_tcp = set(agent_ports) | set(ssh_ports)
+        excluded_udp = set(wg_ports)
+        app_tcp = sorted({entry["port"] for entry in app_ports if entry["proto"] == "tcp" and entry["port"] not in excluded_tcp})
+        app_udp = sorted({entry["port"] for entry in app_ports if entry["proto"] == "udp" and entry["port"] not in excluded_udp})
+        if app_tcp:
+            lines.append("        tcp dport { " + ", ".join(str(item) for item in app_tcp) + " } accept")
+        if app_udp:
+            lines.append("        udp dport { " + ", ".join(str(item) for item in app_udp) + " } accept")
     for rule in rules:
-        reason = rule_lockout_reason(rule, protected)
+        reason = rule_lockout_reason(rule, protected, close_public_ssh=close_ssh)
         if reason:  # pragma: no cover - 调用前已拦截
             raise HostError("E_LOCKOUT", reason)
         lines.append("        " + _rule_line(rule))
@@ -1459,8 +1670,13 @@ def build_ruleset(rules: list[dict[str, Any]]) -> str:
 def _fw_state() -> dict[str, Any]:
     value = _load_json_file(_fw_state_path(), default=None)
     if not isinstance(value, dict):
-        return {"rev": "none", "rules": [], "pending": None}
+        return {"rev": "none", "mode": "open", "closePublicSsh": False, "rules": [], "pending": None}
     value.setdefault("rev", "none")
+    if value.get("mode") not in FW_MODES:
+        value["mode"] = "open"
+    value["closePublicSsh"] = bool(value.get("closePublicSsh", False))
+    if value["mode"] != "allowlist":
+        value["closePublicSsh"] = False
     value.setdefault("rules", [])
     value.setdefault("pending", None)
     return value
@@ -1479,20 +1695,38 @@ def _table_present() -> bool:
 def fw_show_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     _require_nft()
     state = _fw_state()
+    mode = state.get("mode", "open")
+    close_public_ssh = bool(state.get("closePublicSsh", False)) and mode == "allowlist"
     protected = protected_ports()
     hub_ip = _hub_wg_ip()
+    app_ports = _managed_app_ports()
+    wg_access = _wg_ssh_access()
+    wg_subnets = [*wg_access["v4Subnets"], *wg_access["v6Subnets"]]
     locked: list[dict[str, Any]] = []
     for port in protected["ssh"]:
+        if close_public_ssh:
+            if wg_access["interfaces"]:
+                ssh_source = ", ".join(wg_access["interfaces"])
+                if wg_subnets:
+                    ssh_source += f" ({', '.join(wg_subnets)})"
+            else:
+                ssh_source = ", ".join(wg_subnets) or hub_ip or "wg"
+            ssh_note = "SSH 管理口（已关闭公网，仅 WireGuard 内网放行）"
+            ssh_lock_reason = "SSH 仅在 WireGuard 内网放行"
+        else:
+            ssh_source = "0.0.0.0/0"
+            ssh_note = "SSH 端口（脚本强制保留）"
+            ssh_lock_reason = "SSH 端口由 khc-host 强制保留"
         locked.append(
             {
                 "id": f"__ssh_{port}",
                 "action": "allow",
                 "proto": "tcp",
                 "port": str(port),
-                "source": "0.0.0.0/0",
-                "note": "SSH 端口（脚本强制保留）",
+                "source": ssh_source,
+                "note": ssh_note,
                 "locked": True,
-                "lockReason": "SSH 端口由 khc-host 强制保留",
+                "lockReason": ssh_lock_reason,
             }
         )
     for port in protected["wg"]:
@@ -1534,6 +1768,26 @@ def fw_show_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
                 "lockReason": "Hub WG IP 流量由 khc-host 强制保留",
             }
         )
+    if mode == "allowlist":
+        covered = {("tcp", port) for port in [*protected["ssh"], *protected["fixed"]]}
+        covered.update(("udp", port) for port in protected["wg"])
+        for entry in app_ports:
+            key = (entry["proto"], entry["port"])
+            if key in covered:
+                continue
+            covered.add(key)
+            locked.append(
+                {
+                    "id": f"__app_{entry['proto']}_{entry['port']}",
+                    "action": "allow",
+                    "proto": entry["proto"],
+                    "port": str(entry["port"]),
+                    "source": "0.0.0.0/0",
+                    "note": f"面板应用自动放行（{entry['app']}）",
+                    "locked": True,
+                    "lockReason": "白名单模式下自动放行面板受管应用端口",
+                }
+            )
     managed = [
         {
             "id": str(rule.get("id")),
@@ -1560,6 +1814,11 @@ def fw_show_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
         {
             "table": FW_TABLE,
             "available": True,
+            "mode": mode,
+            "closePublicSsh": close_public_ssh,
+            "appPorts": app_ports,
+            "wgInterfaces": wg_access["interfaces"],
+            "wgSubnets": wg_subnets,
             "rev": state.get("rev", "none"),
             "baseRev": state.get("rev", "none"),
             "rules": [*locked, *managed],
@@ -1633,11 +1892,11 @@ def _apply_ruleset(ruleset: str) -> tuple[bool, str]:
 
 
 def _parse_fw_rule_line(line: str) -> Optional[tuple[str, str, str, str]]:
-    """一行 nft 规则 -> (saddr, proto, port, verdict)；非规则行返回 None。
+    """一行 nft 规则 -> (scope, proto, port, verdict)；非规则行返回 None。
 
     回读校验专用（走查 #5：apply 后必须比对线上真实规则）。兼容 set 写法
     （``tcp dport { 22, 80 } accept``）与裸写法（``tcp dport 22 accept``）、
-    无端口规则（``meta l4proto udp``）与纯源规则（``ip saddr 10.0.0.1 accept``）。
+    接口限定（``iifname "wg0" tcp dport 22 accept``）、ICMP 与纯源规则。
     """
     text = " ".join(line.split())
     verdict = ""
@@ -1648,23 +1907,35 @@ def _parse_fw_rule_line(line: str) -> Optional[tuple[str, str, str, str]]:
             break
     if not verdict:
         return None
+    iif = ""
+    iif_match = re.search(r'iifname "([^"]+)"', text)
+    if iif_match:
+        iif = iif_match.group(1)
+        text = " ".join((text[: iif_match.start()] + " " + text[iif_match.end():]).split())
     saddr = ""
     match = re.search(r"(?:ip|ip6) saddr (\S+)", text)
     if match:
         saddr = match.group(1)
-        text = (text[: match.start()] + text[match.end():]).strip()
+        text = " ".join((text[: match.start()] + " " + text[match.end():]).split())
+    scope = f"iif:{iif}+{saddr}" if iif and saddr else (f"iif:{iif}" if iif else saddr)
     match = re.search(r"(tcp|udp) dport \{ ?([^{}]+?) ?\}", text)
     if match:
-        port = ",".join(part.strip() for part in match.group(2).split(","))
-        return saddr, match.group(1), port, verdict
+        ports = sorted(
+            (part.strip() for part in match.group(2).split(",") if part.strip()),
+            key=lambda p: (0, int(p)) if p.isdigit() else (1, p),
+        )
+        return scope, match.group(1), ",".join(ports), verdict
     match = re.search(r"(tcp|udp) dport (\S+)", text)
     if match:
-        return saddr, match.group(1), match.group(2), verdict
+        return scope, match.group(1), match.group(2), verdict
     match = re.search(r"meta l4proto (\S+)", text)
     if match:
-        return saddr, match.group(1), "", verdict
+        return scope, match.group(1), "", verdict
+    match = re.search(r"ip protocol (icmp)", text)
+    if match:
+        return scope, match.group(1), "", verdict
     if not text:
-        return saddr, "", "", verdict
+        return scope, "", "", verdict
     return None
 
 
@@ -1672,7 +1943,7 @@ def _fw_readback_issues(ruleset: str) -> list[str]:
     """apply 后回读 ``nft list table`` 实际内容与生成的 ruleset 比对。
 
     返回差异清单（空 = 校验通过）。禁止"面板已应用、线上没生效"的静默假成功
-    （走查 #5）；基线（ct state / lo / policy）用子串校验，用户与保护端口
+    （走查 #5）；基线（ct state / lo / policy）用子串校验，用户、ICMP 与保护端口
     规则用签名集合比对，避免依赖 nft 输出的空格/花括号排版。
     """
     rc, stdout, _ = _run([NFT_BIN, "list", "table", "inet", FW_TABLE], timeout=8)
@@ -1692,15 +1963,23 @@ def _fw_readback_issues(ruleset: str) -> list[str]:
             if not any("ct state" in item and "accept" in item for item in live_lines):
                 issues.append("缺基线规则: ct state established,related accept（已建连接会被新规则拦截）")
             continue
-        if text.startswith("iifname"):
+        if text == 'iifname "lo" accept':
             if not any('"lo"' in item and "accept" in item for item in live_lines):
                 issues.append('缺基线规则: iifname "lo" accept（回环流量会被新规则拦截）')
             continue
         sig = _parse_fw_rule_line(text)
         if sig is not None:
             expected_sigs.add(sig)
-    for saddr, proto, port, verdict in sorted(expected_sigs - live_sigs):
-        where = f"（源 {saddr}）" if saddr else ""
+    for scope, proto, port, verdict in sorted(expected_sigs - live_sigs):
+        if scope.startswith("iif:") and "+" in scope:
+            iface_part, addr_part = scope[4:].split("+", 1)
+            where = f"（接口 {iface_part}，源 {addr_part}）"
+        elif scope.startswith("iif:"):
+            where = f"（接口 {scope[4:]}）"
+        elif scope:
+            where = f"（源 {scope}）"
+        else:
+            where = ""
         if port:
             detail = f"{proto} dport {port}"
         elif proto:
@@ -1708,13 +1987,24 @@ def _fw_readback_issues(ruleset: str) -> list[str]:
         else:
             detail = "全部流量"
         issues.append(f"缺规则: {detail} {verdict}{where}")
-    if not any("policy accept" in item for item in live_lines):
-        issues.append("缺基线: chain input policy accept（链策略不符，默认放行兜底失效）")
+    expected_policy = "drop" if "policy drop;" in ruleset else "accept"
+    if not any(f"policy {expected_policy}" in item for item in live_lines):
+        issues.append(f"缺基线: chain input policy {expected_policy}（链策略不符）")
     return issues
 
 
 def fw_apply_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     _require_nft()
+    state = _fw_state()
+    mode_param = params.get("mode")
+    mode = normalize_fw_mode(state.get("mode", "open") if mode_param is None else mode_param)
+    if "closePublicSsh" in params:
+        close_public_ssh = _bool_param(params, "closePublicSsh", False)
+    else:
+        close_public_ssh = bool(state.get("closePublicSsh", False)) if mode == "allowlist" else False
+    if close_public_ssh and mode != "allowlist":
+        raise HostError("E_BAD_REQUEST", "仅在白名单（allowlist）模式下允许关闭公网 SSH 22 端口")
+
     raw_rules = params.get("rules")
     if isinstance(raw_rules, list):
         # reserved 行（id 以 __ 开头）由脚本自己生成，UI 回传时直接忽略，避免重复/非法 proto。
@@ -1724,12 +2014,11 @@ def fw_apply_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
             if not (isinstance(item, Mapping) and _as_text(item.get("id")).startswith("__"))
         ]
     rules = normalize_rules(raw_rules)
-    protected = _protected_by_proto()
+    protected = _protected_by_proto(include_ssh=not close_public_ssh)
     for rule in rules:
-        reason = rule_lockout_reason(rule, protected)
+        reason = rule_lockout_reason(rule, protected, close_public_ssh=close_public_ssh)
         if reason:
             raise HostError("E_LOCKOUT", f"规则 {rule['id']} {reason}")
-    state = _fw_state()
     base_rev = _as_text(params.get("baseRev"))
     current_rev = str(state.get("rev") or "none")
     if not base_rev:
@@ -1737,7 +2026,7 @@ def fw_apply_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     if base_rev != current_rev:
         raise HostError("E_CONFLICT", "防火墙已被他处修改，请刷新后重试")
 
-    ruleset = build_ruleset(rules)
+    ruleset = build_ruleset(rules, mode=mode, close_public_ssh=close_public_ssh)
     rc, stderr = _apply_ruleset_check(ruleset)
     if rc != 0:
         raise HostError("E_INVALID", f"nft 语法检查失败: {stderr[:300]}")
@@ -1772,10 +2061,12 @@ def fw_apply_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
             + "。旧规则将在 60 秒内自动回滚；请等待回滚完成、在主机执行 nft -c -f 校验或检查 nft 日志后重试。",
         )
 
-    new_rev = rules_rev(rules)
+    new_rev = fw_state_rev(rules, mode=mode, close_public_ssh=close_public_ssh)
     _write_fw_state(
         {
             "rev": new_rev,
+            "mode": mode,
+            "closePublicSsh": close_public_ssh,
             "rules": rules,
             "ruleset": ruleset,
             "pending": {
@@ -1786,7 +2077,16 @@ def fw_apply_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
             },
         }
     )
-    return ok({"token": token, "rev": new_rev, "expiresInSeconds": FW_ROLLBACK_SECONDS, "ruleCount": len(rules)})
+    return ok(
+        {
+            "token": token,
+            "rev": new_rev,
+            "mode": mode,
+            "closePublicSsh": close_public_ssh,
+            "expiresInSeconds": FW_ROLLBACK_SECONDS,
+            "ruleCount": len(rules),
+        }
+    )
 
 
 def _apply_ruleset_check(ruleset: str) -> tuple[int, str]:
@@ -1847,9 +2147,13 @@ def fw_rollback_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, An
             restored_state["rolledBackAt"] = int(time.time())
             _write_fw_state(restored_state)
         else:  # pragma: no cover - 损坏的状态备份
-            _write_fw_state({"rev": "none", "rules": [], "pending": None, "rolledBackAt": int(time.time())})
+            _write_fw_state(
+                {"rev": "none", "mode": "open", "closePublicSsh": False, "rules": [], "pending": None, "rolledBackAt": int(time.time())}
+            )
     else:
-        _write_fw_state({"rev": "none", "rules": [], "pending": None, "rolledBackAt": int(time.time())})
+        _write_fw_state(
+            {"rev": "none", "mode": "open", "closePublicSsh": False, "rules": [], "pending": None, "rolledBackAt": int(time.time())}
+        )
     return ok({"rolledBack": True, "token": token, "restored": restored, "rev": "rolled-back"})
 
 
