@@ -44,6 +44,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from typing import Any, Mapping, Optional
 
 from khc import Adapter, Ctx, File, action_params
@@ -70,6 +71,7 @@ DEFAULT_PORT = 22
 DEFAULT_USER = "khcops"
 SSH_TIMEOUT = 6.0
 PROBE_TIMEOUT = 8.0
+SECURITY_CACHE_TTL = 120.0
 MAX_SSH_STDIN = 64 * 1024
 MAX_SSH_STDOUT = 1024 * 1024
 MANAGED_KEY_PREFIX = "khc-hub"
@@ -357,6 +359,12 @@ class HostOps(Adapter):
     requires_root = True
     description = "主机运维（Hub 本机 + Peer 按需 SSH：进程/防火墙/SSH 公钥）"
     ports: list[Any] = []
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._security_lock = threading.Lock()
+        self._security_cache: Optional[dict[str, Any]] = None
+        self._security_cache_at = 0.0
 
     actions: Mapping[str, Any] = {
         "hub_pubkey": {
@@ -655,7 +663,81 @@ class HostOps(Adapter):
                     ),
                 }
             ],
+            "problems": self._security_problems(ctx),
         }
+
+    def _security_summary(self, ctx: Ctx) -> Optional[dict[str, Any]]:
+        now = time.monotonic()
+        with self._security_lock:
+            if (
+                self._security_cache is not None
+                and (now - self._security_cache_at) < SECURITY_CACHE_TTL
+            ):
+                return self._security_cache
+
+        def _ctx_runner(cmd: list[str], timeout: float = 2) -> tuple[int, str, str]:
+            res = ctx.run(cmd, check=False, timeout=timeout)
+            return res.rc, res.stdout or "", res.stderr or ""
+
+        try:
+            summary = _khc_host_module().collect_security_summary(runner=_ctx_runner)
+        except Exception:  # noqa: BLE001 - 安全摘要不可拖慢或弄挂 /state
+            return None
+
+        with self._security_lock:
+            self._security_cache = summary
+            self._security_cache_at = time.monotonic()
+        return summary
+
+    def _security_problems(self, ctx: Ctx) -> list[dict[str, Any]]:
+        summary = self._security_summary(ctx)
+        if not isinstance(summary, Mapping) or not summary.get("available"):
+            return []
+        level = str(summary.get("level") or "none")
+        if level not in ("warn", "high"):
+            return []
+        ssh = summary.get("ssh")
+        if not isinstance(ssh, Mapping):
+            return []
+        total = int(ssh.get("total") or 0)
+        capped = bool(ssh.get("capped"))
+        handshake = int(ssh.get("handshakeErrors") or 0)
+        auth = int(ssh.get("authFailures") or 0)
+        throttled = int(ssh.get("throttled") or 0)
+        raw_ips = ssh.get("topIps") if isinstance(ssh.get("topIps"), list) else []
+        top_ips_text = ", ".join(
+            f"{item['ip']}({item['count']})"
+            for item in raw_ips
+            if isinstance(item, Mapping) and item.get("ip") and item.get("count") is not None
+        )[:200]
+        count_label = f"{total}+" if capped else str(total)
+        title = (
+            "检测到大量 SSH 暴力扫描（高风险）"
+            if level == "high"
+            else "检测到高频 SSH 扫描或暴力登录"
+        )
+        hint = (
+            f"近 24h 捕获异常约 {count_label} 次（握手断开 {handshake}、认证失败 {auth}、限流 {throttled}）。"
+            "建议到「主机 → 防火墙」启用白名单收口或关闭公网 22 端口（应急可走云厂商 VNC）。"
+        )[:300]
+        return [
+            {
+                "code": "ssh_bruteforce",
+                "severity": "warn",
+                "title": title,
+                "hint": hint,
+                "evidence": {
+                    "windowHours": 24,
+                    "level": level,
+                    "total": total,
+                    "capped": capped,
+                    "handshakeErrors": handshake,
+                    "authFailures": auth,
+                    "throttled": throttled,
+                    "topIps": top_ips_text or "—",
+                },
+            }
+        ]
 
     def _applied_config(self, ctx: Ctx) -> Optional[dict[str, Any]]:
         try:

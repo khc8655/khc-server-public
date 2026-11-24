@@ -62,9 +62,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Mapping, Optional
+from collections import Counter
+from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.5"
+SCRIPT_VERSION = "1.5.6"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -89,6 +90,11 @@ LOGS_ERRORS_MAX_OOM = 20
 LOGS_OOM_SCAN_LINES = 200
 #: 一次 OOM 在内核日志里会产生多行；只把主事件计一条，其余作为上下文附上（GitHub #36）。
 LOGS_OOM_CONTEXT_MAX = 5
+# logs.security：按需统计近 24 小时 sshd 异常/暴力扫描摘要（只读，不落库）。
+LOGS_SECURITY_MAX_LINES = 2000
+LOGS_SECURITY_TOP_IPS = 5
+SSH_BRUTEFORCE_WARN_THRESHOLD = 50
+SSH_BRUTEFORCE_HIGH_THRESHOLD = 500
 
 FW_TABLE = "khc_fw"
 FW_CHAIN = "input"
@@ -159,6 +165,7 @@ PUBLIC_VERBS = (
     "svc.restart",
     "svc.reset-failed",
     "logs.errors",
+    "logs.security",
     "cron.list",
     "cron.set",
     "cleanup",
@@ -2259,6 +2266,144 @@ def logs_errors_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, An
     )
 
 
+_SSH_IP_FROM_RE = re.compile(r"\bfrom\s+\[?([0-9a-fA-F:.]+)\]?(?:\s+port\b|\s|$)")
+_SSH_IP_BY_RE = re.compile(
+    r"\b(?:Connection (?:reset|closed) by|Disconnected from)\s+"
+    r"(?:(?:authenticating|invalid)\s+user\s+\S+\s+)?\[?([0-9a-fA-F:.]+)\]?(?:\s+port\b|\s|$)"
+)
+_SSH_AUTH_FAIL_KEYWORDS = (
+    "Failed password",
+    "Invalid user",
+    "Failed publickey",
+    "maximum authentication attempts exceeded",
+    "Connection closed by authenticating user",
+    "Connection closed by invalid user",
+    "Disconnected from authenticating user",
+    "Disconnected from invalid user",
+)
+
+
+def _extract_ssh_source_ip(line: str) -> Optional[str]:
+    for pattern in (_SSH_IP_BY_RE, _SSH_IP_FROM_RE):
+        match = pattern.search(line)
+        if not match:
+            continue
+        candidate = match.group(1)
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    return None
+
+
+def analyze_ssh_security_lines(lines: Iterable[str]) -> dict[str, Any]:
+    """统计 sshd 扫描/暴力登录异常与 Top IP（只返回汇总计数与合法 IP，不回显原始日志）。"""
+
+    handshake_errors = 0
+    auth_failures = 0
+    throttled = 0
+    scanned_lines = 0
+    ip_counts: Counter[str] = Counter()
+
+    for raw in lines:
+        scanned_lines += 1
+        line = CONTROL_RE.sub(" ", str(raw))
+        # pam_unix 行与紧随其后的 Failed password 等同源，跳过以免重复计数或提取冗余信息。
+        if "pam_unix(" in line:
+            continue
+        matched = False
+        if "kex_exchange_identification" in line:
+            handshake_errors += 1
+            matched = True
+        elif "MaxStartups throttling" in line:
+            throttled += 1
+            matched = True
+        elif any(keyword in line for keyword in _SSH_AUTH_FAIL_KEYWORDS):
+            auth_failures += 1
+            matched = True
+        elif "Connection reset by " in line:
+            # pre-auth 阶段断连的补充日志（如 Connection reset by <ip> port <p>），只补计来源 IP
+            matched = True
+        if matched:
+            ip = _extract_ssh_source_ip(line)
+            if ip is not None:
+                ip_counts[ip] += 1
+
+    total = handshake_errors + auth_failures + throttled
+    if total >= SSH_BRUTEFORCE_HIGH_THRESHOLD:
+        level = "high"
+    elif total >= SSH_BRUTEFORCE_WARN_THRESHOLD:
+        level = "warn"
+    else:
+        level = "none"
+
+    top_ips = [
+        {"ip": ip, "count": count}
+        for ip, count in sorted(ip_counts.items(), key=lambda item: (-item[1], item[0]))[:LOGS_SECURITY_TOP_IPS]
+    ]
+    return {
+        "windowHours": 24,
+        "available": True,
+        "level": level,
+        "ssh": {
+            "total": total,
+            "capped": scanned_lines >= LOGS_SECURITY_MAX_LINES,
+            "handshakeErrors": handshake_errors,
+            "authFailures": auth_failures,
+            "throttled": throttled,
+            "topIps": top_ips,
+        },
+    }
+
+
+def _empty_security_summary(*, available: bool) -> dict[str, Any]:
+    return {
+        "windowHours": 24,
+        "available": available,
+        "level": "none",
+        "ssh": {
+            "total": 0,
+            "capped": False,
+            "handshakeErrors": 0,
+            "authFailures": 0,
+            "throttled": 0,
+            "topIps": [],
+        },
+    }
+
+
+def collect_security_summary(runner=None) -> dict[str, Any]:
+    """按需只读采集近 24 小时 sshd 安全摘要；journalctl 不可用或超时时安全降级。"""
+
+    cmd = [
+        "journalctl",
+        "SYSLOG_IDENTIFIER=sshd",
+        "--since",
+        LOGS_ERRORS_SINCE,
+        "-n",
+        str(LOGS_SECURITY_MAX_LINES),
+        "--no-pager",
+        "-o",
+        "cat",
+    ]
+    try:
+        if runner is not None:
+            rc, stdout, _ = runner(cmd, timeout=2)
+        else:
+            rc, stdout, _ = _run(cmd, timeout=2)
+    except Exception:
+        return _empty_security_summary(available=False)
+    if rc != 0:
+        return _empty_security_summary(available=False)
+    return analyze_ssh_security_lines((stdout or "").splitlines())
+
+
+def logs_security_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    """只读：近 24 小时 sshd 异常/暴力扫描统计摘要与 Top IP（不落库）。"""
+
+    return ok(collect_security_summary())
+
+
 # ---------------------------------------------------------------------------
 # cron.*：/etc/cron.d/khc-* 受控管理（#E2，白名单文件名，写前强制校验）
 # ---------------------------------------------------------------------------
@@ -2682,6 +2827,7 @@ _VERB_HANDLERS = {
     "svc.restart": svc_restart_verb,
     "svc.reset-failed": svc_reset_failed_verb,
     "logs.errors": logs_errors_verb,
+    "logs.security": logs_security_verb,
     "cron.list": cron_list_verb,
     "cron.set": cron_set_verb,
     "cleanup": cleanup_verb,

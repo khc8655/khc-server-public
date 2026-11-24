@@ -1681,6 +1681,64 @@ class AdapterInstallTests(AdapterTestBase):
         self.assertFalse(status["installed"])
         self.assertEqual(status["peers"], {"total": 0, "enabled": 0})
 
+    def test_status_reports_ssh_bruteforce_with_cache_and_graceful_fallback(self) -> None:
+        journal_calls: list[list[str]] = []
+        sample_lines = (
+            [
+                "error: kex_exchange_identification: read: Connection reset by peer",
+                "Connection reset by 198.51.100.10 port 33442",
+                "pam_unix(sshd:auth): authentication failure; logname= uid=0 rhost=203.0.113.5 user=admin",
+                "Failed password for invalid user admin from 203.0.113.5 port 55221 ssh2",
+            ]
+            * 25
+        )
+        stdout_text = "\n".join(sample_lines) + "\n"
+
+        def runner_warn(cmd, **_kwargs):
+            journal_calls.append(list(cmd))
+            return RunResult(cmd=list(cmd), rc=0, stdout=stdout_text, stderr="")
+
+        adapter = HostOps()
+        ctx_warn = Ctx(self.paths, command_runner=runner_warn)
+        first = adapter.status(ctx_warn)
+        second = adapter.status(ctx_warn)
+        self.assertEqual(len(journal_calls), 1, "120s 缓存期内不应重复调 journalctl")
+        self.assertEqual(first["problems"], second["problems"])
+        self.assertEqual(len(first["problems"]), 1)
+        problem = first["problems"][0]
+        self.assertEqual(problem["code"], "ssh_bruteforce")
+        self.assertEqual(problem["severity"], "warn")
+        self.assertIn("50", problem["hint"])
+        self.assertEqual(problem["evidence"]["level"], "warn")
+        self.assertEqual(problem["evidence"]["total"], 50)
+        self.assertEqual(problem["evidence"]["handshakeErrors"], 25)
+        self.assertEqual(problem["evidence"]["authFailures"], 25)
+        self.assertIn("198.51.100.10(25)", problem["evidence"]["topIps"])
+        self.assertNotIn("admin", json.dumps(problem, ensure_ascii=False))
+
+        # 缓存过期后重新采集并可命中 high 级别；失败时安全降级为空列表
+        adapter._security_cache_at -= 121.0
+        high_stdout = "\n".join(
+            ["error: kex_exchange_identification: read: Connection reset by peer"] * 500
+        )
+
+        def runner_high(cmd, **_kwargs):
+            journal_calls.append(list(cmd))
+            return RunResult(cmd=list(cmd), rc=0, stdout=high_stdout, stderr="")
+
+        high_status = adapter.status(Ctx(self.paths, command_runner=runner_high))
+        self.assertEqual(len(journal_calls), 2)
+        self.assertIn("高风险", high_status["problems"][0]["title"])
+        self.assertEqual(high_status["problems"][0]["evidence"]["level"], "high")
+
+        adapter2 = HostOps()
+
+        def runner_fail(cmd, **_kwargs):
+            return RunResult(cmd=list(cmd), rc=1, stdout="", stderr="No journal")
+
+        failed_status = adapter2.status(Ctx(self.paths, command_runner=runner_fail))
+        self.assertEqual(failed_status["problems"], [])
+
 
 # ===========================================================================
 # 适配器：hub_pubkey / probe
@@ -3847,3 +3905,93 @@ class SnapshotProcessOrderTests(ScriptTestBase):
             sleeps,
             "无缓存基线时必须用约定的基线等待",
         )
+
+    # -- logs.security -------------------------------------------------------
+    def test_analyze_ssh_security_lines_counts_top_ips_and_thresholds(self) -> None:
+        # pam_unix 与后续 Failed password 同源不重复计数；用户名与敏感词不回显
+        below = [
+            "error: kex_exchange_identification: read: Connection reset by peer",
+            "Connection reset by 198.51.100.1 port 10001",
+            "pam_unix(sshd:auth): authentication failure; logname= uid=0 rhost=2001:db8::2 user=secretuser",
+            "Failed password for invalid user secretuser from 2001:db8::2 port 2222 ssh2",
+            "Failed password for invalid user other from not-an-ip port 2222 ssh2",
+            "Invalid user root from 203.0.113.9 port 3333",
+            "error: beginning MaxStartups throttling",
+        ]
+        # 共 1 + 1 + 1 + 1 + 1 = 5 (< 50 -> none)
+        res_none = HOST_SCRIPT.analyze_ssh_security_lines(below)
+        self.assertEqual(res_none["level"], "none")
+        self.assertEqual(res_none["ssh"]["total"], 5)
+        self.assertEqual(res_none["ssh"]["handshakeErrors"], 1)
+        self.assertEqual(res_none["ssh"]["authFailures"], 3)
+        self.assertEqual(res_none["ssh"]["throttled"], 1)
+        self.assertEqual(res_none["ssh"]["capped"], False)
+        self.assertNotIn("secretuser", json.dumps(res_none))
+        ips = {item["ip"]: item["count"] for item in res_none["ssh"]["topIps"]}
+        self.assertEqual(ips, {"198.51.100.1": 1, "2001:db8::2": 1, "203.0.113.9": 1})
+
+        # 边界值：49 -> none；50 -> warn；500 -> high；2000 行 -> capped=True
+        self.assertEqual(
+            HOST_SCRIPT.analyze_ssh_security_lines(
+                ["Failed password for ubuntu from 198.51.100.2 port 1000 ssh2"] * 49
+            )["level"],
+            "none",
+        )
+        self.assertEqual(
+            HOST_SCRIPT.analyze_ssh_security_lines(
+                ["Failed password for ubuntu from 198.51.100.2 port 1000 ssh2"] * 50
+            )["level"],
+            "warn",
+        )
+        res_high = HOST_SCRIPT.analyze_ssh_security_lines(
+            ["error: beginning MaxStartups throttling"] * 500
+        )
+        self.assertEqual(res_high["level"], "high")
+        self.assertFalse(res_high["ssh"]["capped"])
+
+        # Top 5 排序截取 + 2000 行上限 capped=True
+        many = []
+        for idx in range(7):
+            many.extend(
+                [f"Connection closed by authenticating user x 198.51.100.{idx + 1} port 4444 [preauth]"]
+                * (10 + idx)
+            )
+        many.extend(["unrelated sshd noise line"] * (2000 - len(many)))
+        res_capped = HOST_SCRIPT.analyze_ssh_security_lines(many)
+        self.assertTrue(res_capped["ssh"]["capped"])
+        self.assertEqual(len(res_capped["ssh"]["topIps"]), 5)
+        self.assertEqual(res_capped["ssh"]["topIps"][0], {"ip": "198.51.100.7", "count": 16})
+
+    def test_logs_security_verb_is_readonly_and_handles_journalctl_failure(self) -> None:
+        self.assertIn("logs.security", HOST_SCRIPT.PUBLIC_VERBS)
+        self.assertNotIn("logs.security", HOST_SCRIPT.WRITE_VERBS)
+        self.assertIn("logs.security", ADAPTER_MODULE.peer_allowed_verbs(HOST_SCRIPT))
+
+        lines = "\n".join(
+            [
+                "error: kex_exchange_identification: read: Connection reset by peer",
+                "Connection reset by 198.51.100.88 port 50000",
+            ]
+            * 25
+        )
+        self.runner.on("journalctl", lambda argv, input_text: (0, lines, ""))
+        res = self.run_verb("logs.security")
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["data"]["available"])
+        self.assertEqual(res["data"]["ssh"]["handshakeErrors"], 25)
+        self.assertEqual(res["data"]["ssh"]["topIps"], [{"ip": "198.51.100.88", "count": 25}])
+        j_cmd = self.runner.commands("journalctl")[-1]
+        self.assertIn("SYSLOG_IDENTIFIER=sshd", j_cmd)
+        self.assertIn("2000", j_cmd)
+
+        # non-root 也可调用只读动词；journalctl 失败时安全降级 available=False
+        self.runner.on("journalctl", lambda argv, input_text: (1, "", "journal unavailable"))
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        try:
+            fail_res = self.run_verb("logs.security")
+        finally:
+            HOST_SCRIPT.ROOT_OVERRIDE = True
+        self.assertTrue(fail_res["ok"])
+        self.assertFalse(fail_res["data"]["available"])
+        self.assertEqual(fail_res["data"]["level"], "none")
+        self.assertEqual(fail_res["data"]["ssh"]["total"], 0)

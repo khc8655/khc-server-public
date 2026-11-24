@@ -1,6 +1,6 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：现行 ｜ 最后核验：2026-11-24 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
 > 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
@@ -95,6 +95,7 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `svc.restart` | 写 | `{ unit, user? }` | 受保护单元拒绝；带 `user`（仅限 `khc-app-*`）时通过 `runuser` 调 `systemctl --user restart`；重启后回读 `is-active` |
 | `svc.reset-failed` | 写 | `{ unit, user? }` | `systemctl [--user] reset-failed`：只清失败标记，不启动也不改配置；受保护单元与 `user` 白名单规则同 `svc.restart`；回读 `stillFailed`。**仅 Hub 自身可用**，不在 `PEER_SAFE_WRITE_VERBS` |
 | `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；一次 OOM 只算一条（附 ≤ 5 行上下文），返回时间、级别、脱敏后文本与条数；Peer 可读 |
+| `logs.security` | 读 | — | 按需只读统计近 24 小时 `sshd` 爆破/握手失败/限流次数（扫描上限 2000 行、超时 2s）与 Top 5 合法源 IP（不回显用户名/原始日志），达到 ≥50 / ≥500 次由 `/state` 120s 缓存上报诊断问题，不落 D1 |
 | `fw.show` | 读 | — | 只返回本系统管理的规则与 `table inet khc_fw` 状态；不再读取其他 nft 表或 iptables |
 | `fw.apply` | 写 | `{ rules, baseRev }` | 见 §5 |
 | `fw.confirm` | 写 | `{ token }` | 取消 60 秒回滚定时器 |
