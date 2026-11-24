@@ -3,7 +3,7 @@
 设计边界（docs/design-v3.md §2.4）：
 
 - **仅 root / system profile**：user profile 直接拒绝，不做降级。
-- **白名单固定**：``caddy`` / ``wireguard-tools`` / ``socat``，其余包名一律拒绝。
+- **白名单固定**：``caddy`` / ``wireguard-tools`` / ``socat`` / ``nftables``，其余包名一律拒绝。
 - **自动识别包管理器**：apt-get / dnf / yum / apk；找不到就明确报错。
 - **命令不经 shell 拼接**：全部是 argv 列表，经 ``ctx.run()`` 执行（可注入 mock）。
 - **跳出 Agent 沙箱**：unit 是 ``ProtectSystem=full``，包管理器写不了 ``/usr``；
@@ -27,13 +27,14 @@ if TYPE_CHECKING:  # pragma: no cover - 只用于类型
     from .adapters import Ctx, RunResult
 
 #: 白名单固定，不接受调用方扩展。
-ALLOWED_PACKAGES = ("caddy", "wireguard-tools", "socat")
+ALLOWED_PACKAGES = ("caddy", "wireguard-tools", "socat", "nftables")
 
 #: 包 -> 用于确认安装成功的二进制（任一存在即视为装好）。
 PACKAGE_BINARIES: dict[str, tuple[str, ...]] = {
     "caddy": ("caddy",),
     "wireguard-tools": ("wg", "wg-quick"),
     "socat": ("socat",),
+    "nftables": ("nft",),
 }
 
 #: 探测/安装超时（秒）。

@@ -93,6 +93,12 @@ let requests: { url: string; init?: RequestInit }[] = [];
 type LogsErrorsMode = 'data' | 'empty' | 'error' | 'loading';
 let logsErrorsMode: LogsErrorsMode = 'data';
 let logsErrorsHold: ((response: Response) => void) | null = null;
+let versionNft = true;
+let versionNftInstallable = false;
+let versionNftReason: string | null = null;
+let fwShowUnsupported = false;
+let fwModeState: 'open' | 'allowlist' = 'open';
+let fwClosePublicSshState = false;
 
 const logsErrorsPayload = {
   windowHours: 24,
@@ -237,6 +243,24 @@ function mockApi() {
       if (url.endsWith('/apps/host-ops/hub_pubkey')) {
         return json({ ok: true, publicKey: 'ssh-ed25519 HUBKEY', fingerprint: 'SHA256:hubkey' });
       }
+      if (url.endsWith('/apps/host-ops/install_nftables')) {
+        return json({ ok: true, taskId: 'task-nft' });
+      }
+      if (url === '/api/v1/nodes/tyo-1/tasks/task-nft') {
+        versionNft = true;
+        versionNftInstallable = false;
+        versionNftReason = null;
+        fwShowUnsupported = false;
+        return json({
+          ok: true,
+          task: {
+            id: 'task-nft',
+            state: 'done',
+            result: { ok: true, installed: true, manager: 'apt-get', nftVersion: 'nftables v1.0.9' },
+            error: null,
+          },
+        });
+      }
       if (url.endsWith('/apps/host-ops/call_task')) {
         return json({ ok: true, taskId: 'task-1' });
       }
@@ -284,7 +308,18 @@ function mockApi() {
           return json({ ok: true, data: logsErrorsPayload });
         }
         if (verb === 'version') {
-          return json({ ok: true, v: '1.4.0', data: { version: '1.4.0', python: '3.11', root: true, nft: true } });
+          return json({
+            ok: true,
+            v: '1.6.0',
+            data: {
+              version: '1.6.0',
+              python: '3.11',
+              root: true,
+              nft: versionNft,
+              nftInstallable: versionNftInstallable,
+              nftUnavailableReason: versionNftReason,
+            },
+          });
         }
         if (verb === 'snapshot') {
           return json({
@@ -331,10 +366,24 @@ function mockApi() {
           });
         }
         if (verb === 'fw.show') {
+          if (fwShowUnsupported) {
+            return json({
+              ok: false,
+              error: { code: 'E_UNSUPPORTED', message: '本机没有 nftables（nft），防火墙功能不可用' },
+            });
+          }
           return json({
             ok: true,
             data: {
               baseRev: 'fw-rev-1',
+              mode: fwModeState,
+              closePublicSsh: fwClosePublicSshState,
+              appPorts: [
+                { app: 'caddy-site', proto: 'tcp', port: 443 },
+                { app: 'port-forward', proto: 'tcp', port: 9000 },
+              ],
+              wgInterfaces: ['wg0'],
+              wgSubnets: ['10.99.0.0/24'],
               rules: [
                 { id: '__ssh_22', action: 'allow', proto: 'tcp', port: '22', source: '0.0.0.0/0', note: 'SSH', locked: true },
                 { id: 'r2', action: 'allow', proto: 'tcp', port: '443', source: '0.0.0.0/0', note: 'web' },
@@ -419,6 +468,12 @@ beforeEach(() => {
   removedManagedKey = false;
   systemUnitFailed = false;
   userAppServiceIncluded = false;
+  versionNft = true;
+  versionNftInstallable = false;
+  versionNftReason = null;
+  fwShowUnsupported = false;
+  fwModeState = 'open';
+  fwClosePublicSshState = false;
   mockApi();
 });
 
@@ -873,5 +928,82 @@ describe('防火墙加载的并发', () => {
 
     expect(versionResolved).toBe(true);
     expect(showSentBeforeVersionResolved).toBe(true);
+  });
+});
+
+describe('防火墙 nftables 一键安装与白名单模式（批次 2/3）', () => {
+  it('缺 nftables 包时只渲染单个提示横幅，并支持 L2 一键安装后自动刷新', async () => {
+    versionNft = false;
+    versionNftInstallable = true;
+    versionNftReason = 'missing_pkg';
+    fwShowUnsupported = true;
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '防火墙' }));
+
+    expect(await screen.findByText('该主机尚未安装 nftables，防火墙功能暂不可用')).toBeTruthy();
+    // 去重：不再同时渲染冗余的 E_UNSUPPORTED 红色错误横幅与「查看详情」按钮
+    expect(screen.queryByText('该主机不支持 nftables，防火墙功能不可用。')).toBeNull();
+    expect(screen.queryByRole('button', { name: '查看详情' })).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: '一键安装 nftables' }));
+    const confirmDialog = await screen.findByRole('dialog');
+    expect(within(confirmDialog).getByText('安装 nftables？')).toBeTruthy();
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: '立即安装' }));
+
+    expect(await screen.findByText('web')).toBeTruthy();
+    expect(requests.some((item) => item.url.endsWith('/apps/host-ops/install_nftables'))).toBe(true);
+    expect(requests.some((item) => item.url.includes('/tasks/task-nft'))).toBe(true);
+  });
+
+  it('内核不支持 nf_tables 时仅提示不可用，不显示安装按钮', async () => {
+    versionNft = false;
+    versionNftInstallable = false;
+    versionNftReason = 'no_kernel';
+    fwShowUnsupported = true;
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '防火墙' }));
+
+    expect(await screen.findByText('当前主机内核不支持 nftables')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '一键安装 nftables' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '查看详情' })).toBeNull();
+  });
+
+  it('切换「仅开面板应用」并关闭公网 SSH 22 时，要求 L3 强确认（节点名 + VNC 勾选）并下发模式参数', async () => {
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '防火墙' }));
+    expect(await screen.findByText('web')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '仅开面板应用' }));
+    expect(await screen.findByText('TCP/443 · caddy-site')).toBeTruthy();
+    expect(screen.getByText('TCP/9000 · port-forward')).toBeTruthy();
+
+    await userEvent.click(screen.getByLabelText(/关闭公网 SSH 22 端口/));
+    await userEvent.click(screen.getByRole('button', { name: '应用' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('关闭节点 tyo-1 的公网 SSH 22 端口？')).toBeTruthy();
+    const confirmBtn = within(dialog).getByRole('button', { name: '确认应用并关闭公网 SSH' });
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(true);
+
+    const nameInput = within(dialog).getByLabelText('输入节点名 tyo-1 以确认关闭公网 SSH');
+    await userEvent.type(nameInput, 'tyo-1');
+    // 未勾选 VNC 可用确认时仍禁用
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.click(within(dialog).getByLabelText(/我已确认云厂商 VNC 控制台可用/));
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(confirmBtn);
+
+    expect(await screen.findByText(/请在 \d+ 秒内确认连接/)).toBeTruthy();
+    const applyReq = requests.find((item) => item.url.endsWith('/apps/host-ops/call_task'));
+    expect(applyReq).toBeTruthy();
+    const sent = JSON.parse(String(applyReq?.init?.body)) as {
+      params: { verb: string; params: { mode: string; closePublicSsh: boolean } };
+    };
+    expect(sent.params.verb).toBe('fw.apply');
+    expect(sent.params.params.mode).toBe('allowlist');
+    expect(sent.params.params.closePublicSsh).toBe(true);
   });
 });

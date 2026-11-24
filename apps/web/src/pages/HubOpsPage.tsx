@@ -483,6 +483,7 @@ export default function HubOpsPage() {
       {segment === 'firewall' ? (
         <FirewallSegment
           fw={fw}
+          hubName={hubName}
           disabled={opsDisabled}
           onOpenEdit={() => setDrawer({ kind: 'fw-edit' })}
         />

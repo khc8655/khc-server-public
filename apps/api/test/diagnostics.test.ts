@@ -791,6 +791,59 @@ describe('诊断 API 路由', () => {
     expect(check?.actions).toHaveLength(1);
   });
 
+  it('host-ops 上报 ssh_bruteforce 时只调 /state 一次且不写 D1/audit 即可透出诊断', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+    const state = okState();
+    state.adapters = [
+      adapterState('host-ops', {
+        problems: [
+          {
+            code: 'ssh_bruteforce',
+            severity: 'warn',
+            title: '检测到大量 SSH 暴力扫描（高风险）',
+            hint: '近 24h 捕获异常约 600+ 次，建议开启防火墙白名单收口或关闭公网 22 端口。',
+            evidence: {
+              windowHours: 24,
+              level: 'high',
+              total: 600,
+              capped: true,
+              handshakeErrors: 520,
+              authFailures: 75,
+              throttled: 5,
+              topIps: '198.51.100.10(420), 203.0.113.5(180)',
+            },
+          },
+        ],
+      }),
+    ];
+    ctx.agent.handler = async () => ({ status: 200, body: state });
+    ctx.audit.entries.length = 0;
+    const updateSpy = vi.spyOn(ctx.nodes, 'update');
+    const auditSpy = vi.spyOn(ctx.audit, 'log');
+
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${id}/diagnostics`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { checks: DiagnosticCheck[] };
+    expect(nodeDiagnosticsResponseSchema.safeParse(body).success).toBe(true);
+    const check = body.checks.find((item) => item.code === 'khc.host-ops.ssh_bruteforce');
+    expect(check).toMatchObject({
+      severity: 'warn',
+      app: 'host-ops',
+      title: '检测到大量 SSH 暴力扫描（高风险）',
+    });
+    expect(ctx.agent.requests).toHaveLength(1);
+    expect(ctx.agent.requests[0]?.path).toBe('/state');
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+    expect(ctx.audit.entries).toHaveLength(0);
+  });
+
   it('节点不可达：200 + reachable:false，且 ≤4s', async () => {
     const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);

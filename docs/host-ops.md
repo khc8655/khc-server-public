@@ -1,6 +1,6 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：现行 ｜ 最后核验：2026-11-24 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
 > 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
@@ -87,7 +87,7 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 
 | 动词 | 读/写 | 参数 | 说明 |
 |---|---|---|---|
-| `version` | 读 | — | 脚本版本、Python 版本、是否有 root、nft 是否可用 |
+| `version` | 读 | — | 脚本版本、Python 版本、root、nft 可用性及缺包可装能力（`nftInstallable` / `nftUnavailableReason`） |
 | `status` | 读 | — | 与 `/state.ops` 同构（`agentOpsSchema`），前端直接复用 #007 卡片 |
 | `processes` | 读 | `{ sort: "cpu"\|"mem", limit≤200 }` | pid、ppid、user、startTime、cpu、mem、cmdline（截断 512 字符）；CPU% 为同请求内两次采样（间隔 0.5 秒）求差，先对全部进程采样、排序后再截 Top N；面板默认只取 Top 20 |
 | `svc.list` | 读 | — | 只返回系统级 failed + 面板受管单元（`caddy` / `khc-*` / `wg-quick@*`），以及 `khc-app-*` 应用用户的 `systemd --user` 受管/失败单元（附 `scope="user"` 与 `user`） |
@@ -95,8 +95,9 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `svc.restart` | 写 | `{ unit, user? }` | 受保护单元拒绝；带 `user`（仅限 `khc-app-*`）时通过 `runuser` 调 `systemctl --user restart`；重启后回读 `is-active` |
 | `svc.reset-failed` | 写 | `{ unit, user? }` | `systemctl [--user] reset-failed`：只清失败标记，不启动也不改配置；受保护单元与 `user` 白名单规则同 `svc.restart`；回读 `stillFailed`。**仅 Hub 自身可用**，不在 `PEER_SAFE_WRITE_VERBS` |
 | `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；一次 OOM 只算一条（附 ≤ 5 行上下文），返回时间、级别、脱敏后文本与条数；Peer 可读 |
-| `fw.show` | 读 | — | 只返回本系统管理的规则与 `table inet khc_fw` 状态；不再读取其他 nft 表或 iptables |
-| `fw.apply` | 写 | `{ rules, baseRev }` | 见 §5 |
+| `logs.security` | 读 | — | 按需只读统计近 24 小时 `sshd` 爆破/握手失败/限流次数（扫描上限 2000 行、超时 2s）与 Top 5 合法源 IP（不回显用户名/原始日志），达到 ≥50 / ≥500 次由 `/state` 120s 缓存上报诊断问题，不落 D1 |
+| `fw.show` | 读 | — | 返回 `table inet khc_fw` 规则、当前模式（`open` / `allowlist`）、`closePublicSsh`、面板受管应用端口与 WireGuard 内网接口信息 |
+| `fw.apply` | 写 | `{ rules, mode?, closePublicSsh?, baseRev }` | 见 §5（含 60 秒未确认自动回滚） |
 | `fw.confirm` | 写 | `{ token }` | 取消 60 秒回滚定时器 |
 | `keys.list` | 读 | `{ user? }` | 目标用户 authorized_keys 的指纹、类型、注释、是否本系统管理 |
 | `keys.add` | 写 | `{ user?, publicKey, label }` | 只写进标记块 |
@@ -134,9 +135,11 @@ Peer 放行 `PUBLIC_VERBS` 中除 `WRITE_VERBS` 外的全部只读动词（含 `
 
 ### 5.1 管理边界
 
-- **只管理自己的表 `table inet khc_fw`**（`input` 链，`priority filter - 5`，链默认策略 accept），其他表/iptables 规则**不再读取展示**，也绝不修改。
+- **只管理自己的表 `table inet khc_fw`**（`input` 链，`priority filter - 5`），支持 `open`（`policy accept`，默认兼容）与 `allowlist`（「仅开面板应用」，`policy drop`）两种模式；其他表/iptables 规则不再修改。
+- **allowlist 模式自动放行**：回环 `lo`、`ct state established,related`、ICMP/ICMPv6、来自 Hub WG IP 流量、`agent` 实测监听端口、WireGuard 端口以及 Agent `ports.json` 登记的面板应用端口，并在提交后通过回读校验验证 `policy drop`。
+- **关闭公网 SSH 22（仅 Hub `self` 的 `allowlist` 模式可选）**：移除公网 SSH 22 全局放行，同时按 `/etc/wireguard/*.conf` 自动保留 WireGuard 内网接口/网段 SSH 访问；面板侧要求 L3 强确认（节点名 + VNC 控制台可用勾选），仍保留 60 秒未确认自动回滚。
 - 语义写清楚：本表里的 `drop` 会生效；本表里的 `accept` **不能**放行被其他表拦截的流量（界面上明确提示）。
-- 一期只支持 nftables；检测不到 `nft` 时 `fw.*` 返回 `E_UNSUPPORTED`，其他功能照常。
+- 检测不到 `nft` 时 `fw.*` 返回 `E_UNSUPPORTED`；当内核支持 `nf_tables` 且运行在 Hub `root` 下仅缺系统包时，面板提示去重横幅并允许经 L2 确认调用 `install_nftables`（仅 Hub `self`）安装，其他功能照常。
 
 ### 5.2 规则模型
 
@@ -217,6 +220,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 | `hub_pubkey` | sync 读 | Hub 运维公钥 |
 | `probe` | sync 读 | `ssh-keyscan` 取 Peer 主机密钥指纹，供首次接入时人工核对 |
 | `call` | sync，读/写由动词决定 | `{ target: "self" \| "<peerId>", verb, params }`；写动词记审计（target、verb、参数摘要、结果） |
+| `install_nftables` | task 写（仅 Hub `self`） | 固定白名单调用 `khc.pkg.ensure_packages(["nftables"])` 安装系统包，不接受外部包名参数；Peer 目标返回 `E_PEER_FORBIDDEN` |
 
 ## 8. 错误码
 

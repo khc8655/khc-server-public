@@ -50,7 +50,32 @@ describe('host-ops 配置与结果规范化', () => {
   it('version / status 结果兼容顶层与嵌套 ops', () => {
     expect(
       normalizeVersion({ version: '1.2.0', python: '3.11', root: true, nft: false }),
-    ).toEqual({ version: '1.2.0', python: '3.11', root: true, nft: false });
+    ).toEqual({
+      version: '1.2.0',
+      python: '3.11',
+      root: true,
+      nft: false,
+      nftInstallable: null,
+      nftUnavailableReason: null,
+    });
+
+    expect(
+      normalizeVersion({
+        version: '1.6.0',
+        python: '3.12',
+        root: true,
+        nft: false,
+        nftInstallable: true,
+        nftUnavailableReason: 'missing_pkg',
+      }),
+    ).toEqual({
+      version: '1.6.0',
+      python: '3.12',
+      root: true,
+      nft: false,
+      nftInstallable: true,
+      nftUnavailableReason: 'missing_pkg',
+    });
 
     const status = normalizeStatus({
       hostname: 'peer-1',
@@ -102,10 +127,27 @@ describe('host-ops 配置与结果规范化', () => {
       other: ['table ip filter { }'],
     });
     expect(firewall.baseRev).toBe('rev-1');
+    expect(firewall.mode).toBe('open');
+    expect(firewall.closePublicSsh).toBe(false);
     expect(firewall.rules[0]).toMatchObject({ action: 'allow', locked: true });
     expect(firewall.rules[1]).toMatchObject({ action: 'deny', port: '53', note: 'dns' });
     expect(firewall.other).toEqual(['table ip filter { }']);
     expect(firewall.pending).toEqual({ token: 'tok', secondsLeft: 42 });
+
+    const lockdown = normalizeFirewallShow({
+      baseRev: 'rev-2',
+      mode: 'allowlist',
+      closePublicSsh: true,
+      appPorts: [{ app: 'caddy-site', proto: 'tcp', port: 443 }],
+      wgInterfaces: ['wg0'],
+      wgSubnets: ['10.8.0.0/24'],
+      rules: [],
+    });
+    expect(lockdown.mode).toBe('allowlist');
+    expect(lockdown.closePublicSsh).toBe(true);
+    expect(lockdown.appPorts).toEqual([{ app: 'caddy-site', proto: 'tcp', port: 443 }]);
+    expect(lockdown.wgInterfaces).toEqual(['wg0']);
+    expect(lockdown.wgSubnets).toEqual(['10.8.0.0/24']);
   });
 
   it('SSH 公钥识别 Hub 运维公钥与不可移除', () => {
