@@ -26,6 +26,7 @@ from khc.app_manifests import (
     manifest_capabilities,
     manifest_installed,
     manifest_preflight,
+    read_manifest_access,
     read_manifest_logs,
     run_manifest,
 )
@@ -60,6 +61,7 @@ class AppCatalog(Adapter):
         "manifest_uninstall": {"mode": "task", "write": True, "description": "卸载应用清单（后台任务）"},
         "manifest_control": {"mode": "sync", "write": True, "description": "启停或重启声明的 systemd unit"},
         "manifest_logs": {"mode": "sync", "write": False, "description": "查看声明的 systemd unit 日志"},
+        "manifest_access": {"mode": "sync", "write": False, "description": "按需读取已安装应用的访问凭据卡片"},
         "manifest_installed": {"mode": "sync", "write": False, "description": "查看已安装清单与单元/健康状态"},
     }
 
@@ -179,6 +181,15 @@ class AppCatalog(Adapter):
             lines=params.get("lines"),
             manifest=params.get("manifest"),
             values=dict(values) if values is not None else None,
+        )
+
+    def action_manifest_access(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
+        params = action_params(body)
+        manifest_id = self._manifest_id(params)
+        return read_manifest_access(
+            ctx,
+            manifest_id=manifest_id,
+            instance=self._opt_str(params, "instance"),
         )
 
     def action_manifest_installed(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:

@@ -1009,4 +1009,55 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
       expect(((await other.json()) as { error: { code: string } }).error.code).toBe('template_missing_var');
     });
   });
+
+  it('manifest_access 同步动作免 hook/预检直转节点并归一化顶层 cards', async () => {
+    const hookFetch = vi.fn() as unknown as typeof fetch;
+    const ctx = makeV2AppContext({ hookFetch });
+    const cookie = await loginAsAdmin(ctx as never);
+    const { id: nodeId } = await createNode(ctx as never, cookie);
+    await ctx.appManifests.create({
+      id: 'demo-access',
+      enabled: true,
+      manifest: v2Manifest({
+        hooks: { preInstall: { method: 'POST', url: 'https://hub.example.com/hook' } },
+      }),
+    });
+
+    ctx.agent.handler = async (_m, path) => {
+      if (path.endsWith('/manifest_access')) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            manifestId: 'demo-access',
+            instance: 'demo-access',
+            cards: [
+              { title: 'Web 登录 Key', value: 'sec_abc123', kind: 'secret', copy: true },
+            ],
+          },
+        };
+      }
+      return { status: 200, body: { ok: true } };
+    };
+
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/manifest_access`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ params: { manifestId: 'demo-access' } }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      result?: { cards?: Array<{ title: string; value: string; kind: string }> };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.result?.cards).toEqual([
+      { title: 'Web 登录 Key', value: 'sec_abc123', kind: 'secret', copy: true },
+    ]);
+    expect(hookFetch).not.toHaveBeenCalled();
+  });
 });

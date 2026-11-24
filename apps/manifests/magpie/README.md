@@ -24,7 +24,7 @@ Caddy 反代由主人在面板里「发布本机端口」自行发布，脚本�
 - 网关与 Web 页**都只绑 `127.0.0.1`**（脚本里写死 `MAGPIE_ADDR=127.0.0.1:<port>` 和 `serve --web=127.0.0.1:<web_port>`），不暴露公网。
 - Web 页用 `MAGPIE_WEB_KEY` 保护：无 key 返回 401，带 key 303 跳转并种下长期 cookie（官方说 400 天）。
 - **登录链接里的 `?k=` 就是凭据**。如果通过 Caddy 发到公网，建议 Caddy 侧自己做访问控制，或至少不要外链传播该 URL。
-- 用固定版本 `v0.1.4265` 的官方 CLI 二进制 + 固定 sha256，**不跑官方 `install.sh`**，因此不会自更新；升级版本需改脚本里的 `VER` 和 `SHA` 并重新计算 `manifest.json` 的 `sha256`。
+- 默认从 GitHub Releases 拉取官方 `latest` CLI 二进制（**不跑官方 `install.sh`**，不启用自更新），也可通过 `version` 参数锁定指定版本。
 
 ## 参数
 
@@ -34,12 +34,13 @@ Caddy 反代由主人在面板里「发布本机端口」自行发布，脚本�
 | `web_port` | integer | 3430 | Web 管理页端口，也是 Caddy 反代目标 |
 | `public_url` | string | 空 | `derive: endpoint:web.publicUrl`，由面板按发布地址推导，不在表单里填；用于生成登录链接 |
 | `web_key` | string | 空 | Web 登录 key，留空自动生成并持久化 |
+| `version` | string | 空 | 目标版本（留空默认 `latest` 最新版） |
 
 ## 文件布局（节点上）
 
 ```
 /var/lib/khc-apps/home/<runtime.user>/
-  bin/magpie-0.1.4265                     # 校验过的官方 CLI
+  bin/magpie                              # 官方 CLI 二进制
   .config/khc-magpie-<instance>.web.key   # 0600，登录 key
   .config/systemd/user/khc-magpie-<instance>.service
   .local/{data,state,cache}               # magpie 配置与数据

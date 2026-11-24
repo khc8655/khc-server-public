@@ -164,6 +164,8 @@ export const zh = {
     'appManifest.update': '编辑应用',
     'appManifest.delete': '删除应用',
     'app.installPublish': '安装并发布应用',
+    'app.manage': '服务与凭据',
+    'app.publishSite': '对外发布',
     'site.create': '添加站点',
     'site.update': '编辑',
     'site.delete': '删除站点',

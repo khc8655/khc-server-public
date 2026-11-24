@@ -1,6 +1,7 @@
 {
   "instance": "default",
   "home": [
+    "bin/magpie",
     "bin/magpie-0.1.4265",
     ".config/khc-magpie-default.web.key",
     ".config/systemd/user/khc-magpie-default.service",

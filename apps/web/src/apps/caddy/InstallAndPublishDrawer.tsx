@@ -34,6 +34,7 @@ import {
 import { refreshHubRuntime } from '../../data/queries';
 import { publishProxySite, type CaddySite } from '../../data/sites';
 import { paths } from '../../registry/routes';
+import { AdvancedSection } from '../../patterns';
 import { formatExpiry } from '../../i18n/format';
 import { fmt, zh } from '../../i18n/zh';
 import {
@@ -818,46 +819,6 @@ export function InstallAndPublishDrawer({
               }
             >
               <Stack gap={3}>
-                <Field
-                  id="wizard-app-runtime"
-                  label={zh.catalog.runtimeLabel}
-                  help={runtimeMode === 'create' ? zh.catalog.runtimeCreateHelp : undefined}
-                >
-                  <Select
-                    id="wizard-app-runtime"
-                    value={runtimeMode}
-                    options={[
-                      { value: 'create', label: zh.catalog.runtimeCreate },
-                      { value: 'root', label: zh.catalog.runtimeRoot },
-                    ]}
-                    onChange={(value) => setRuntimeMode(value as AppRuntimeMode)}
-                    ariaLabel={zh.catalog.runtimeLabel}
-                  />
-                </Field>
-                {runtimeMode === 'create' ? (
-                  <Field
-                    id="wizard-app-user"
-                    label={zh.catalog.runtimeUserLabel}
-                    error={!runtimeUser.trim() ? '请填写运行用户名' : undefined}
-                    required
-                  >
-                    <TextInput
-                      id="wizard-app-user"
-                      value={runtimeUser}
-                      mono
-                      autoComplete="off"
-                      placeholder="khc-app-demo"
-                      onChange={setRuntimeUser}
-                    />
-                  </Field>
-                ) : (
-                  <Banner
-                    tone="warn"
-                    title={zh.catalog.runtimeRootWarnTitle}
-                    description={zh.catalog.runtimeRootWarnDesc}
-                  />
-                )}
-
                 {selectedApp.def.params
                   .filter((param) => !param.derive)
                   .map((param) => {
@@ -1013,6 +974,50 @@ export function InstallAndPublishDrawer({
                       })}
                     />
                   ))}
+
+                <AdvancedSection title={zh.common.advancedSection}>
+                  <Stack gap={3}>
+                    <Field
+                      id="wizard-app-runtime"
+                      label={zh.catalog.runtimeLabel}
+                      help={runtimeMode === 'create' ? zh.catalog.runtimeCreateHelp : undefined}
+                    >
+                      <Select
+                        id="wizard-app-runtime"
+                        value={runtimeMode}
+                        options={[
+                          { value: 'create', label: zh.catalog.runtimeCreate },
+                          { value: 'root', label: zh.catalog.runtimeRoot },
+                        ]}
+                        onChange={(value) => setRuntimeMode(value as AppRuntimeMode)}
+                        ariaLabel={zh.catalog.runtimeLabel}
+                      />
+                    </Field>
+                    {runtimeMode === 'create' ? (
+                      <Field
+                        id="wizard-app-user"
+                        label={zh.catalog.runtimeUserLabel}
+                        error={!runtimeUser.trim() ? '请填写运行用户名' : undefined}
+                        required
+                      >
+                        <TextInput
+                          id="wizard-app-user"
+                          value={runtimeUser}
+                          mono
+                          autoComplete="off"
+                          placeholder="khc-app-demo"
+                          onChange={setRuntimeUser}
+                        />
+                      </Field>
+                    ) : (
+                      <Banner
+                        tone="warn"
+                        title={zh.catalog.runtimeRootWarnTitle}
+                        description={zh.catalog.runtimeRootWarnDesc}
+                      />
+                    )}
+                  </Stack>
+                </AdvancedSection>
               </Stack>
             </Card>
 
@@ -1053,13 +1058,15 @@ export function InstallAndPublishDrawer({
 
                           {isCaddy ? (
                             <>
-                              <Checkbox
-                                checked={checked}
-                                label="通过 Caddy 发布此端点"
-                                onChange={(next) =>
-                                  setCaddyEnabled((prev) => ({ ...prev, [ep.id]: next }))
-                                }
-                              />
+                              {caddyEndpoints.length > 1 ? (
+                                <Checkbox
+                                  checked={checked}
+                                  label="通过 Caddy 发布此端点"
+                                  onChange={(next) =>
+                                    setCaddyEnabled((prev) => ({ ...prev, [ep.id]: next }))
+                                  }
+                                />
+                              ) : null}
                               {checked ? (
                                 <Field
                                   id={`wizard-listen-port-${ep.id}`}

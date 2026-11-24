@@ -24,6 +24,7 @@ export interface AppManifestCapabilitiesCache {
 const SYNC_MANIFEST_ACTIONS = new Set([
   'manifest_control',
   'manifest_logs',
+  'manifest_access',
   'manifest_installed',
 ]);
 
