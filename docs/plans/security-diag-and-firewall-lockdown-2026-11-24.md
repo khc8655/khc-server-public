@@ -1,6 +1,6 @@
 # plan: 按需安全日志诊断与防火墙白名单收口
 
-> 状态：草案 ｜ 最后核验：2026-11-24 ｜ 关联：[host-ops](../host-ops.md)、[diagnostics](../diagnostics.md)、[security-boundaries](../security-boundaries.md)
+> 状态：已拍板 ｜ 最后核验：2026-11-25 ｜ 关联：[host-ops](../host-ops.md)、[diagnostics](../diagnostics.md)、[security-boundaries](../security-boundaries.md)
 
 ## 1. 背景与实机观察
 
@@ -35,14 +35,12 @@
 
 ### 4.1 按需安全诊断（全只读、0 D1、遵守 64KB 上限）
 
-- **采集来源（`agent/adapters/host_ops/khc_host.py` / `agent/adapters/host_ops.py`）**：
-  - 在「诊断」按需查询链路中复核近 24 小时 `journalctl`（只读、限制扫描上限行/秒数，如 `-n 2000`、`timeout=2s`）：
-    - 统计 `sshd` 失败/扫描特征（`kex_exchange_identification`、`Invalid user`、`Failed password`、`Connection closed by authenticating user`、`MaxStartups throttling`）的 24h 命中次数。
-    - 提取 Top 5 来源 IPv4/IPv6（只取格式合法的 IP 字面量，严禁回显用户名/密码/命令）。
-    - 若面板 Caddy 站点存在明显高频异常或可用日志（可选轻量扩展），只统计脱敏计数。
-- **诊断呈现（`apps/api/src/lib/app-diagnostics/host.ts`）**：
-  - 按需将异常结果转为 `khc.host.ssh_bruteforce`（或通用安全告警问题项，严格遵循 `≤300` 字文案与 `64KB` 总响应上限）。
-  - 达到告警阈值时 `severity: 'warn'`，提示 24h 扫爆次数与 Top IP 摘要，并引导至「主机 → 防火墙」开启白名单收口或关闭公网 SSH 22 端口；**结果仅随当次响应返回前端，不入 D1**。
+- **采集与动词（`agent/adapters/host_ops/khc_host.py` / `agent/adapters/host_ops.py`）**：
+  - 在 `host-ops` 提供只读动词 `logs.security`（24h `sshd` 扫描/爆破计数、handshake/auth/throttled 细分与 Top 5 脱敏源 IP，严格限 `-n 2000`、`timeout=2s`，严禁回显用户名/密码/命令/原始行）。
+  - 在 `HostOpsAdapter.status()` 中以 120 秒内存缓存调用安全日志聚合，当命中阈值时按标准适配器 `problems` 规范上报 `code: "ssh_bruteforce"`（不阻塞或拖慢 `/state`）。
+- **诊断呈现（`apps/api/src/routes/diagnostics.ts` / `apps/api/src/lib/diagnostics/evaluate.ts`）**：
+  - 由既有 `GET /api/v1/nodes/:id/diagnostics` 零额外请求通用渲染为 `khc.host-ops.ssh_bruteforce`（`severity: 'warn'`，遵循 `≤300` 字 `hint`、`≤200` 字 `evidence` 标量与 `≤64KB` 总响应上限）。
+  - 提示近 24h 扫爆次数与 Top IP 摘要，并引导至「主机 → 防火墙」开启白名单收口或关闭公网 SSH 22 端口；**结果仅随当次响应返回前端，不入 D1、不写 audit**。
 
 ### 4.2 `nftables` 缺失区分与面板一键修复
 
@@ -73,8 +71,8 @@
 
 - 仅当 `mode === "allowlist"` 且为 Hub 本机时开放 `closePublicSsh: boolean`（默认 `false`）。
 - 启用后：
-  - `build_ruleset` 不再自动把 `22` / `ssh_ports` 写入全网放行规则，改为由 `policy drop` 拦截公网对 22 端口的直接扫描；
-  - 对主动保留特定管理源的例外，用户仍可在规则列表手动添加带具体 `source` CIDR（或仅允许 WireGuard 接口/网段）的 `allow tcp/22` 规则；`rule_lockout_reason` 对 22 端口在 `closePublicSsh === true` 时放行，但对 `agent_ports` 与 `wg_ports` **永远拒绝拦截**。
+  - `build_ruleset` 不再自动把 `22` / `ssh_ports` 写入公网放行规则，改为由 `policy drop` 拦截公网对 22 端口的直接扫描；同时**自动保留来自本节点 WireGuard 内网接口/地址段的 SSH 访问**（以及节点 `hub_wg_ip` 放行），应急除 WG 内网外也可走云厂商 VNC；
+  - 对主动保留特定公网管理 IP 的例外，用户仍可在规则列表手动添加带具体 `source` CIDR 的 `allow tcp/22` 规则；`rule_lockout_reason` 对 22 端口在 `closePublicSsh === true` 时放行，但对 `agent_ports` 与 `wg_ports` **永远拒绝拦截**。
 - **L3 强确认护栏**：UI 开启「关闭公网 SSH」并应用时，弹出 L3 确认要求勾选「我已验证云厂商 VNC 控制台可用」并输入节点名确认；成功后仍进入 60 秒二次确认回滚窗口。
 
 ---
@@ -83,14 +81,14 @@
 
 | 批次 | 改动范围 | 验收标准 | 必测项 | 是否 bump |
 |---|---|---|---|---|
-| **批次 1：按需安全日志诊断** | `agent/adapters/host_ops/khc_host.py`、`host_ops.py`、`apps/api/src/lib/app-diagnostics/host.ts`、诊断单测、文档 | 点「诊断」返回 24h SSH 爆破/异常统计与 Top IP（脱敏，≤64KB），D1 零写入，节点只读执行 | Agent Python 单测（日志聚合与脱敏、耗时/行数上限）+ Worker `diagnostics.test.ts` + `./scripts/verify.sh` | Panel patch、Agent patch |
+| **批次 1：按需安全日志诊断** | `agent/adapters/host_ops/khc_host.py`、`host_ops.py`、`docs/host-ops.md`、Agent 与 `diagnostics.test.ts` 单测 | 点「诊断」返回 24h SSH 爆破/异常统计与 Top IP（脱敏，≤64KB），D1 零写入，节点只读执行 | Agent Python 单测（日志聚合与脱敏、120s 缓存、耗时/行数上限）+ Worker `diagnostics.test.ts` + `./scripts/verify.sh` | Panel patch、Agent patch |
 | **批次 2：`nftables` 一键安装与横幅去重** | `khc_host.py`、`host_ops.py`、`apps/web` `FirewallSegment.tsx` / `hostOps.ts`、测试、文档 | 缺 `nft` 但内核支持时只显示 1 条提示并支持一键安装；安装后立即可加载并编辑规则 | Agent 单测（能力探测/包名白名单/`run` mock）+ Web `hostops.smoke.test.tsx` + UI 三截图（浅/深/390）与四态 | Panel minor/patch、Agent patch |
-| **批次 3：白名单收口与关闭公网 22 端口** | `khc_host.py`、`host_ops.py`、`FirewallSegment.tsx`、`FirewallRulesEditor.tsx`、契约（按需扩展 `packages/contracts`）与测试、文档 | 切至「仅开放面板应用」自动放行 Agent/WG/Caddy/转发端口并阻断其余端口；开启关闭公网 22 需 L3 确认且支持 60s 回滚 | Agent 防火墙规则生成 & `E_LOCKOUT` 单测 + Web 抽屉/L3 确认测试 + 测试机 `aws-e2e`（有 VNC/私钥复核后）或 `106.74.24.207` 实机验收（遵循先 `nft -c` 再 60s 回滚） | Panel minor、Agent minor |
+| **批次 3：白名单收口与关闭公网 22 端口** | `khc_host.py`、`host_ops.py`、`FirewallSegment.tsx`、`FirewallRulesEditor.tsx`、契约（按需扩展 `packages/contracts`）与测试、文档 | 切至「仅开放面板应用」自动放行 Agent/WG/Caddy/转发端口并阻断其余端口；开启关闭公网 22 自动保留 WG 内网访问、需 L3 确认且支持 60s 回滚 | Agent 防火墙规则生成 & `E_LOCKOUT` 单测 + Web 抽屉/L3 确认测试 + 测试机 `aws-e2e`（有 VNC/私钥复核后）或 `106.74.24.207` 实机验收（遵循先 `nft -c` 再 60s 回滚） | Panel minor、Agent minor |
 
 ---
 
-## 6. 待主人拍板项
+## 6. 已拍板结论（2026-11-25 主人确认）
 
-1. **SSH 爆破告警默认阈值**：建议近 24 小时异常/爆破连接 **≥ 50 次**触发 `warn`（低于 50 次仅作正常过滤或低噪提示），**≥ 500 次**给出高风险提示。是否认可该阈值？
-2. **关闭公网 22 端口后的管理访问策略**：开启「关闭公网 SSH 22 端口」后，是**彻底全网拦截 22（应急全走云厂商 VNC）**，还是自动保留来自本节点 **WireGuard 内网地址（如 `10.x.y.z/24`）** 的 SSH 访问？
-3. **安全与权限边界确认**：是否为防无带外 VNC 导致永久失联，明确把「一键安装 `nftables`」与「关闭公网 SSH 22 端口」限定**仅对 Hub 节点本机开放**，Peer 节点维持现有强制 SSH 保护？
+1. **SSH 爆破告警默认阈值（同意）**：近 24 小时异常/爆破连接 **≥ 50 次**触发 `warn`，**≥ 500 次**给出高风险提示；低于 50 次不触发告警。
+2. **关闭公网 22 端口后的管理访问策略（保留节点内网访问）**：开启「关闭公网 SSH 22 端口」后，拦截公网 22 扫描并**自动保留来自本节点 WireGuard 内网接口/地址段的 SSH 访问**，应急可走云厂商 VNC。
+3. **安全与权限边界（同意）**：将「一键安装 `nftables`」与「关闭公网 SSH 22 端口」限定**仅对 Hub 节点本机开放**，Peer 节点维持现有强制 SSH 保护，防止无带外 VNC 时失联。
