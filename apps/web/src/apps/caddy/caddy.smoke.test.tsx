@@ -785,7 +785,7 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(within(drawer).getByText(/节点上的 Caddy 服务当前未启动/)).toBeTruthy();
   });
 
-  it('统一应用表合并已装托管应用与反代站点、隐藏 publish:none 内部端口并支持从站点抽屉切到服务与凭据', async () => {
+  it('统一应用表区分来源列、隐藏 publish:none 内部端口，托管应用行点击直达详情并支持切换编辑站点', async () => {
     mockApi({
       withCerts: false,
       sites: [
@@ -795,6 +795,23 @@ describe('应用页分段与本机监听端口（U3）', () => {
           listenPort: 2083,
           kind: 'proxy',
           upstreams: ['127.0.0.1:3430'],
+          enabled: true,
+        },
+        {
+          name: 'hk-web',
+          domains: ['hk.example.com'],
+          listenPort: 8443,
+          kind: 'proxy',
+          upstreams: ['10.99.0.2:8080'],
+          sourcePeer: 'hk-nat',
+          enabled: true,
+        },
+        {
+          name: 'manual-web',
+          domains: ['manual.example.com'],
+          listenPort: 9443,
+          kind: 'proxy',
+          upstreams: ['203.0.113.10:8080'],
           enabled: true,
         },
       ],
@@ -826,20 +843,46 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(screen.queryByText('已安装的托管应用')).toBeNull();
     expect(screen.queryByText('本机监听端口')).toBeNull();
 
+    const magpieRow = screen.getByRole('link', { name: /https:\/\/un\.example\.com:2083/ }).closest('tr')!;
+    const peerRow = screen.getByRole('link', { name: /https:\/\/hk\.example\.com:8443/ }).closest('tr')!;
+    const manualRow = screen.getByRole('link', { name: /https:\/\/manual\.example\.com:9443/ }).closest('tr')!;
+
+    // 来源列展示 托管应用 / Peer 反代 / 手动站点（不叠状态外徽标或 info 底色）
+    const magpieSource = within(magpieRow).getByText('托管应用');
+    expect(magpieSource.closest('.ui-badge')).toBeNull();
+    expect(magpieRow.querySelector('.ui-badge-info')).toBeNull();
+    expect(within(peerRow).getByText('Peer 反代')).toBeTruthy();
+    expect(within(manualRow).getByText('手动站点')).toBeTruthy();
+
+    // 表头与 <col> 不写死内联 width，改走 --ui-col-w 由响应式断点接管（平板隐藏 low 列时不留空白）
+    const tableEl = magpieRow.closest('table')!;
+    expect(Array.from(tableEl.querySelectorAll('th, col')).every((el) => (el as HTMLElement).style.width === '')).toBe(true);
+    expect((tableEl.querySelector('th.ui-col-name') as HTMLElement).style.getPropertyValue('--ui-col-w')).toBe('20%');
+
     // 展开「高级」后仅见未纳管端口 9099，magpie 内部网关 3425 (publish:none) 与已发布 3430 均不露出
     await userEvent.click(screen.getByRole('button', { name: '高级' }));
     expect(await screen.findByText('本机监听端口')).toBeTruthy();
     expect((await screen.findAllByText('9099 · python3')).length).toBeGreaterThan(0);
     expect(screen.queryByText('3425 · magpie')).toBeNull();
 
-    // 点击 magpie 行打开站点抽屉，经「管理服务与登录凭据」无缝切到托管应用抽屉（只存在 1 个 Dialog）
-    const link = screen.getByRole('link', { name: /https:\/\/un\.example\.com:2083/ });
-    await userEvent.click(link.closest('tr')!);
-    const siteDrawer = await screen.findByRole('dialog');
-    expect(within(siteDrawer).getByText(/托管应用 · magpie/)).toBeTruthy();
+    // 托管应用行的「更多操作」菜单同时提供「服务与凭据」与「编辑」双入口
+    await userEvent.click(within(magpieRow).getByRole('button', { name: '更多操作' }));
+    expect(await screen.findByRole('menuitem', { name: '服务与凭据' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: '编辑' })).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
 
-    await userEvent.click(within(siteDrawer).getByRole('button', { name: '管理服务与登录凭据' }));
+    // 点击已发布的托管应用行：直接打开「应用详情抽屉」，可点「编辑发布设置」切到站点抽屉（只存在 1 个 Dialog）
+    await userEvent.click(magpieRow);
+    const appDrawer = await screen.findByRole('dialog');
+    expect(within(appDrawer).getByRole('button', { name: '查看访问凭据' })).toBeTruthy();
+    await userEvent.click(within(appDrawer).getByRole('button', { name: '编辑发布设置' }));
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    expect(await screen.findByRole('button', { name: '查看访问凭据' })).toBeTruthy();
+    const siteDrawer = screen.getByRole('dialog');
+    expect(within(siteDrawer).getByText(/托管应用 · magpie/)).toBeTruthy();
+    await userEvent.click(within(siteDrawer).getByRole('button', { name: '取消' }));
+
+    // 手动站点点击整行仍打开编辑站点抽屉
+    await userEvent.click(manualRow);
+    expect(await screen.findByRole('heading', { name: '编辑站点' })).toBeTruthy();
   });
 });

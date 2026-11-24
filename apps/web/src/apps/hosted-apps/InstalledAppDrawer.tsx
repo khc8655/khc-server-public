@@ -492,7 +492,7 @@ export function InstalledAppDrawer({
     >
       <Stack gap={4}>
         <Row gap={2} align="center" wrap>
-          <Badge tone={status.tone} label={status.label} />
+          <Badge dot tone={status.tone} label={status.label} />
           <Badge tone="neutral" label={isManifest ? `v${schema}` : '旧版目录'} />
         </Row>
 
@@ -664,7 +664,7 @@ export function InstalledAppDrawer({
                         <Badge tone="neutral" label={unit.scope} />
                         <Badge tone={unitStatus.tone} label={unitStatus.label} />
                       </Row>
-                      <Row gap={1}>
+                      <Row gap={1} wrap>
                         <Button
                           label="启动"
                           size="sm"

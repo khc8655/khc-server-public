@@ -10,6 +10,7 @@ import {
   MANIFEST_V2_MIN_AGENT,
   type AgentState,
   type AppManifestEndpointV2,
+  type AppManifestParamV2,
   type AppRuntimeMode,
   type Certificate,
   type Node,
@@ -769,13 +770,10 @@ export function InstallAndPublishDrawer({
                         ) : (
                           <>
                             <Badge tone="neutral" label={`v${item.def.version}`} />
-                            {item.schema === 2 ? <Badge tone="info" label="v2" /> : null}
-                            {item.dynamicScript ? <Badge tone="warn" label="动态脚本" /> : null}
-                            {defaultPort ? (
-                              <Badge tone="neutral" label={`127.0.0.1:${defaultPort}`} />
-                            ) : null}
+                            {item.schema === 2 ? <Badge tone="neutral" label="v2" /> : null}
                             {installedEntry ? (
                               <Badge
+                                dot
                                 tone="ok"
                                 label={fmt(zh.hosted.wizardAlreadyInstalled, {
                                   version: installedEntry.version || item.def.version,
@@ -785,11 +783,19 @@ export function InstallAndPublishDrawer({
                           </>
                         )}
                       </Row>
-                      {item.dynamicScript && item.def.sources ? (
-                        <span className="ui-text-caption">
-                          外部来源：{item.def.sources.map((s) => s.host).join('、')}
-                        </span>
-                      ) : null}
+                      {(() => {
+                        if (item.invalid) return null;
+                        const metaParts = [
+                          defaultPort ? `默认本机 127.0.0.1:${defaultPort}` : null,
+                          item.dynamicScript ? '动态脚本' : null,
+                          item.dynamicScript && item.def.sources
+                            ? `外部来源：${item.def.sources.map((s) => s.host).join('、')}`
+                            : null,
+                        ].filter(Boolean);
+                        return metaParts.length > 0 ? (
+                          <span className="ui-text-caption">{metaParts.join(' · ')}</span>
+                        ) : null;
+                      })()}
                       {item.invalid && item.error ? (
                         <span className="ui-field-error">{item.error}</span>
                       ) : null}
@@ -810,7 +816,159 @@ export function InstallAndPublishDrawer({
           )
         ) : null}
 
-        {step === 2 && selectedApp ? (
+        {step === 2 && selectedApp ? (() => {
+          const visibleParams = selectedApp.def.params.filter((param) => !param.derive);
+          const basicParams = visibleParams.filter((param) => !param.advanced);
+          const advancedParams = visibleParams.filter((param) => Boolean(param.advanced));
+          const localConflictForParam = (paramKey: string): number | undefined => {
+            const boundConflict = endpoints.find(
+              (ep) =>
+                ep.portParam === paramKey &&
+                endpointPortStates[ep.id]?.localConflictPort !== undefined,
+            );
+            return boundConflict ? endpointPortStates[boundConflict.id]?.localConflictPort : undefined;
+          };
+          const hasAdvancedError =
+            credentialsMissing ||
+            advancedParams.some(
+              (param) => Boolean(paramErrors[param.key]) || localConflictForParam(param.key) !== undefined,
+            );
+
+          const renderParamField = (param: AppManifestParamV2) => {
+            const id = `wizard-param-${selectedApp.id}-${param.key}`;
+            const label = param.label ?? param.key;
+            const conflictPort = localConflictForParam(param.key);
+            const fieldError =
+              paramErrors[param.key] ??
+              (conflictPort !== undefined
+                ? fmt(zh.hosted.wizardLocalPortConflict, { port: String(conflictPort) })
+                : undefined);
+
+            if (param.type === 'boolean') {
+              return (
+                <Field key={param.key} id={id} label={label}>
+                  <Toggle
+                    checked={Boolean(values[param.key])}
+                    onChange={(checked) =>
+                      setValues((prev) => ({ ...prev, [param.key]: checked }))
+                    }
+                    label={label}
+                  />
+                </Field>
+              );
+            }
+            if (param.type === 'integer') {
+              return (
+                <Field key={param.key} id={id} label={label} error={fieldError}>
+                  <NumberInput
+                    id={id}
+                    value={
+                      typeof values[param.key] === 'number'
+                        ? (values[param.key] as number)
+                        : null
+                    }
+                    min={param.min}
+                    max={param.max}
+                    invalid={Boolean(fieldError)}
+                    onChange={(value) =>
+                      setValues((prev) => ({ ...prev, [param.key]: value }))
+                    }
+                  />
+                </Field>
+              );
+            }
+            if (param.type === 'enum' && param.options) {
+              const currentVal = String(values[param.key] ?? '');
+              const selectedOpt = param.options.find((opt) => opt.value === currentVal);
+              const reqParts: string[] = [];
+              if (selectedOpt?.requires?.memMB) {
+                reqParts.push(`需 ≥ ${selectedOpt.requires.memMB} MB 内存`);
+              }
+              if (selectedOpt?.requires?.diskMB) {
+                reqParts.push(`需 ≥ ${selectedOpt.requires.diskMB} MB 磁盘`);
+              }
+              return (
+                <Field
+                  key={param.key}
+                  id={id}
+                  label={label}
+                  help={reqParts.length > 0 ? reqParts.join(' · ') : undefined}
+                  error={fieldError}
+                >
+                  <Select
+                    id={id}
+                    value={currentVal}
+                    options={param.options.map((opt) => ({
+                      value: opt.value,
+                      label: opt.label,
+                    }))}
+                    onChange={(value) =>
+                      setValues((prev) => ({ ...prev, [param.key]: value }))
+                    }
+                    ariaLabel={label}
+                  />
+                </Field>
+              );
+            }
+
+            if (param.secret) {
+              const shown = Boolean(secretShown[param.key]);
+              return (
+                <Field
+                  key={param.key}
+                  id={id}
+                  label={label}
+                  help={zh.catalog.secretHelp}
+                  error={fieldError}
+                >
+                  <Row gap={2} align="center">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <TextInput
+                        id={id}
+                        type={shown ? 'text' : 'password'}
+                        mono
+                        autoComplete="new-password"
+                        value={String(values[param.key] ?? '')}
+                        invalid={Boolean(fieldError)}
+                        onChange={(value) =>
+                          setValues((prev) => ({ ...prev, [param.key]: value }))
+                        }
+                      />
+                    </div>
+                    <Button
+                      label={shown ? '隐藏' : '显示'}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setSecretShown((prev) => ({
+                          ...prev,
+                          [param.key]: !prev[param.key],
+                        }))
+                      }
+                    />
+                  </Row>
+                </Field>
+              );
+            }
+
+            return (
+              <Field key={param.key} id={id} label={label} error={fieldError}>
+                <TextInput
+                  id={id}
+                  type="text"
+                  mono
+                  autoComplete="off"
+                  value={String(values[param.key] ?? '')}
+                  invalid={Boolean(fieldError)}
+                  onChange={(value) =>
+                    setValues((prev) => ({ ...prev, [param.key]: value }))
+                  }
+                />
+              </Field>
+            );
+          };
+
+          return (
           <Stack gap={4}>
             <Card
               title={`${selectedApp.def.name} · v${selectedApp.def.version}`}
@@ -819,148 +977,11 @@ export function InstallAndPublishDrawer({
               }
             >
               <Stack gap={3}>
-                {selectedApp.def.params
-                  .filter((param) => !param.derive)
-                  .map((param) => {
-                    const id = `wizard-param-${selectedApp.id}-${param.key}`;
-                    const label = param.label ?? param.key;
-                    const boundConflict = endpoints.find(
-                      (ep) =>
-                        ep.portParam === param.key &&
-                        endpointPortStates[ep.id]?.localConflictPort !== undefined,
-                    );
-                    const conflictPort = boundConflict
-                      ? endpointPortStates[boundConflict.id]?.localConflictPort
-                      : undefined;
-                    const fieldError =
-                      paramErrors[param.key] ??
-                      (conflictPort !== undefined
-                        ? fmt(zh.hosted.wizardLocalPortConflict, { port: String(conflictPort) })
-                        : undefined);
-
-                    if (param.type === 'boolean') {
-                      return (
-                        <Field key={param.key} id={id} label={label}>
-                          <Toggle
-                            checked={Boolean(values[param.key])}
-                            onChange={(checked) =>
-                              setValues((prev) => ({ ...prev, [param.key]: checked }))
-                            }
-                            label={label}
-                          />
-                        </Field>
-                      );
-                    }
-                    if (param.type === 'integer') {
-                      return (
-                        <Field key={param.key} id={id} label={label} error={fieldError}>
-                          <NumberInput
-                            id={id}
-                            value={
-                              typeof values[param.key] === 'number'
-                                ? (values[param.key] as number)
-                                : null
-                            }
-                            min={param.min}
-                            max={param.max}
-                            invalid={Boolean(fieldError)}
-                            onChange={(value) =>
-                              setValues((prev) => ({ ...prev, [param.key]: value }))
-                            }
-                          />
-                        </Field>
-                      );
-                    }
-                    if (param.type === 'enum' && param.options) {
-                      const currentVal = String(values[param.key] ?? '');
-                      const selectedOpt = param.options.find((opt) => opt.value === currentVal);
-                      const reqParts: string[] = [];
-                      if (selectedOpt?.requires?.memMB) {
-                        reqParts.push(`需 ≥ ${selectedOpt.requires.memMB} MB 内存`);
-                      }
-                      if (selectedOpt?.requires?.diskMB) {
-                        reqParts.push(`需 ≥ ${selectedOpt.requires.diskMB} MB 磁盘`);
-                      }
-                      return (
-                        <Field
-                          key={param.key}
-                          id={id}
-                          label={label}
-                          help={reqParts.length > 0 ? reqParts.join(' · ') : undefined}
-                          error={fieldError}
-                        >
-                          <Select
-                            id={id}
-                            value={currentVal}
-                            options={param.options.map((opt) => ({
-                              value: opt.value,
-                              label: opt.label,
-                            }))}
-                            onChange={(value) =>
-                              setValues((prev) => ({ ...prev, [param.key]: value }))
-                            }
-                            ariaLabel={label}
-                          />
-                        </Field>
-                      );
-                    }
-
-                    if (param.secret) {
-                      const shown = Boolean(secretShown[param.key]);
-                      return (
-                        <Field
-                          key={param.key}
-                          id={id}
-                          label={label}
-                          help={zh.catalog.secretHelp}
-                          error={fieldError}
-                        >
-                          <Row gap={2} align="center">
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <TextInput
-                                id={id}
-                                type={shown ? 'text' : 'password'}
-                                mono
-                                autoComplete="new-password"
-                                value={String(values[param.key] ?? '')}
-                                invalid={Boolean(fieldError)}
-                                onChange={(value) =>
-                                  setValues((prev) => ({ ...prev, [param.key]: value }))
-                                }
-                              />
-                            </div>
-                            <Button
-                              label={shown ? '隐藏' : '显示'}
-                              variant="ghost"
-                              size="sm"
-                              onClick={() =>
-                                setSecretShown((prev) => ({
-                                  ...prev,
-                                  [param.key]: !prev[param.key],
-                                }))
-                              }
-                            />
-                          </Row>
-                        </Field>
-                      );
-                    }
-
-                    return (
-                      <Field key={param.key} id={id} label={label} error={fieldError}>
-                        <TextInput
-                          id={id}
-                          type="text"
-                          mono
-                          autoComplete="off"
-                          value={String(values[param.key] ?? '')}
-                          invalid={Boolean(fieldError)}
-                          onChange={(value) =>
-                            setValues((prev) => ({ ...prev, [param.key]: value }))
-                          }
-                        />
-                      </Field>
-                    );
-                  })}
+                {basicParams.length > 0 ? (
+                  basicParams.map(renderParamField)
+                ) : (
+                  <p className="ui-text-caption">{zh.hosted.wizardAdvancedOnlyHint}</p>
+                )}
 
                 {endpoints
                   .filter(
@@ -975,8 +996,9 @@ export function InstallAndPublishDrawer({
                     />
                   ))}
 
-                <AdvancedSection title={zh.common.advancedSection}>
+                <AdvancedSection title={zh.common.advancedSection} forceOpen={hasAdvancedError}>
                   <Stack gap={3}>
+                    {advancedParams.map(renderParamField)}
                     <Field
                       id="wizard-app-runtime"
                       label={zh.catalog.runtimeLabel}
@@ -1039,16 +1061,14 @@ export function InstallAndPublishDrawer({
                       isTcpPortAllowedByFirewall(fwShowQuery.data, localPort);
 
                     return (
-                      <Card
-                        key={ep.id}
-                        title={ep.label}
-                        action={
-                          <Badge
-                            tone="neutral"
-                            label={`${ep.protocol.toUpperCase()} · ${bindHost}${localPort !== null ? `:${localPort}` : ''}`}
-                          />
-                        }
-                      >
+                      <div key={ep.id} className="ui-endpoint-box">
+                        <div className="ui-row-between">
+                          <span className="ui-endpoint-head">{ep.label}</span>
+                          <span className="ui-text-mono ui-text-caption">
+                            {ep.protocol.toUpperCase()} · {bindHost}
+                            {localPort !== null ? `:${localPort}` : ''}
+                          </span>
+                        </div>
                         <Stack gap={2}>
                           {ep.paths && ep.paths.length > 0 ? (
                             <span className="ui-text-caption">
@@ -1129,7 +1149,7 @@ export function InstallAndPublishDrawer({
                             <span className="ui-text-caption">鉴权提示：{ep.auth.hint}</span>
                           ) : null}
                         </Stack>
-                      </Card>
+                      </div>
                     );
                   })}
 
@@ -1227,7 +1247,8 @@ export function InstallAndPublishDrawer({
               </Card>
             ) : null}
           </Stack>
-        ) : null}
+          );
+        })() : null}
 
         {step === 3 && selectedApp ? (
           <Stack gap={4}>

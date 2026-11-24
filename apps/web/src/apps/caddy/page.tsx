@@ -14,6 +14,7 @@ import {
 } from '../../data/forwards';
 import { HOST_OPS_APP } from '../../data/hostOps';
 import {
+  classifyBackend,
   listeningUpstream,
   unpublishedListeningPorts,
   type ListeningPort,
@@ -150,7 +151,7 @@ function primaryPublishPort(entry: InstalledApp): number | null {
 
 function installedTargetText(entry: InstalledApp): string {
   const port = primaryPublishPort(entry);
-  if (port !== null) return `${zh.sites.targetLocal} 127.0.0.1:${port}`;
+  if (port !== null) return `本机 127.0.0.1:${port}`;
   return entry.units.length > 0 ? `${entry.units.length} 个服务单元` : '—';
 }
 
@@ -1497,12 +1498,24 @@ export default function SitesPage() {
     { key: 'actions', type: 'actions', header: '' },
   ];
 
+  const unifiedRowSourceLabel = (row: UnifiedAppRow): string => {
+    if (row.installed) return '托管应用';
+    if (row.kind === 'site') {
+      const firstUpstream = row.site.upstreams[0] ?? row.site.upstream ?? '';
+      const isPeerProxy =
+        Boolean(row.site.sourcePeer) ||
+        (row.site.kind === 'proxy' && classifyBackend(firstUpstream, backendContext).kind === 'vm');
+      if (isPeerProxy) return 'Peer 反代';
+    }
+    return '手动站点';
+  };
+
   const unifiedColumns: ColumnDef<UnifiedAppRow>[] = [
     {
       key: 'name',
       type: 'name',
       header: zh.sites.colApp,
-      width: '22%',
+      width: '20%',
       value: (row) =>
         row.kind === 'site'
           ? row.site.name
@@ -1519,14 +1532,25 @@ export default function SitesPage() {
         }
         return healthBadge({ site: row.site, health: row.health }).tone;
       },
-      narrow: (row) =>
-        row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
+      narrow: (row) => {
+        const targetText =
+          row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed);
+        return `${unifiedRowSourceLabel(row)} · ${targetText}`;
+      },
+    },
+    {
+      key: 'source',
+      type: 'text',
+      header: '来源',
+      width: '11%',
+      priority: 'low',
+      value: (row) => unifiedRowSourceLabel(row),
+      render: (row) => <span className="ui-text-caption">{unifiedRowSourceLabel(row)}</span>,
     },
     {
       key: 'url',
       type: 'mono',
       header: zh.sites.colAccessUrl,
-      width: '36%',
       value: (row) =>
         row.kind === 'site'
           ? siteAccessUrl(row.site) || row.site.domains.join(', ')
@@ -1581,7 +1605,7 @@ export default function SitesPage() {
       key: 'target',
       type: 'mono',
       header: zh.sites.colTargetSummary,
-      width: '26%',
+      width: '25%',
       value: (row) =>
         row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
       priority: 'low',
@@ -1590,13 +1614,12 @@ export default function SitesPage() {
       key: 'sync',
       type: 'sync',
       header: zh.sites.colStatus,
-      width: '12%',
       render: (row) => {
         if (row.kind === 'site') {
           return <SyncStatus {...siteSyncProps(row)} />;
         }
         const st = appStatus(row.installed, installedCatalog);
-        return <Badge tone={st.tone} label={st.label} />;
+        return <Badge dot tone={st.tone} label={st.label} />;
       },
     },
     { key: 'actions', type: 'actions', header: '' },
@@ -1663,8 +1686,8 @@ export default function SitesPage() {
       ];
     }
     return [
-      action('site.update'),
       ...(row.installed ? [action('app.manage')] : []),
+      action('site.update'),
       row.site.enabled ? action('site.disable') : action('site.enable'),
       action('site.delete'),
     ];
@@ -1973,8 +1996,10 @@ export default function SitesPage() {
         title={zh.nav.sites}
         scope={hubName}
         summary={
-          proxyRows.length > 0
-            ? fmt(zh.sites.appsSummaryCount, { count: proxyRows.length })
+          (segment === 'apps' ? unifiedRows.length : proxyRows.length) > 0
+            ? fmt(zh.sites.appsSummaryCount, {
+                count: segment === 'apps' ? unifiedRows.length : proxyRows.length,
+              })
             : undefined
         }
         sync={sync}
@@ -2141,7 +2166,7 @@ export default function SitesPage() {
             rowActionDisabled={unifiedRowActionDisabled}
             onRowAction={handleUnifiedRowAction}
             onRowOpen={(row) =>
-              row.kind === 'site' ? openEdit(row.site) : openInstalled(row.installed)
+              row.installed ? openInstalled(row.installed) : row.kind === 'site' ? openEdit(row.site) : undefined
             }
           />
 

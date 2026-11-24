@@ -159,6 +159,8 @@
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .ui-link:hover {
@@ -379,6 +381,7 @@
 .ui-card-h {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--s2);
   padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--border);
@@ -387,6 +390,7 @@
 }
 
 .ui-card-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -639,10 +643,20 @@
   text-align: right;
 }
 
-/* priority: 'low' 的列在平板及以下自动隐藏，避免横向滚动。 */
+@media (min-width: 1024px) {
+  .ui-table col[style*='--ui-col-w'],
+  .ui-table th[style*='--ui-col-w'] {
+    width: var(--ui-col-w);
+  }
+}
+
+/* priority: 'low' 的列在平板及以下自动隐藏，避免横向滚动；同步列在平板收紧以把空间留给主列与地址列。 */
 @media (max-width: 1023px) {
   .ui-col-low {
     display: none;
+  }
+  .ui-col-sync {
+    width: 112px;
   }
 }
 
@@ -1705,6 +1719,7 @@
 .ui-drawer-f {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--s2);
   padding: var(--s3) var(--s5);
   border-top: 1px solid var(--border);
@@ -2242,6 +2257,20 @@
 .ui-justify-between {
   justify-content: space-between;
   width: 100%;
+}
+.ui-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  width: 100%;
+  min-width: 0;
+}
+.ui-row-between > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .ui-wrap {
   flex-wrap: wrap;
@@ -4704,6 +4733,23 @@
   flex-direction: column;
   gap: var(--s4);
   padding: var(--s1) var(--s3) var(--s3);
+}
+
+.ui-endpoint-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.ui-endpoint-head {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* -------------------------------------------- 主机运维状态带（ui-redesign §4.3） */

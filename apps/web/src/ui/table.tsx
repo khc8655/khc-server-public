@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Badge, Button, Icon, SyncStatus, Truncate, type SyncStatusProps, type Tone } from './primitives';
 import { EmptyState, Skeleton } from './feedback';
 import { SearchInput, FilterChip } from './forms';
@@ -163,12 +163,15 @@ export function Table<T>({
     );
   }
 
+  const columnWidthStyle = (column: ColumnDef<T>): CSSProperties | undefined =>
+    column.width ? ({ '--ui-col-w': column.width } as CSSProperties) : undefined;
+
   const headerCells = columns.map((column) => (
     <th
       key={column.key}
       scope="col"
       className={`ui-th ${columnClass(column)}`}
-      style={column.width ? { width: column.width } : undefined}
+      style={columnWidthStyle(column)}
     >
       {column.header}
     </th>
@@ -181,7 +184,7 @@ export function Table<T>({
         <table className="ui-table">
           <colgroup>
             {columns.map((column) => (
-              <col key={column.key} style={column.width ? { width: column.width } : undefined} />
+              <col key={column.key} className={columnClass(column)} style={columnWidthStyle(column)} />
             ))}
           </colgroup>
           <thead>
