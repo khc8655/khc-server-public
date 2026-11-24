@@ -2243,6 +2243,15 @@
   justify-content: space-between;
   width: 100%;
 }
+.ui-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  width: 100%;
+  min-width: 0;
+}
 .ui-wrap {
   flex-wrap: wrap;
 }
@@ -4704,6 +4713,21 @@
   flex-direction: column;
   gap: var(--s4);
   padding: var(--s1) var(--s3) var(--s3);
+}
+
+.ui-endpoint-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.ui-endpoint-head {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text);
 }
 
 /* -------------------------------------------- 主机运维状态带（ui-redesign §4.3） */

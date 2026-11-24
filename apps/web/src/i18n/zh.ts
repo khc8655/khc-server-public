@@ -1275,6 +1275,7 @@ export const zh = {
     wizardChangeApp: '重选应用',
     wizardAlreadyInstalled: '已安装 v{version}',
     wizardSectionInstall: '安装参数',
+    wizardAdvancedOnlyHint: '默认配置已就绪，需要调整端口、密钥或下载源时再展开「高级」。',
     wizardSectionPublish: '域名与 HTTPS 发布',
     wizardDomainLabel: '发布域名',
     wizardDomainHelp: '访问该应用对外服务的域名，例如 app.example.com；点击输入框可直接选择已有域名。',

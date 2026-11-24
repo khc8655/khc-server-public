@@ -1044,5 +1044,11 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     // 默认值 2053 与 Agent 端口冲突，虽未手动点击「高级」，高级区已自动展开并展示错误
     expect(await screen.findByLabelText('Web 管理页端口')).toBeTruthy();
     expect(screen.getByText('应用内部端口不能与对外端口或 Agent 监听端口（2053）相同。')).toBeTruthy();
+
+    // 全部参数均在「高级」时提供清晰指引，且发布区内不再卡片套卡片
+    expect(screen.getByText(/默认配置已就绪/)).toBeTruthy();
+    const publishCard = screen.getByText('域名与 HTTPS 发布').closest('.ui-card')!;
+    expect(publishCard.querySelector('.ui-card')).toBeNull();
+    expect(document.querySelector('.ui-drawer .ui-badge-info')).toBeNull();
   });
 });

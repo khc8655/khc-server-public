@@ -847,8 +847,10 @@ describe('应用页分段与本机监听端口（U3）', () => {
     const peerRow = screen.getByRole('link', { name: /https:\/\/hk\.example\.com:8443/ }).closest('tr')!;
     const manualRow = screen.getByRole('link', { name: /https:\/\/manual\.example\.com:9443/ }).closest('tr')!;
 
-    // 来源列展示 托管应用 / Peer 反代 / 手动站点
-    expect(within(magpieRow).getByText('托管应用')).toBeTruthy();
+    // 来源列展示 托管应用 / Peer 反代 / 手动站点（不叠状态外徽标或 info 底色）
+    const magpieSource = within(magpieRow).getByText('托管应用');
+    expect(magpieSource.closest('.ui-badge')).toBeNull();
+    expect(magpieRow.querySelector('.ui-badge-info')).toBeNull();
     expect(within(peerRow).getByText('Peer 反代')).toBeTruthy();
     expect(within(manualRow).getByText('手动站点')).toBeTruthy();
 

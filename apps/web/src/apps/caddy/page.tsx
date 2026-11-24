@@ -151,7 +151,7 @@ function primaryPublishPort(entry: InstalledApp): number | null {
 
 function installedTargetText(entry: InstalledApp): string {
   const port = primaryPublishPort(entry);
-  if (port !== null) return `${zh.sites.targetLocal} 127.0.0.1:${port}`;
+  if (port !== null) return `本机 127.0.0.1:${port}`;
   return entry.units.length > 0 ? `${entry.units.length} 个服务单元` : '—';
 }
 
@@ -1498,6 +1498,18 @@ export default function SitesPage() {
     { key: 'actions', type: 'actions', header: '' },
   ];
 
+  const unifiedRowSourceLabel = (row: UnifiedAppRow): string => {
+    if (row.installed) return '托管应用';
+    if (row.kind === 'site') {
+      const firstUpstream = row.site.upstreams[0] ?? row.site.upstream ?? '';
+      const isPeerProxy =
+        Boolean(row.site.sourcePeer) ||
+        (row.site.kind === 'proxy' && classifyBackend(firstUpstream, backendContext).kind === 'vm');
+      if (isPeerProxy) return 'Peer 反代';
+    }
+    return '手动站点';
+  };
+
   const unifiedColumns: ColumnDef<UnifiedAppRow>[] = [
     {
       key: 'name',
@@ -1520,32 +1532,26 @@ export default function SitesPage() {
         }
         return healthBadge({ site: row.site, health: row.health }).tone;
       },
-      narrow: (row) =>
-        row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
+      narrow: (row) => {
+        const targetText =
+          row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed);
+        return `${unifiedRowSourceLabel(row)} · ${targetText}`;
+      },
     },
     {
       key: 'source',
-      type: 'status',
+      type: 'text',
       header: '来源',
-      width: '12%',
+      width: '11%',
       priority: 'low',
-      status: (row) => {
-        if (row.installed) return { tone: 'info', label: '托管应用' };
-        if (row.kind === 'site') {
-          const firstUpstream = row.site.upstreams[0] ?? row.site.upstream ?? '';
-          const isPeerProxy =
-            Boolean(row.site.sourcePeer) ||
-            (row.site.kind === 'proxy' && classifyBackend(firstUpstream, backendContext).kind === 'vm');
-          if (isPeerProxy) return { tone: 'neutral', label: 'Peer 反代' };
-        }
-        return { tone: 'neutral', label: '手动站点' };
-      },
+      value: (row) => unifiedRowSourceLabel(row),
+      render: (row) => <span className="ui-text-caption">{unifiedRowSourceLabel(row)}</span>,
     },
     {
       key: 'url',
       type: 'mono',
       header: zh.sites.colAccessUrl,
-      width: '32%',
+      width: '30%',
       value: (row) =>
         row.kind === 'site'
           ? siteAccessUrl(row.site) || row.site.domains.join(', ')
@@ -1600,7 +1606,7 @@ export default function SitesPage() {
       key: 'target',
       type: 'mono',
       header: zh.sites.colTargetSummary,
-      width: '22%',
+      width: '25%',
       value: (row) =>
         row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
       priority: 'low',
@@ -1615,7 +1621,7 @@ export default function SitesPage() {
           return <SyncStatus {...siteSyncProps(row)} />;
         }
         const st = appStatus(row.installed, installedCatalog);
-        return <Badge tone={st.tone} label={st.label} />;
+        return <Badge dot tone={st.tone} label={st.label} />;
       },
     },
     { key: 'actions', type: 'actions', header: '' },
@@ -1992,8 +1998,10 @@ export default function SitesPage() {
         title={zh.nav.sites}
         scope={hubName}
         summary={
-          proxyRows.length > 0
-            ? fmt(zh.sites.appsSummaryCount, { count: proxyRows.length })
+          (segment === 'apps' ? unifiedRows.length : proxyRows.length) > 0
+            ? fmt(zh.sites.appsSummaryCount, {
+                count: segment === 'apps' ? unifiedRows.length : proxyRows.length,
+              })
             : undefined
         }
         sync={sync}

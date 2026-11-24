@@ -770,13 +770,10 @@ export function InstallAndPublishDrawer({
                         ) : (
                           <>
                             <Badge tone="neutral" label={`v${item.def.version}`} />
-                            {item.schema === 2 ? <Badge tone="info" label="v2" /> : null}
-                            {item.dynamicScript ? <Badge tone="warn" label="动态脚本" /> : null}
-                            {defaultPort ? (
-                              <Badge tone="neutral" label={`127.0.0.1:${defaultPort}`} />
-                            ) : null}
+                            {item.schema === 2 ? <Badge tone="neutral" label="v2" /> : null}
                             {installedEntry ? (
                               <Badge
+                                dot
                                 tone="ok"
                                 label={fmt(zh.hosted.wizardAlreadyInstalled, {
                                   version: installedEntry.version || item.def.version,
@@ -786,11 +783,19 @@ export function InstallAndPublishDrawer({
                           </>
                         )}
                       </Row>
-                      {item.dynamicScript && item.def.sources ? (
-                        <span className="ui-text-caption">
-                          外部来源：{item.def.sources.map((s) => s.host).join('、')}
-                        </span>
-                      ) : null}
+                      {(() => {
+                        if (item.invalid) return null;
+                        const metaParts = [
+                          defaultPort ? `默认本机 127.0.0.1:${defaultPort}` : null,
+                          item.dynamicScript ? '动态脚本' : null,
+                          item.dynamicScript && item.def.sources
+                            ? `外部来源：${item.def.sources.map((s) => s.host).join('、')}`
+                            : null,
+                        ].filter(Boolean);
+                        return metaParts.length > 0 ? (
+                          <span className="ui-text-caption">{metaParts.join(' · ')}</span>
+                        ) : null;
+                      })()}
                       {item.invalid && item.error ? (
                         <span className="ui-field-error">{item.error}</span>
                       ) : null}
@@ -972,7 +977,11 @@ export function InstallAndPublishDrawer({
               }
             >
               <Stack gap={3}>
-                {basicParams.map(renderParamField)}
+                {basicParams.length > 0 ? (
+                  basicParams.map(renderParamField)
+                ) : (
+                  <p className="ui-text-caption">{zh.hosted.wizardAdvancedOnlyHint}</p>
+                )}
 
                 {endpoints
                   .filter(
@@ -1052,16 +1061,14 @@ export function InstallAndPublishDrawer({
                       isTcpPortAllowedByFirewall(fwShowQuery.data, localPort);
 
                     return (
-                      <Card
-                        key={ep.id}
-                        title={ep.label}
-                        action={
-                          <Badge
-                            tone="neutral"
-                            label={`${ep.protocol.toUpperCase()} · ${bindHost}${localPort !== null ? `:${localPort}` : ''}`}
-                          />
-                        }
-                      >
+                      <div key={ep.id} className="ui-endpoint-box">
+                        <div className="ui-row-between">
+                          <span className="ui-endpoint-head">{ep.label}</span>
+                          <span className="ui-text-mono ui-text-caption">
+                            {ep.protocol.toUpperCase()} · {bindHost}
+                            {localPort !== null ? `:${localPort}` : ''}
+                          </span>
+                        </div>
                         <Stack gap={2}>
                           {ep.paths && ep.paths.length > 0 ? (
                             <span className="ui-text-caption">
@@ -1142,7 +1149,7 @@ export function InstallAndPublishDrawer({
                             <span className="ui-text-caption">鉴权提示：{ep.auth.hint}</span>
                           ) : null}
                         </Stack>
-                      </Card>
+                      </div>
                     );
                   })}
 
