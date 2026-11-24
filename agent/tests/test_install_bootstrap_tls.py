@@ -26,6 +26,7 @@ class _BootstrapServer:
         self.force_status = force_status
         self.auth = Auth([token])
         self.requests: list[str] = []
+        self.user_agents: list[str | None] = []
         server_ref = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -34,6 +35,7 @@ class _BootstrapServer:
 
             def do_GET(self) -> None:  # noqa: N802
                 server_ref.requests.append(self.path)
+                server_ref.user_agents.append(self.headers.get("User-Agent"))
                 if server_ref.force_status is not None:
                     self.send_response(server_ref.force_status)
                     self.send_header("Content-Type", "application/json")
@@ -152,6 +154,7 @@ class InstallBootstrapTlsTests(unittest.TestCase):
             )
             self.assertEqual(res.returncode, 0, msg=res.stdout + res.stderr)
             self.assertEqual(srv.requests, ["/api/v1/nodes/nd_test/bootstrap/tls"])
+            self.assertEqual(srv.user_agents, ["khc-agent-bootstrap/1"])
             self.assertEqual(cert_path.read_text(encoding="utf-8"), SAMPLE_CERT)
             self.assertEqual(key_path.read_text(encoding="utf-8"), SAMPLE_KEY)
             self.assertEqual(stat.S_IMODE(cert_path.stat().st_mode), 0o644)

@@ -590,6 +590,7 @@ req = urllib.request.Request(
         "X-Khc-Nonce": nonce,
         "X-Khc-Sig": sig,
         "Accept": "application/json",
+        "User-Agent": "khc-agent-bootstrap/1",
     },
 )
 try:
@@ -605,10 +606,10 @@ except urllib.error.HTTPError as exc:
             detail = f"（{msg.strip()}）"
     except Exception:
         pass
-    print(f"[khc-agent] 面板证书接口返回 HTTP {exc.code}{detail}", file=sys.stderr)
+    print(f"[khc-agent] 面板证书接口 ({url}) 返回 HTTP {exc.code}{detail}", file=sys.stderr)
     sys.exit(1)
 except Exception as exc:
-    print(f"[khc-agent] 请求面板证书接口失败: {exc}", file=sys.stderr)
+    print(f"[khc-agent] 请求面板证书接口失败 ({url}): {exc}", file=sys.stderr)
     sys.exit(1)
 
 try:

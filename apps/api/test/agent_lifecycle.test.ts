@@ -1225,4 +1225,71 @@ describe('bootstrap/tls 与面板证书直拉安装命令', () => {
     );
     expect(limited.status).toBe(429);
   });
+
+  it('边缘回源请求 URL 为 *.workers.dev 时，--tls-bootstrap-url 优先使用公开面板域名', async () => {
+    const ctx = makeTestContext();
+    ctx.env.LIVE_ORIGINS =
+      'https://panel.example.com,https://panel-alt.example.com,https://khc-staging.example.workers.dev';
+    const cookie = await loginAsAdmin(ctx);
+    const cert = await ctx.certs.create({
+      name: 'wild-example',
+      domains: ['*.example.com'],
+      issuer: 'acme',
+      notAfter: Math.floor(Date.now() / 1000) + 60 * 86_400,
+      certPem: CERT_PEM,
+      keyPem: KEY_PEM,
+      sourceNodeId: null,
+      autoSync: true,
+    });
+    const nodeRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers: { ...authHeaders(cookie), Origin: 'https://panel.example.com' },
+        body: JSON.stringify({
+          name: 'ecs',
+          accessMode: 'domain',
+          domain: 'ecs.example.com',
+          endpoint: 'https://ecs.example.com:8443',
+          tlsCertId: cert.id,
+        }),
+      },
+      ctx.env,
+    );
+    expect(nodeRes.status).toBe(201);
+    const created = (await nodeRes.json()) as { node: { id: string } };
+
+    // 无 Origin 时退到 LIVE_ORIGINS 中首个非 *.workers.dev 入口
+    const res1 = await ctx.app.request(
+      `https://khc-staging.example.workers.dev${installPath(created.node.id)}`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ mode: 'system', packageUrl: PACKAGE_URL, sha256: SHA256 }),
+      },
+      ctx.env,
+    );
+    expect(res1.status).toBe(200);
+    const cmd1 = agentCommandResponseSchema.parse(await res1.json()).command;
+    expect(cmd1).toContain(
+      `--tls-bootstrap-url 'https://panel.example.com/api/v1/nodes/${created.node.id}/bootstrap/tls'`,
+    );
+    expect(cmd1).not.toContain('workers.dev');
+
+    // 带白名单非 workers.dev Origin 时优先采用实际访问域名
+    const res2 = await ctx.app.request(
+      `https://khc-staging.example.workers.dev${installPath(created.node.id)}`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders(cookie), Origin: 'https://panel-alt.example.com' },
+        body: JSON.stringify({ mode: 'system', packageUrl: PACKAGE_URL, sha256: SHA256 }),
+      },
+      ctx.env,
+    );
+    expect(res2.status).toBe(200);
+    const cmd2 = agentCommandResponseSchema.parse(await res2.json()).command;
+    expect(cmd2).toContain(
+      `--tls-bootstrap-url 'https://panel-alt.example.com/api/v1/nodes/${created.node.id}/bootstrap/tls'`,
+    );
+  });
 });
