@@ -117,7 +117,7 @@ async function callWithSyncPoll(
         'POST',
         `/apps/${encodeURIComponent(app)}/${action}`,
         payload,
-        { timeoutMs: SYNC_TIMEOUT_MS, idempotencyKey },
+        { timeoutMs: SYNC_TIMEOUT_MS, idempotencyKey, bypassCooldown: true },
       );
       if (response.status !== 202) return response;
     } catch (error) {

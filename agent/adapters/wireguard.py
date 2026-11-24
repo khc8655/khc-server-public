@@ -1694,6 +1694,27 @@ class WireGuard(Adapter):
         peers = runtime.get("peers") if runtime is not None else []
         self._save_runtime(ctx, interface, peers or [], enabled=False)
 
+    def _kernel_interface_mismatch(
+        self,
+        ctx: Ctx,
+        name: str,
+        interface: Mapping[str, Any],
+    ) -> bool:
+        """首次纳管时比对内核运行态端口/地址与目标配置，不一致则需重启 wg-quick。"""
+
+        port_res = ctx.run(["wg", "show", name, "listen-port"], check=False)
+        raw_port = (port_res.stdout or "").strip() if port_res.rc == 0 else ""
+        if raw_port.isdigit():
+            target_port = int(interface.get("listenPort") or DEFAULT_LISTEN_PORT)
+            if int(raw_port) != target_port:
+                return True
+        addr_res = ctx.run(["ip", "-o", "-4", "addr", "show", "dev", name], check=False)
+        raw_addr = (addr_res.stdout or "").strip() if addr_res.rc == 0 else ""
+        target_addr = _text(interface.get("address"))
+        if raw_addr and target_addr and target_addr not in raw_addr:
+            return True
+        return False
+
     def after_apply(
         self,
         ctx: Ctx,
@@ -1733,9 +1754,14 @@ class WireGuard(Adapter):
         unit = self.unit_name(name)
         self._save_runtime(ctx, interface, peers, enabled=True)
 
-        if was_disabled or not changes or previous_state is None:
-            # 关闭态开启（内核已 enable/start）/ 无变更 / 首次 apply：不动 unit
+        if was_disabled or not changes:
+            # 关闭态开启（内核已 enable/start）/ 无变更：不动 unit
             pass
+        elif previous_state is None:
+            # 首次纳管：若节点上已有运行中的旧接口且内核端口/地址与新配置不一致，必须 restart 生效
+            if ctx.unit_active(unit) and self._kernel_interface_mismatch(ctx, name, interface):
+                ctx.log(f"wireguard: 首次纳管检测到内核接口与新配置不一致，restart {unit}")
+                ctx.unit_restart(unit)
         elif interface_signature((previous_state or {}).get("interface") or {}) != interface_signature(interface):
             ctx.log(f"wireguard: 接口级变更，restart {unit}")
             ctx.unit_restart(unit)

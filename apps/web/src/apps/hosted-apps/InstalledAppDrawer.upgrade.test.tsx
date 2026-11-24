@@ -10,7 +10,9 @@ import {
   createRouter,
 } from '@tanstack/react-router';
 import { hubOverviewQueryOptions } from '../../data/queries';
+import { normalizeCaddySite } from '../../data/sites';
 import { ToastContextProvider } from '../../ui';
+import { InstalledAppDrawer } from './InstalledAppDrawer';
 import { InstalledAppsCard } from './InstalledAppsCard';
 
 function json(body: unknown, status = 200): Response {
@@ -609,5 +611,89 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
 
     await userEvent.click(within(drawer).getByRole('button', { name: '显示' }));
     expect(within(drawer).getByText('tok-secret-1')).toBeTruthy();
+  });
+
+  it('卸载时若存在关联发布站点：默认勾选联动删除，取消勾选则保留站点', async () => {
+    const calls: Call[] = [];
+    stubUpgradeNode({ calls });
+    const site = normalizeCaddySite({
+      name: 'demo-up-site',
+      domain: 'demo.example.com',
+      upstream: '127.0.0.1:3430',
+    });
+    if (!site) throw new Error('expected site');
+    const onDeleteLinkedSite = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithRouter(
+      <InstalledAppDrawer
+        hubId="hub-1"
+        hubName="hub-1"
+        entry={{
+          manifestId: 'demo-up',
+          instance: 'demo-up',
+          version: '1.0.0',
+          schema: 2,
+          source: 'manifest',
+          mode: 'create',
+          user: 'khc-app-up',
+          endpoints: [],
+          units: [{ name: 'demo-up.service', scope: 'user', active: true, state: 'active' }],
+          lastHealth: { ok: true },
+        }}
+        linkedSite={site}
+        onDeleteLinkedSite={onDeleteLinkedSite}
+        onClose={onClose}
+      />,
+    );
+
+    const drawer = await screen.findByRole('dialog');
+    await userEvent.click(within(drawer).getByRole('button', { name: '卸载' }));
+    const checkbox = within(drawer).getByRole('checkbox', {
+      name: /同时删除关联的 Caddy 发布站点/,
+    }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+
+    // 取消勾选 → 确认卸载不应删站点
+    await userEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
+    await userEvent.click(within(drawer).getAllByRole('button', { name: '卸载' }).at(-1)!);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onDeleteLinkedSite).not.toHaveBeenCalled();
+
+    // 重新打开 → 默认再次勾选 → 确认卸载会调用 onDeleteLinkedSite(site)
+    cleanup();
+    const onDelete2 = vi.fn(async () => {});
+    const onClose2 = vi.fn();
+    renderWithRouter(
+      <InstalledAppDrawer
+        hubId="hub-1"
+        hubName="hub-1"
+        entry={{
+          manifestId: 'demo-up',
+          instance: 'demo-up',
+          version: '1.0.0',
+          schema: 2,
+          source: 'manifest',
+          mode: 'create',
+          user: 'khc-app-up',
+          endpoints: [],
+          units: [{ name: 'demo-up.service', scope: 'user', active: true, state: 'active' }],
+          lastHealth: { ok: true },
+        }}
+        linkedSite={site}
+        onDeleteLinkedSite={onDelete2}
+        onClose={onClose2}
+      />,
+    );
+    const drawer2 = await screen.findByRole('dialog');
+    await userEvent.click(within(drawer2).getByRole('button', { name: '卸载' }));
+    const checkbox2 = within(drawer2).getByRole('checkbox', {
+      name: /同时删除关联的 Caddy 发布站点/,
+    }) as HTMLInputElement;
+    expect(checkbox2.checked).toBe(true);
+    await userEvent.click(within(drawer2).getAllByRole('button', { name: '卸载' }).at(-1)!);
+    await waitFor(() => expect(onDelete2).toHaveBeenCalledWith(site));
+    await waitFor(() => expect(onClose2).toHaveBeenCalledTimes(1));
   });
 });

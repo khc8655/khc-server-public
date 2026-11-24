@@ -1167,7 +1167,7 @@ export const zh = {
     taskState: '任务状态：{state} · {progress}%',
     taskLogs: '安装日志',
     accessTitle: '访问信息',
-    secretHelp: '密码类参数只用于安装，不会保存到 D1，也不会写入日志。',
+    secretHelp: '密码类参数不会保存到 D1 或日志；若应用支持访问凭据，安装后可在应用详情按需查看。',
     upgradeParamsToggle: '修改参数（可选）',
     upgradeParamsHide: '收起参数',
     upgradeParamsHint: '只会提交你改动过的参数；留空或选「保持原值」表示不改。',

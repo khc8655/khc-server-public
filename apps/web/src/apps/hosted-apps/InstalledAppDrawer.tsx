@@ -41,6 +41,7 @@ import {
   Banner,
   Button,
   Card,
+  Checkbox,
   Drawer,
   KeyValue,
   Link,
@@ -74,6 +75,7 @@ export interface InstalledAppDrawerProps {
   pollIntervalMs?: number;
   linkedSite?: CaddySite | null;
   onEditSite?: (site: CaddySite) => void;
+  onDeleteLinkedSite?: (site: CaddySite) => Promise<void>;
   onPublish?: (entry: InstalledApp) => void;
   onClose: () => void;
 }
@@ -89,6 +91,7 @@ export function InstalledAppDrawer({
   pollIntervalMs = 800,
   linkedSite,
   onEditSite,
+  onDeleteLinkedSite,
   onPublish,
   onClose,
 }: InstalledAppDrawerProps) {
@@ -114,6 +117,7 @@ export function InstalledAppDrawer({
   const [accessCards, setAccessCards] = useState<ResultCardView[] | null>(null);
   const [accessLoading, setAccessLoading] = useState(false);
   const [accessError, setAccessError] = useState<unknown>(null);
+  const [alsoDeleteSite, setAlsoDeleteSite] = useState(true);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -126,6 +130,7 @@ export function InstalledAppDrawer({
   useEffect(() => {
     setAccessCards(null);
     setAccessError(null);
+    setAlsoDeleteSite(true);
   }, [entry.manifestId, entry.instance]);
 
   useEffect(() => {
@@ -379,6 +384,15 @@ export function InstalledAppDrawer({
         throw finalTask.task.error ?? new Error(zh.catalog.uninstallFailed);
       }
       toast.show({ message: zh.catalog.uninstallSubmitted });
+      if (alsoDeleteSite && linkedSite && onDeleteLinkedSite) {
+        try {
+          await onDeleteLinkedSite(linkedSite);
+        } catch {
+          toast.show({
+            message: `应用已卸载，但删除关联站点 ${linkedSite.name} 失败，请手动删除`,
+          });
+        }
+      }
       await refreshHubRuntime(queryClient, hubId, { force: true });
       if (mountedRef.current) onClose();
     } catch (cause) {
@@ -800,7 +814,10 @@ export function InstalledAppDrawer({
                   size="sm"
                   disabled={actionDisabled}
                   disabledReason={offlineReason}
-                  onClick={() => setConfirm({ kind: 'uninstall' })}
+                  onClick={() => {
+                    setAlsoDeleteSite(true);
+                    setConfirm({ kind: 'uninstall' });
+                  }}
                 />
               </Row>
 
@@ -865,22 +882,31 @@ export function InstalledAppDrawer({
               ) : null}
 
               {confirm?.kind === 'uninstall' ? (
-                <Banner
-                  tone="warn"
-                  title={`卸载 ${displayName}？`}
-                  description={zh.catalog.uninstallConfirmDesc}
-                  action={
-                    <Row gap={2}>
-                      <Button
-                        label={zh.catalog.uninstall}
-                        variant="danger"
-                        size="sm"
-                        onClick={() => void runUninstall(false)}
-                      />
-                      <Button label="取消" size="sm" onClick={() => setConfirm(null)} />
-                    </Row>
-                  }
-                />
+                <Stack gap={2}>
+                  <Banner
+                    tone="warn"
+                    title={`卸载 ${displayName}？`}
+                    description={zh.catalog.uninstallConfirmDesc}
+                    action={
+                      <Row gap={2}>
+                        <Button
+                          label={zh.catalog.uninstall}
+                          variant="danger"
+                          size="sm"
+                          onClick={() => void runUninstall(false)}
+                        />
+                        <Button label="取消" size="sm" onClick={() => setConfirm(null)} />
+                      </Row>
+                    }
+                  />
+                  {linkedSite && onDeleteLinkedSite ? (
+                    <Checkbox
+                      checked={alsoDeleteSite}
+                      onChange={setAlsoDeleteSite}
+                      label={`同时删除关联的 Caddy 发布站点（${linkedSite.name}）`}
+                    />
+                  ) : null}
+                </Stack>
               ) : null}
             </Stack>
           </Card>

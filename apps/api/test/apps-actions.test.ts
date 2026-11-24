@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
-import { HubUnreachableError } from '../src/lib/node-client';
+import { HttpAgentClient, HubUnreachableError } from '../src/lib/node-client';
 
 /** 建 + 登录 + 配置 wireguard（rev 1），返回调用 rotate 所需的上下文 */
 async function setup() {
@@ -267,5 +267,59 @@ describe('apps 动作：同步动作超时重试判定（R-3）', () => {
     expect(body.error.message).toContain('Hub 不可达');
     // 非超时立即抛：Agent 只被调用一次
     expect(ctx.agent.requests).toHaveLength(1);
+  });
+
+  it('节点处于冷却期时，显式 POST 应用动作跳过冷却并清除冷却', async () => {
+    let shouldFail = true;
+    const calledUrls: string[] = [];
+    const client = new HttpAgentClient(
+      async (url) => {
+        calledUrls.push(String(url));
+        if (shouldFail) throw new Error('ECONNREFUSED');
+        return new Response(JSON.stringify({ ok: true, rev: 1 }), { status: 200 });
+      },
+      async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    );
+    const ctx = makeTestContext(undefined, client);
+    const cookie = await loginAsAdmin(ctx);
+    const { id: nodeId } = await createNode(ctx, cookie);
+    await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/wireguard`,
+      {
+        method: 'PUT',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({
+          config: { listenPort: 51820, peers: [{ name: 'phone', key: 'pk-1' }] },
+          schemaVersion: 1,
+        }),
+      },
+      ctx.env,
+    );
+
+    // 首次 /state 失败使节点进入 30s 冷却
+    const stateFail = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/state`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(stateFail.status).toBe(200);
+    expect(((await stateFail.json()) as { reachable: boolean }).reachable).toBe(false);
+
+    // Agent 恢复后，显式动作不受冷却拦截，成功并顺带清除冷却
+    shouldFail = false;
+    const callsBefore = calledUrls.length;
+    const actionRes = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/wireguard/rotate_peer`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ params: { peer: 'phone' }, idempotencyKey: 'idem-bypass' }),
+      },
+      ctx.env,
+    );
+    expect(actionRes.status).toBe(200);
+    expect(calledUrls.length).toBeGreaterThan(callsBefore);
   });
 });

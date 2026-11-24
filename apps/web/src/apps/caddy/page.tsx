@@ -2283,6 +2283,7 @@ export default function SitesPage() {
           offlineReason={writeDisabledReason}
           linkedSite={siteInstalledMap.byInstalledId.get(installedIdentity(selectedInstalledEntry)) ?? null}
           onEditSite={(site) => openEdit(site)}
+          onDeleteLinkedSite={remove}
           onPublish={publishInstalledEntry}
           onClose={() => setSelectedInstalledKey(null)}
         />

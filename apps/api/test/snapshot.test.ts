@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HubUnreachableError } from '../src/lib/node-client';
+import { HttpAgentClient, HubUnreachableError } from '../src/lib/node-client';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
 
 const SNAPSHOT = {
@@ -82,5 +82,66 @@ describe('快照转发（无域名节点）', () => {
     expect(calls).toBe(1);
     const bodies = (await Promise.all([first.json(), second.json()])) as Array<Record<string, unknown>>;
     expect(bodies.filter((body) => body.cached === true)).toHaveLength(1);
+  });
+
+  it('节点冷却期间：/snapshot?force=1 与 /state?force=1 跳过冷却并清除冷却', async () => {
+    let shouldFail = true;
+    const client = new HttpAgentClient(
+      async (url) => {
+        if (shouldFail) throw new Error('ECONNREFUSED');
+        const path = new URL(String(url)).pathname;
+        if (path === '/snapshot') {
+          return new Response(JSON.stringify(SNAPSHOT), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({ ok: true, host: { hostname: 'hub-test' }, adapters: [], ports: [] }),
+          { status: 200 },
+        );
+      },
+      async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    );
+    const ctx = makeTestContext(undefined, client);
+    const cookie = await loginAsAdmin(ctx);
+    const { id } = await createNode(ctx, cookie);
+
+    // 首次 /state 失败触发冷却
+    const firstState = await ctx.app.request(
+      `/api/v1/nodes/${id}/state`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(((await firstState.json()) as { reachable: boolean }).reachable).toBe(false);
+
+    // 恢复后普通 /snapshot 命中冷却（不发请求）
+    shouldFail = false;
+    const cooledSnap = await ctx.app.request(
+      `/api/v1/nodes/${id}/snapshot`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    const cooledBody = (await cooledSnap.json()) as { reachable: boolean; error: string | null };
+    expect(cooledBody.reachable).toBe(false);
+    expect(cooledBody.error).toContain('冷却');
+
+    // /state?force=1 与 /snapshot?force=1 均跳过冷却并恢复在线
+    const forcedState = await ctx.app.request(
+      `/api/v1/nodes/${id}/state?force=1`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(((await forcedState.json()) as { reachable: boolean }).reachable).toBe(true);
+
+    // 重新进入冷却，再验证 /snapshot?force=1
+    shouldFail = true;
+    await ctx.app.request(`/api/v1/nodes/${id}/state`, { headers: authHeaders(cookie) }, ctx.env);
+    shouldFail = false;
+    const forcedSnap = await ctx.app.request(
+      `/api/v1/nodes/${id}/snapshot?force=1`,
+      { headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(((await forcedSnap.json()) as { reachable: boolean }).reachable).toBe(true);
   });
 });
