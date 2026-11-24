@@ -4,6 +4,8 @@ interface WindowRecord {
 }
 
 const memory = new Map<string, WindowRecord>();
+const D1_CLEANUP_INTERVAL = 20;
+let d1CleanupTick = 0;
 
 /** 限流可用的存储：D1（生产主路径）与 KV（可选兼容），都缺省时退化为进程内 Map */
 export interface RateLimitStores {
@@ -39,7 +41,17 @@ export async function allowRequest(
         )
         .bind(key, now, resetAt)
         .first<{ count: number }>();
-      if (row && Number.isFinite(row.count)) return row.count <= limit;
+      if (row && Number.isFinite(row.count)) {
+        d1CleanupTick = (d1CleanupTick + 1) % D1_CLEANUP_INTERVAL;
+        if (d1CleanupTick === 0) {
+          await stores.db
+            .prepare('DELETE FROM rate_limit WHERE reset_at < ?')
+            .bind(now)
+            .run()
+            .catch(() => {});
+        }
+        return row.count <= limit;
+      }
     } catch {
       // 存储异常时继续尝试 KV/内存，避免阻塞登录主路径
     }
@@ -75,4 +87,5 @@ export async function allowRequest(
 /** 仅供测试使用 */
 export function resetRateLimitForTests(): void {
   memory.clear();
+  d1CleanupTick = 0;
 }

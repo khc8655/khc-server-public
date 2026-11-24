@@ -37,7 +37,7 @@ import { throwAgentError } from './nodes';
 const ACTION_PATTERN = /^[a-z][a-z0-9_-]{1,31}$/;
 const SYNC_TIMEOUT_MS = 15_000;
 const SYNC_RETRY_WINDOW_MS = 60_000;
-const SYNC_RETRY_INTERVAL_MS = 750;
+const SYNC_RETRY_INTERVAL_MS = 2_000;
 const TASK_TIMEOUT_MS = 10_000;
 
 function toPublicApp(record: AppConfigRecord) {

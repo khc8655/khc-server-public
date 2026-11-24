@@ -43,6 +43,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from typing import Any, Mapping, Optional
 
 from khc import Adapter, Ctx, File, action_params
@@ -147,19 +148,20 @@ def _call_host_script_in_process(
     if _INPROC_EXECUTOR is not None:
         return _INPROC_EXECUTOR(verb, payload, state_dir)
     module = _khc_host_module()
-    # 每次调用前对齐运行期全局：模块是长驻的，不能假设它的状态还是上次的样子。
-    module.STATE_DIR = state_dir
-    module.PROC_ROOT = "/proc"
-    try:
-        payload_obj = module.main([verb], payload)
-    except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
-        return RunResult(
-            cmd=["khc-host", verb],
-            rc=1,
-            stdout="",
-            stderr=f"{type(exc).__name__}: {exc}",
-        )
-    text = module.serialize(payload_obj)
+    with _INPROC_LOCK:
+        # 每次调用前对齐运行期全局：模块是长驻的，不能假设它的状态还是上次的样子。
+        module.STATE_DIR = state_dir
+        module.PROC_ROOT = "/proc"
+        try:
+            payload_obj = module.main([verb], payload)
+        except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
+            return RunResult(
+                cmd=["khc-host", verb],
+                rc=1,
+                stdout="",
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+        text = module.serialize(payload_obj)
     return RunResult(cmd=["khc-host", verb], rc=0, stdout=text + "\n", stderr="")
 
 
@@ -174,6 +176,8 @@ def peer_allowed_verbs(module: Any) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 _script_module = None
+_MODULE_LOCK = threading.Lock()
+_INPROC_LOCK = threading.Lock()
 # 测试注入：进程内执行 khc-host 的入口。为 None 时走真实模块。
 # 与 khc_host 的 SLEEP/RUNNER 同类做法 —— 让测试能控制这一层而不必真的起解释器。
 _INPROC_EXECUTOR: Any = None
@@ -185,15 +189,18 @@ def _khc_host_module():
     global _script_module
     if _script_module is not None:
         return _script_module
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_ops", "khc_host.py")
-    spec = importlib.util.spec_from_file_location("khc_loaded_host_ops_scripts", path)
-    if spec is None or spec.loader is None:  # pragma: no cover - 打包缺失
-        raise CommandFailed("host-ops 脚本模块缺失（host_ops/khc_host.py）", details={"path": path})
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["khc_loaded_host_ops_scripts"] = module
-    spec.loader.exec_module(module)
-    _script_module = module
-    return module
+    with _MODULE_LOCK:
+        if _script_module is not None:
+            return _script_module
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_ops", "khc_host.py")
+        spec = importlib.util.spec_from_file_location("khc_loaded_host_ops_scripts", path)
+        if spec is None or spec.loader is None:  # pragma: no cover - 打包缺失
+            raise CommandFailed("host-ops 脚本模块缺失（host_ops/khc_host.py）", details={"path": path})
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["khc_loaded_host_ops_scripts"] = module
+        spec.loader.exec_module(module)
+        _script_module = module
+        return module
 
 
 def expected_script_version() -> str:

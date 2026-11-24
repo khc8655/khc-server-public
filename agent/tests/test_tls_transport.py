@@ -208,12 +208,15 @@ class TlsReloadAndStateTests(unittest.TestCase):
                     conn.close()
 
             before = peer_der()
+            before_ctx = served.server._ssl_context
             # 模拟 acme.sh --install-cert：原路径覆盖为新证书
             new_cert, new_key = make_cert(certs, "renewed", "new.example.test")
             _copy_bytes(new_cert, cert)
             _copy_bytes(new_key, key)
             self.assertEqual(peer_der(), before, "未 reload 前仍用旧证书")
             self.assertTrue(reload_tls(served.server))
+            self.assertIsNot(served.server._ssl_context, before_ctx)
+            self.assertIs(served.server._ssl_context, served.server.khc_ssl_context)
             after = peer_der()
             self.assertNotEqual(after, before)
             status, _, _ = get(served.port, "/health", tls=True)
@@ -223,10 +226,12 @@ class TlsReloadAndStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="khc-cert-") as certs:
             cert, key = make_cert(certs, "live", "keep.example.test")
             served = _Served(self, tls_cert=cert, tls_key=key)
+            before_ctx = served.server._ssl_context
             other_cert, _ = make_cert(certs, "other", "other.example.test")
             _copy_bytes(other_cert, cert)  # 证书与私钥不配对
             with self.assertRaises(ssl.SSLError):
                 reload_tls(served.server)
+            self.assertIs(served.server._ssl_context, before_ctx)
             status, _, _ = get(served.port, "/health", tls=True)
             self.assertEqual(status, 200)
 

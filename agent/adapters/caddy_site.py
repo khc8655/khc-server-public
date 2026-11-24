@@ -88,7 +88,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Mapping, Optional
 
 from khc import Adapter, CaddySnippet, Ctx, File, action_params
-from khc.adapters import validate_config
+from khc.adapters import default_command_runner, validate_config
 from khc.pkg import ensure_packages
 from khc.util import (
     LOG,
@@ -1466,6 +1466,11 @@ class CaddySite(Adapter):
         self._health_cache_at = 0.0
         self._health_cache_key: Optional[str] = None
         self._health_inflight: Optional[tuple[str, threading.Event, list[dict[str, Any]]]] = None
+        self._meta_lock = threading.Lock()
+        self._version_cache: Optional[tuple[tuple[str, int, int], tuple[Optional[str], bool]]] = None
+        self._validate_cache: Optional[
+            tuple[tuple[tuple[str, int, int], ...], dict[str, Any]]
+        ] = None
 
     # ------------------------------------------------------------------
     # 路径
@@ -2514,6 +2519,28 @@ class CaddySite(Adapter):
             )
         return problems
 
+    @staticmethod
+    def _file_sig(path: str) -> tuple[str, int, int]:
+        try:
+            st = os.stat(path)
+            return (path, int(st.st_mtime_ns), int(st.st_size))
+        except OSError:
+            return (path, -1, -1)
+
+    def _caddy_config_sig(self, ctx: Ctx, caddyfile: str) -> tuple[tuple[str, int, int], ...]:
+        paths: list[str] = [caddyfile, self.snippet_path(ctx)]
+        try:
+            caddy_dir = ctx.paths.caddy_dir
+            if os.path.isdir(caddy_dir):
+                for entry in sorted(os.listdir(caddy_dir)):
+                    if entry.endswith(".caddy"):
+                        full = os.path.join(caddy_dir, entry)
+                        if full not in paths:
+                            paths.append(full)
+        except OSError:
+            pass
+        return tuple(self._file_sig(p) for p in paths)
+
     def _status(self, ctx: Ctx) -> dict[str, Any]:
         caddyfile = ctx.paths.caddyfile
         snippet = read_text(self.snippet_path(ctx))
@@ -2521,13 +2548,27 @@ class CaddySite(Adapter):
         active = bool(ctx.unit_active(CADDY_UNIT))
         validate_info: dict[str, Any] = {"ok": None}
         if os.path.isfile(caddyfile):
-            result = ctx.run(
-                [CADDY_BIN, "validate", "--config", caddyfile, "--adapter", "caddyfile"],
-                check=False,
-            )
-            validate_info = {"ok": result.rc == 0, "rc": result.rc}
-            if result.rc != 0:
-                validate_info["message"] = tail(result.stderr or result.stdout, 500)
+            use_cache = getattr(ctx, "_runner", None) is default_command_runner
+            sig = self._caddy_config_sig(ctx, caddyfile) if use_cache else ()
+            cached_validate: Optional[dict[str, Any]] = None
+            if use_cache:
+                with self._meta_lock:
+                    if self._validate_cache is not None and self._validate_cache[0] == sig:
+                        cached_validate = copy.deepcopy(self._validate_cache[1])
+            if cached_validate is not None:
+                validate_info = cached_validate
+            else:
+                result = ctx.run(
+                    [CADDY_BIN, "validate", "--config", caddyfile, "--adapter", "caddyfile"],
+                    check=False,
+                    timeout=3,
+                )
+                validate_info = {"ok": result.rc == 0, "rc": result.rc}
+                if result.rc != 0:
+                    validate_info["message"] = tail(result.stderr or result.stdout, 500)
+                if use_cache:
+                    with self._meta_lock:
+                        self._validate_cache = (sig, copy.deepcopy(validate_info))
         else:
             validate_info["message"] = "Caddyfile 不存在"
 
@@ -2560,15 +2601,31 @@ class CaddySite(Adapter):
         }
 
     def _caddy_version(self, ctx: Ctx) -> tuple[Optional[str], bool]:
-        result = ctx.run([CADDY_BIN, "version"], check=False)
+        use_cache = getattr(ctx, "_runner", None) is default_command_runner
+        if use_cache:
+            resolved = shutil.which(CADDY_BIN)
+            if resolved:
+                sig = self._file_sig(resolved)
+                with self._meta_lock:
+                    if self._version_cache is not None and self._version_cache[0] == sig:
+                        return self._version_cache[1]
+        result = ctx.run([CADDY_BIN, "version"], check=False, timeout=3)
         if result.rc != 0:
             return None, False
         output = (result.stdout or result.stderr or "").strip()
         if not output:
-            return None, True
-        token = output.splitlines()[0].split()[0]
-        version = token[1:] if token.lower().startswith("v") else token
-        return (version or None), True
+            parsed: tuple[Optional[str], bool] = (None, True)
+        else:
+            token = output.splitlines()[0].split()[0]
+            version = token[1:] if token.lower().startswith("v") else token
+            parsed = (version or None), True
+        if use_cache:
+            resolved = shutil.which(CADDY_BIN)
+            if resolved:
+                sig = self._file_sig(resolved)
+                with self._meta_lock:
+                    self._version_cache = (sig, parsed)
+        return parsed
 
     # -- 健康探测 -----------------------------------------------------------
     def _http_status(
@@ -2617,18 +2674,31 @@ class CaddySite(Adapter):
                 return result("ok", status)
             return result("warn", status, f"HTTP {status}")
         except urllib.error.HTTPError as exc:
-            if exc.code in (405, 501):  # 某些服务不支持 HEAD
+            try:
+                code = int(exc.code)
+            finally:
+                try:
+                    exc.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if code in (405, 501):  # 某些服务不支持 HEAD
                 try:
                     status = self._http_status(url, "GET", insecure=False, timeout=timeout, headers=headers)
                     if status < 400:
                         return result("ok", status)
                     return result("warn", status, f"HTTP {status}")
                 except urllib.error.HTTPError as exc2:
-                    return result("warn", exc2.code, f"HTTP {exc2.code}")
+                    try:
+                        return result("warn", int(exc2.code), f"HTTP {exc2.code}")
+                    finally:
+                        try:
+                            exc2.close()
+                        except Exception:  # noqa: BLE001
+                            pass
                 except Exception as exc2:  # noqa: BLE001
                     state = "warn" if _is_tls_verify_error(exc2) else "down"
                     return result(state, None, self._probe_error(exc2))
-            return result("warn", exc.code, f"HTTP {exc.code}")
+            return result("warn", code, f"HTTP {code}")
         except Exception as exc:  # noqa: BLE001
             if not _is_tls_verify_error(exc):
                 return result("down", None, self._probe_error(exc))
@@ -2637,7 +2707,13 @@ class CaddySite(Adapter):
                 status = self._http_status(url, "GET", insecure=True, timeout=timeout, headers=headers)
                 return result("warn", status, "TLS 证书校验失败（自签/internal 证书）")
             except urllib.error.HTTPError as exc2:
-                return result("warn", exc2.code, "TLS 证书校验失败（自签/internal 证书）")
+                try:
+                    return result("warn", int(exc2.code), "TLS 证书校验失败（自签/internal 证书）")
+                finally:
+                    try:
+                        exc2.close()
+                    except Exception:  # noqa: BLE001
+                        pass
             except Exception as exc2:  # noqa: BLE001
                 return result("down", None, self._probe_error(exc2))
 

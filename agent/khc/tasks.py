@@ -176,6 +176,8 @@ class Task:
     # -- 日志 / 进度 --------------------------------------------------------
     def log(self, message: str) -> None:
         text = str(message)
+        if len(text) > 4096:
+            text = text[:4096] + "…"
         with self._lock:
             self._logs.append(text)
             self.updated_at = self._clock()

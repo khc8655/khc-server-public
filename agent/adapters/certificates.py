@@ -40,6 +40,7 @@ from khc.util import (
     KhcError,
     TaskCanceled,
     ValidationFailed,
+    atomic_write,
     ensure_dir,
     iso_utc,
     load_json,
@@ -1010,12 +1011,7 @@ class Certificates(Adapter):
 
     @staticmethod
     def _write_pem(path: str, content: str) -> None:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(path, 0o600)
+        atomic_write(path, content, mode=0o600)
 
     @staticmethod
     def _read_pem(path: str, label: str, markers: tuple[str, ...]) -> str:

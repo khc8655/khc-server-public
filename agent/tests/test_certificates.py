@@ -977,6 +977,15 @@ class DaysUntilTests(unittest.TestCase):
 
         self.assertIsInstance(days_until("2027-02-12T00:00:00"), int)
 
+    def test_write_pem_atomic_and_0600_no_leftover_tmp(self) -> None:
+        from adapters.certificates import Certificates
+
+        with tempfile.TemporaryDirectory(prefix="khc-pem-") as tmp:
+            target = os.path.join(tmp, "key.pem")
+            Certificates._write_pem(target, "PEM-CONTENT\n")
+            self.assertEqual(os.stat(target).st_mode & 0o777, 0o600)
+            self.assertEqual(os.listdir(tmp), ["key.pem"])
+
 
 if __name__ == "__main__":
     unittest.main()

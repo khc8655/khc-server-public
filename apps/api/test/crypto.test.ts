@@ -72,4 +72,23 @@ describe('crypto: A-11 v2 keyId 前缀与旧格式兼容', () => {
       /旧钥也不匹配/,
     );
   });
+
+  it('CryptoKey 缓存超过上限（4 个密钥）后仍可正确加解密且不混淆密钥', async () => {
+    const keys = [
+      'cache-master-key-01-abcdefghijklmnop',
+      'cache-master-key-02-abcdefghijklmnop',
+      'cache-master-key-03-abcdefghijklmnop',
+      'cache-master-key-04-abcdefghijklmnop',
+      'cache-master-key-05-abcdefghijklmnop',
+      'cache-master-key-06-abcdefghijklmnop',
+    ];
+    const encrypted = await Promise.all(
+      keys.map((k, idx) => encryptSecret(k, `secret-${idx}`)),
+    );
+    for (let i = 0; i < keys.length; i += 1) {
+      expect(await decryptSecret(keys[i]!, encrypted[i]!)).toBe(`secret-${i}`);
+    }
+    // 淘汰后再次用最早的密钥仍能重新导入并解密，错密钥仍失败
+    await expect(decryptSecret(keys[1]!, encrypted[0]!)).rejects.toBeTruthy();
+  });
 });

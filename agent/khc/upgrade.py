@@ -51,6 +51,7 @@ from .util import (
     KhcError,
     Paths,
     PayloadTooLarge,
+    atomic_write,
     ensure_dir,
     iso_utc,
     load_json,
@@ -862,9 +863,7 @@ cleanup()
             new_suffix = new_suffix.rstrip() + " " + " ".join(added)
         lines[unit_index] = prefix + new_suffix
         try:
-            with open(unit_path, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines) + "\n")
-            os.chmod(unit_path, 0o644)
+            atomic_write(unit_path, "\n".join(lines) + "\n", mode=0o644)
         except OSError as exc:
             report["skipped"] = f"unit 写入失败: {exc}"
             return report

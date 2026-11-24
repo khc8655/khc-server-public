@@ -17,6 +17,7 @@ import re
 import shutil
 import socket
 import tarfile
+import tempfile
 from typing import Any, Mapping
 
 from khc import Adapter, Ctx, File, Unit
@@ -26,7 +27,6 @@ from khc.util import (
     CommandFailed,
     DownloadFailed,
     ValidationFailed,
-    atomic_write,
     ensure_dir,
     read_text,
     tail,
@@ -335,14 +335,37 @@ WantedBy=multi-user.target
                 extracted = tar.extractfile(member)
                 if extracted is None:
                     raise AdapterError("无法从压缩包读取 node_exporter")
-                data = extracted.read()
+                dest_dir = os.path.dirname(os.path.abspath(binary))
+                ensure_dir(dest_dir)
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=".node_exporter.", suffix=".tmp", dir=dest_dir
+                )
+                total = 0
+                try:
+                    with os.fdopen(fd, "wb") as dst:
+                        while True:
+                            chunk = extracted.read(65536)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > 200 * 1024 * 1024:
+                                raise AdapterError("node_exporter 解压超过 200 MiB 上限")
+                            dst.write(chunk)
+                        dst.flush()
+                        os.fsync(dst.fileno())
+                    os.chmod(tmp_path, 0o755)
+                    os.replace(tmp_path, binary)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
         except tarfile.TarError as exc:
             raise AdapterError(
                 f"压缩包损坏，无法解压: {exc}",
                 details={"archive": archive},
             ) from exc
-        ensure_dir(os.path.dirname(os.path.abspath(binary)))
-        atomic_write(binary, data, mode=0o755)
 
     @staticmethod
     def _display_host(listen: str) -> str:

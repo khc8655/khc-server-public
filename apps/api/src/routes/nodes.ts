@@ -208,10 +208,9 @@ async function resolveAccess(
  * 不携带任何配置、日志或 secrets；/state 结构不合法时返回空数组（不伪造状态）。
  * 本函数刻意不识别具体应用名，应用知识不扩散到核心路由。
  */
-function probeApps(body: unknown): NodeProbeApp[] {
-  const parsed = agentStateSchema.safeParse(body);
-  if (!parsed.success) return [];
-  return parsed.data.adapters.map((adapter) => {
+function probeApps(parsed: AgentState | null): NodeProbeApp[] {
+  if (!parsed) return [];
+  return parsed.adapters.map((adapter) => {
     const status = adapter.status ?? {};
     return {
       name: adapter.name,
@@ -617,6 +616,7 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
     // cloudflare:sockets 同样计入）；用补位并发池替代固定分批，避免单台慢节点卡住整批。
     const concurrency = Math.min(6, nodes.length);
     const results = new Array<NodeProbeItem>(nodes.length);
+    const touchedNodeIds: string[] = [];
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
       while (nextIndex < nodes.length) {
@@ -628,10 +628,21 @@ export function nodeRoutes(deps: AppDeps): Hono<AppBindings> {
           configs: configsByNode.get(node.id) ?? [],
           certs,
           probedAt,
+          touchedNodeIds,
         });
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+
+    if (touchedNodeIds.length > 0) {
+      if (deps.nodes.touchLastSeenBatch) {
+        await deps.nodes.touchLastSeenBatch(touchedNodeIds, probedAt);
+      } else {
+        await Promise.all(
+          touchedNodeIds.map((id) => deps.nodes.update(id, { lastSeenAt: probedAt })),
+        );
+      }
+    }
 
     const expiringCerts = collectExpiringCerts(certs, probedAt, 15);
     return c.json(nodeProbeResponseSchema.parse({ probedAt, nodes: results, expiringCerts }));
@@ -720,9 +731,10 @@ async function probeSingleNode(
     configs: AppConfigSummaryRow[];
     certs: Awaited<ReturnType<AppDeps['certs']['list']>>;
     probedAt: number;
+    touchedNodeIds: string[];
   },
 ): Promise<NodeProbeItem> {
-  const { configs: nodeConfigs, certs, probedAt } = opts;
+  const { configs: nodeConfigs, certs, probedAt, touchedNodeIds } = opts;
   const probeEndpoint = node.preferredRoute === 'tunnel' ? node.tunnelEndpoint : node.endpoint;
   try {
     const token = await nodeToken(env, node);
@@ -765,7 +777,7 @@ async function probeSingleNode(
     const shouldUpdateSeen =
       node.lastSeenAt === null || probedAt - node.lastSeenAt >= LAST_SEEN_THROTTLE_SEC;
     if (shouldUpdateSeen) {
-      await deps.nodes.update(node.id, { lastSeenAt: probedAt });
+      touchedNodeIds.push(node.id);
       touchNodeLastSeen(deps, node.id, probedAt);
     }
     const effectiveLastSeenAt = shouldUpdateSeen ? probedAt : node.lastSeenAt;
@@ -783,7 +795,7 @@ async function probeSingleNode(
       via: response.via,
       error: null,
       lastSeenAt: effectiveLastSeenAt,
-      apps: probeApps(response.body),
+      apps: probeApps(parsedState),
       projection: projectNodeProbe({
         node,
         configs: nodeConfigs,

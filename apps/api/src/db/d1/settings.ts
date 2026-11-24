@@ -24,8 +24,8 @@ export class D1SettingsRepo implements SettingsRepo {
 
   async list(): Promise<Setting[]> {
     const result = await this.db
-      .prepare('SELECT key, value_enc, updated_at FROM settings ORDER BY key ASC')
-      .all<SettingRow>();
+      .prepare('SELECT key, updated_at FROM settings ORDER BY key ASC')
+      .all<Pick<SettingRow, 'key' | 'updated_at'>>();
     return (result.results ?? []).map((row) => ({ key: row.key, updatedAt: row.updated_at }));
   }
 

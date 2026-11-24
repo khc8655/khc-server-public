@@ -295,6 +295,16 @@ class TaskPersistenceTests(unittest.TestCase):
         revived = TaskManager(state_dir=self.state_dir)
         self.assertEqual(revived.all(), [])
 
+    def test_task_log_truncates_oversized_line(self) -> None:
+        manager = TaskManager(state_dir=self.state_dir)
+        task_id = manager.submit("demo", "log-cap", lambda t: t.log("Z" * 5000) or {"ok": True})
+        self.assertTrue(manager.wait(task_id, timeout=5.0))
+        snap = manager.status(task_id)
+        self.assertIsNotNone(snap)
+        logs = snap["logs"]
+        self.assertEqual(len(logs[0]), 4097)
+        self.assertTrue(logs[0].endswith("…"))
+
 
 if __name__ == "__main__":
     unittest.main()

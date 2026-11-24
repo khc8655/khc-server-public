@@ -22,6 +22,7 @@ plan/apply/备份/回滚/原子写/unit reload/端口登记/幂等/锁/Caddy 装
 
 from __future__ import annotations
 
+import collections
 import copy
 import importlib.util
 import json
@@ -30,6 +31,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -144,6 +146,19 @@ def default_command_runner(
     return RunResult(cmd=[str(part) for part in cmd], rc=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
 
 
+def _kill_proc_group(proc: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
 def default_streaming_runner(
     cmd: list[str],
     *,
@@ -167,22 +182,26 @@ def default_streaming_runner(
     只写 ``\\r`` 时进程不退出就一行进度都没有）。
     """
     argv = [str(part) for part in cmd]
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "bufsize": 0,
+        "env": env,
+        "cwd": cwd,
+    }
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=0,
-            env=env,
-            cwd=cwd,
-        )
+        proc = subprocess.Popen(argv, **popen_kwargs)
     except FileNotFoundError:
         return RunResult(cmd=argv, rc=127, stdout="", stderr=f"command not found: {cmd[0]}")
     except OSError as exc:
         return RunResult(cmd=argv, rc=126, stdout="", stderr=f"{exc}")
 
     fd = proc.stdout.fileno() if proc.stdout is not None else -1
-    chunks: list[str] = []
+    max_tail = max(1, int(tail_chars))
+    tail_buf: collections.deque[str] = collections.deque()
+    tail_len = 0
     extra_err: list[str] = []
     emitted = 0
     pending = ""
@@ -209,11 +228,11 @@ def default_streaming_runner(
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                proc.kill()
+                _kill_proc_group(proc)
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                proc.kill()
+                _kill_proc_group(proc)
                 extra_err.append(f"command timed out after {timeout}s")
                 break
             # 最多等 0.2s，保证取消/超时能被及时响应
@@ -234,7 +253,11 @@ def default_streaming_runner(
             if not data:
                 break
             text = data.decode("utf-8", errors="replace")
-            chunks.append(text)
+            tail_buf.append(text)
+            tail_len += len(text)
+            while tail_len > max_tail * 2 and len(tail_buf) > 1:
+                removed = tail_buf.popleft()
+                tail_len -= len(removed)
             pending += text
             while "\n" in pending:
                 raw_line, pending = pending.split("\n", 1)
@@ -266,6 +289,8 @@ def default_streaming_runner(
                         cr_throttle_sec <= 0 or now - last_cr_emit_at >= cr_throttle_sec
                     ):
                         emit(deferred_cr_line, is_cr=True)
+            if len(pending) > 65536:
+                pending = pending[-8192:]
     finally:
         try:
             if proc.stdout is not None:
@@ -277,7 +302,7 @@ def default_streaming_runner(
             try:
                 rc = proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_proc_group(proc)
                 rc = proc.wait()
         else:
             rc = proc.returncode
@@ -287,7 +312,7 @@ def default_streaming_runner(
     if pending.strip():
         emit(pending)
 
-    stdout = "".join(chunks)
+    stdout = "".join(tail_buf)
     if len(stdout) > tail_chars:
         stdout = stdout[-tail_chars:]
     return RunResult(cmd=argv, rc=rc, stdout=stdout, stderr="".join(extra_err))

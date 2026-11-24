@@ -626,7 +626,7 @@ class PortForward(Adapter):
         ]
 
     def _socat_version(self, ctx: Ctx) -> tuple[Optional[str], bool]:
-        result = ctx.run(["socat", "-V"], check=False)
+        result = ctx.run(["socat", "-V"], check=False, timeout=2)
         if result.rc != 0:
             return None, False
         output = (result.stdout or result.stderr or "").strip()
@@ -635,7 +635,13 @@ class PortForward(Adapter):
         match = SOCAT_VERSION_RE.search(output)
         return (match.group(1) if match else None), True
 
-    def _forward_status(self, ctx: Ctx, forward: Mapping[str, Any]) -> dict[str, Any]:
+    def _forward_status(
+        self,
+        ctx: Ctx,
+        forward: Mapping[str, Any],
+        *,
+        prefetched_state: Optional[str] = None,
+    ) -> dict[str, Any]:
         name = _text(forward.get("name"))
         unit = unit_name(name)
         enabled = bool(forward.get("enabled", True))
@@ -643,9 +649,12 @@ class PortForward(Adapter):
         error: Optional[str] = None
         if enabled:
             try:
-                probe = ctx.systemctl("is-active", unit, check=False)
-                lines = (probe.stdout or "").strip().splitlines()
-                state = lines[0].strip() if lines else ""
+                if prefetched_state is not None:
+                    state = prefetched_state
+                else:
+                    probe = ctx.systemctl("is-active", unit, check=False)
+                    lines = (probe.stdout or "").strip().splitlines()
+                    state = lines[0].strip() if lines else ""
                 active = state in ACTIVE_STATES
                 if state == "activating":
                     detail = ctx.systemctl(
@@ -695,7 +704,28 @@ class PortForward(Adapter):
     def _status(self, ctx: Ctx) -> dict[str, Any]:
         version, socat_available = self._socat_version(ctx)
         forwards = self._applied_forwards(ctx)
-        rows = [self._forward_status(ctx, forward) for forward in forwards]
+        enabled_units = [
+            unit_name(_text(item.get("name")))
+            for item in forwards
+            if bool(item.get("enabled", True))
+        ]
+        prefetched: dict[str, str] = {}
+        if len(enabled_units) >= 2:
+            try:
+                batch_probe = ctx.systemctl("is-active", *enabled_units, check=False)
+                lines = [ln.strip() for ln in (batch_probe.stdout or "").splitlines() if ln.strip()]
+                if len(lines) == len(enabled_units):
+                    prefetched = dict(zip(enabled_units, lines))
+            except Exception:  # noqa: BLE001
+                prefetched = {}
+        rows = [
+            self._forward_status(
+                ctx,
+                forward,
+                prefetched_state=prefetched.get(unit_name(_text(forward.get("name")))),
+            )
+            for forward in forwards
+        ]
         enabled = [row for row in rows if row["enabled"]]
         running = bool(socat_available and enabled and all(row["active"] for row in enabled))
         # 「已安装」= 有过转发配置；socat 只是运行依赖（ACME 自动签发也会装它），

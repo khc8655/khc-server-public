@@ -521,11 +521,11 @@ export async function issueAcmeDns01(
   const verifyDnsPropagation =
     input.verifyDnsPropagation ?? (input.dohFetch !== undefined || input.acmeFetch === undefined);
   const sleep = input.sleep ?? defaultSleep;
-  const propagationDelayMs = input.propagationDelayMs ?? 5000;
-  const propagationPollIntervalMs = input.propagationPollIntervalMs ?? 2500;
+  const propagationDelayMs = input.propagationDelayMs ?? 7000;
+  const propagationPollIntervalMs = input.propagationPollIntervalMs ?? 4000;
   const propagationMaxWaitMs = input.propagationMaxWaitMs ?? 20000;
-  const pollIntervalMs = input.pollIntervalMs ?? 1500;
-  const maxPollAttempts = input.maxPollAttempts ?? 15;
+  const pollIntervalMs = input.pollIntervalMs ?? 2500;
+  const maxPollAttempts = input.maxPollAttempts ?? 10;
 
   const { defaultCfFetch } = await import('./cf-dns');
   const cfFetch = input.cfFetch ?? defaultCfFetch;

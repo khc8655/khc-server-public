@@ -374,10 +374,32 @@ class _Handler(BaseHTTPRequestHandler):
             )
         if length == 0:
             return b""
-        data = self.rfile.read(length)
-        if len(data) != length:
+        deadline = time.monotonic() + 10.0
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining > 0:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise BadRequest("请求体读取超时", code="request_timeout")
+            sock = getattr(self, "connection", None)
+            if sock is not None and hasattr(sock, "settimeout"):
+                try:
+                    sock.settimeout(min(10.0, left))
+                except OSError:
+                    pass
+            try:
+                chunk = self.rfile.read(min(65536, remaining))
+            except TimeoutError as exc:
+                raise BadRequest("请求体读取超时", code="request_timeout") from exc
+            except OSError as exc:
+                raise BadRequest("请求体读取中断", code="invalid_request") from exc
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if remaining > 0:
             raise BadRequest("请求体不完整", code="invalid_request")
-        return data
+        return b"".join(chunks)
 
     def _send_error_envelope(self, exc: KhcError) -> None:
         self._send_json(exc.status, {"ok": False, "error": exc.to_error()})
@@ -467,11 +489,12 @@ class _Server(ThreadingHTTPServer):
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         try:
-            if self._ssl_context is not None:
+            ssl_context = getattr(self, "_ssl_context", None)
+            if ssl_context is not None:
                 try:
                     # 握手必须带超时：静默 TCP（slowloris/端口扫描）否则会永久占住线程。
                     request.settimeout(self.tls_handshake_timeout)
-                    request = self._ssl_context.wrap_socket(request, server_side=True)
+                    request = ssl_context.wrap_socket(request, server_side=True)
                 except (ssl.SSLError, OSError) as exc:
                     # 握手失败/超时：只关这一条连接，绝不影响 accept 循环。
                     LOG.debug("TLS handshake failed from %s: %s", client_address, exc)
@@ -539,8 +562,8 @@ def create_server(
 def reload_tls(server: ThreadingHTTPServer) -> bool:
     """重新加载 TLS 证书（SIGHUP 触发）。未启用 TLS 返回 False；加载失败抛异常、保留旧证书。
 
-    先在一个临时 context 里完整校验新证书/私钥配对，成功后才应用到线上 context，
-    避免续期过程中证书与私钥短暂不配对时把线上监听弄坏。
+    在一个全新 SSLContext 里完整校验并加载证书/私钥后原子替换 server 引用，
+    避免原地修改与并发握手线程竞争。
     """
 
     context = getattr(server, "khc_ssl_context", None)
@@ -550,7 +573,8 @@ def reload_tls(server: ThreadingHTTPServer) -> bool:
     cert, key = files
     probe = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     probe.load_cert_chain(certfile=cert, keyfile=key)
-    context.load_cert_chain(certfile=cert, keyfile=key)
+    server._ssl_context = probe  # type: ignore[attr-defined]
+    server.khc_ssl_context = probe  # type: ignore[attr-defined]
     LOG.info("TLS 证书已重新加载 (cert=%s)", cert)
     return True
 
@@ -559,7 +583,6 @@ def serve_forever(server: ThreadingHTTPServer) -> None:
     try:
         server.serve_forever(poll_interval=0.2)
     finally:
-        server.shutdown()
         server.server_close()
 
 

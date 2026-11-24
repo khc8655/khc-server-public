@@ -74,6 +74,7 @@ export interface NodeRepo {
   get(id: string): Promise<StoredNode | null>;
   create(input: NewNode): Promise<StoredNode>;
   update(id: string, patch: NodePatch): Promise<StoredNode | null>;
+  touchLastSeenBatch?(ids: string[], at: number): Promise<void>;
   remove(id: string): Promise<boolean>;
 }
 

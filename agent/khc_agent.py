@@ -148,13 +148,34 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     stop_event = threading.Event()
+    reload_event = threading.Event()
+    signal_wake = threading.Event()
+    watcher_done = threading.Event()
+
+    def _signal_watcher() -> None:
+        while not watcher_done.is_set():
+            signal_wake.wait(timeout=0.5)
+            signal_wake.clear()
+            if stop_event.is_set():
+                LOG.info("收到终止信号，正在停止服务")
+                try:
+                    server.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            if reload_event.is_set():
+                reload_event.clear()
+                try:
+                    if not reload_tls(server):
+                        LOG.info("收到 SIGHUP：未启用 TLS，忽略")
+                except Exception as exc:  # noqa: BLE001 - 换证失败保留旧证书继续服务
+                    LOG.error("TLS 证书重载失败，继续使用旧证书: %s", exc)
 
     def _stop(signum, frame):  # noqa: ARG001
         if stop_event.is_set():
             return
         stop_event.set()
-        LOG.info("收到信号 %s，正在停止", signum)
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        signal_wake.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -164,13 +185,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     def _reload(signum, frame):  # noqa: ARG001
         # acme.sh 续期后的 --reloadcmd（systemctl reload）触发：就地换证，不重启、不断连接。
-        # 注册处理器还避免了未监听 TLS 时 SIGHUP 的默认动作（终止进程）。
-        try:
-            if reload_tls(server):
-                return
-            LOG.info("收到 SIGHUP：未启用 TLS，忽略")
-        except Exception as exc:  # noqa: BLE001 - 换证失败保留旧证书继续服务
-            LOG.error("TLS 证书重载失败，继续使用旧证书: %s", exc)
+        # 信号处理器里不打日志也不直接操作 SSLContext，仅置位事件唤醒观察线程，防止 logging 死锁。
+        reload_event.set()
+        signal_wake.set()
 
     sighup = getattr(signal, "SIGHUP", None)
     if sighup is not None:
@@ -179,13 +196,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         except (ValueError, OSError):  # pragma: no cover - 非主线程
             pass
 
+    watcher = threading.Thread(target=_signal_watcher, name="khc-signal-watcher", daemon=True)
+    watcher.start()
+
     try:
         serve_forever(server)
     except KeyboardInterrupt:  # pragma: no cover - 交互式
         pass
     finally:
+        watcher_done.set()
+        signal_wake.set()
+        watcher.join(timeout=2.0)
         try:
             server.server_close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            kernel.close()
         except Exception:  # noqa: BLE001
             pass
         LOG.info("khc-agent stopped")

@@ -146,6 +146,17 @@ class AuthVerifyTests(unittest.TestCase):
         lower = {key.lower(): value for key, value in headers.items()}
         self.auth.verify("GET", "/state", lower, b"")
 
+    def test_nonce_cache_respects_max_entries_cap(self) -> None:
+        cache = NonceCache(ttl=120, clock=self.clock, max_entries=3)
+        self.assertTrue(cache.check_and_store("n1"))
+        self.assertTrue(cache.check_and_store("n2"))
+        self.assertTrue(cache.check_and_store("n3"))
+        self.assertEqual(len(cache), 3)
+        # 超出上限时淘汰最旧项，长度保持 <= 3
+        self.assertTrue(cache.check_and_store("n4"))
+        self.assertEqual(len(cache), 3)
+        self.assertFalse(cache.check_and_store("n4"))
+
 
 if __name__ == "__main__":
     unittest.main()

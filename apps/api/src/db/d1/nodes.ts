@@ -107,6 +107,21 @@ export class D1NodeRepo implements NodeRepo {
     return this.get(id);
   }
 
+  async touchLastSeenBatch(ids: string[], at: number): Promise<void> {
+    const unique = [...new Set(ids)].filter(Boolean);
+    if (unique.length === 0) return;
+    const updatedAt = nowSec();
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+      const chunk = unique.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(', ');
+      await this.db
+        .prepare(`UPDATE nodes SET last_seen_at = ?, updated_at = ? WHERE id IN (${placeholders})`)
+        .bind(at, updatedAt, ...chunk)
+        .run();
+    }
+  }
+
   async remove(id: string): Promise<boolean> {
     const existing = await this.get(id);
     if (!existing) return false;
