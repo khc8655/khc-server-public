@@ -190,18 +190,22 @@ export function AgentCommandDrawer({
         {offline && kind !== 'uninstall' ? (
           <Banner tone="neutral" title={zh.agent.offline} description={zh.agent.offlineHint} />
         ) : null}
-        <Banner tone="info" title={zh.agent.installationHint} />
-        {node ? (
-          <Banner
-            tone="info"
-            title={fmt(zh.agent.targetTitle, { mode: modeLabel, endpoint: node.endpoint })}
-            description={zh.agent.targetHint}
-            action={
-              <Link to={paths.hubSection(hubId, 'settings')} label={zh.agent.changeAccess} />
-            }
-          />
+        {kind !== 'uninstall' ? (
+          <>
+            <Banner tone="info" title={zh.agent.installationHint} />
+            {node ? (
+              <Banner
+                tone="info"
+                title={fmt(zh.agent.targetTitle, { mode: modeLabel, endpoint: node.endpoint })}
+                description={zh.agent.targetHint}
+                action={
+                  <Link to={paths.hubSection(hubId, 'settings')} label={zh.agent.changeAccess} />
+                }
+              />
+            ) : null}
+            <Banner tone="warn" title={zh.agent.tokenWarning} />
+          </>
         ) : null}
-        <Banner tone="warn" title={zh.agent.tokenWarning} />
 
         <Field id="agent-mode" label={zh.agent.modeLabel} help={zh.agent.modeHelp}>
           <Segmented

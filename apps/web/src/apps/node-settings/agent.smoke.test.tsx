@@ -285,4 +285,12 @@ describe('Agent 命令 UI', () => {
     expect(await screen.findByText('v0.6.0')).toBeTruthy();
     expect(await screen.findByText('可升级到 v0.6.5')).toBeTruthy();
   });
+
+  it('卸载 Agent 抽屉不展示安装场景提示横幅', async () => {
+    await renderRoute('/hubs/tyo-1/settings');
+    await userEvent.click(await screen.findByRole('button', { name: '卸载 Agent' }));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).queryByText(/安装命令按当前接入方式生成/)).toBeNull();
+    expect(within(drawer).queryByText(/命令不包含节点令牌/)).toBeNull();
+  });
 });

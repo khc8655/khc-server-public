@@ -771,6 +771,21 @@ class ApplyTests(WireGuardTestBase):
         )
         self.assertIn("ListenPort = 51821", read_text(self.conf_path()) or "")
 
+    def test_first_apply_on_already_active_unit_restarts_unit(self) -> None:
+        # 模拟节点上已运行旧 wg-quick@wg0（监听 51820），首次纳管改用 8880 时必须 restart
+        self.runner.unit_active = True
+        self.runner.overrides.append(
+            lambda cmd: RunResult(cmd=cmd, rc=0, stdout="51820\n")
+            if cmd[:4] == ["wg", "show", "wg0", "listen-port"]
+            else None
+        )
+        self.assertIsNone(self.adapter._load_runtime(self.ctx()))
+        config = self.config(interface={"listenPort": 8880})
+        result = self.apply(config, rev=1)
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.runner.called("systemctl", "restart", "wg-quick@wg0.service"))
+        self.assertIn("ListenPort = 8880", read_text(self.conf_path()) or "")
+
     def test_apply_failure_in_after_apply_rolls_back_old_conf(self) -> None:
         self.apply()
         original = read_text(self.conf_path())

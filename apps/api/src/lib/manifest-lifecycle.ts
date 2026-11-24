@@ -357,7 +357,7 @@ export async function prepareManifestLifecycleAction(
         stage,
       },
     },
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, bypassCooldown: true },
   );
 
   if (isUnknownActionResponse(preflightRes.status, preflightRes.body)) {

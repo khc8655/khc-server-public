@@ -286,7 +286,7 @@ else
   LOGIN_URL="$LOGIN_LOCAL"
 fi
 
-INSTALLED_VER="$("$BIN" --version 2>/dev/null | head -n1 | tr -dc '0-9A-Za-z._- ' || true)"
+INSTALLED_VER="$("$BIN" --version 2>/dev/null | head -n1 | tr -dc '0-9A-Za-z._ -' || true)"
 INSTALLED_VER="${INSTALLED_VER:-$VER_LABEL}"
 
 python3 - "$LOGIN_URL" "$PORT" "$WEB_KEY" "$INSTALLED_VER" <<'PY'

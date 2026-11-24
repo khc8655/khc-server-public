@@ -259,7 +259,8 @@ async function fetchNodeState(
       undefined,
       // F-M1：/state 是最重的 Agent 端点（ops 收集 systemctl/ps/df 多个子进程），
       // 系统繁忙时 3s 预算必然踩线触发 fetch 超时→TCP 回退；放宽到与默认预算一致。
-      { timeoutMs: 10_000 },
+      // ?force=1（手动刷新 / 安装完成后刷新）跳过失败冷却并尝试清除冷却。
+      { timeoutMs: 10_000, ...(opts.force ? { bypassCooldown: true } : {}) },
     );
     const parsed = agentStateSchema.safeParse(response.body);
     if (!parsed.success) {

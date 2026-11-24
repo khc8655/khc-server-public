@@ -31,21 +31,25 @@ export function snapshotRoutes(deps: AppDeps): Hono<AppBindings> {
     c.header('Cache-Control', 'no-store');
     const node = await getNodeCached(deps, c.req.param('id'));
     const token = await nodeToken(c.env, node);
+    const forceQuery = c.req.query('force');
+    const force = forceQuery === '1' || forceQuery === 'true';
 
     const now = Date.now();
     // 过期的去重条目顺手清理（Map 大小受节点数约束，不会无限增长）。
     for (const [id, entry] of inflight) {
       if (now - entry.at > DEDUPE_MS * 5) inflight.delete(id);
     }
-    const existing = inflight.get(node.id);
-    if (existing && now - existing.at < DEDUPE_MS) {
-      const result = await existing.promise;
-      return c.json({ ...result, cached: true });
+    if (!force) {
+      const existing = inflight.get(node.id);
+      if (existing && now - existing.at < DEDUPE_MS) {
+        const result = await existing.promise;
+        return c.json({ ...result, cached: true });
+      }
     }
 
     const entry: DedupeEntry = {
       at: now,
-      promise: callSnapshot(deps, node, token),
+      promise: callSnapshot(deps, node, token, force),
     };
     inflight.set(node.id, entry);
     const result = await entry.promise;
@@ -59,10 +63,12 @@ async function callSnapshot(
   deps: AppDeps,
   node: StoredNode,
   token: string,
+  force: boolean,
 ): Promise<NodeSnapshotResponse> {
   try {
     const response = await deps.agent.call(node, token, 'GET', '/snapshot', undefined, {
       timeoutMs: SNAPSHOT_TIMEOUT_MS,
+      ...(force ? { bypassCooldown: true } : {}),
     });
     const parsed = agentSnapshotSchema.safeParse(response.body);
     if (!parsed.success) {

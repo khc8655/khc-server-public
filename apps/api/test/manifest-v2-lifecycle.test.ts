@@ -1060,4 +1060,45 @@ describe('应用清单 v2 写入与生命周期编排（V2）', () => {
     ]);
     expect(hookFetch).not.toHaveBeenCalled();
   });
+
+  it('manifest_install 预检阶段也会跳过冷却（bypassCooldown=true）', async () => {
+    const ctx = makeV2AppContext();
+    const cookie = await loginAsAdmin(ctx as never);
+    const { id: nodeId } = await createNode(ctx as never, cookie);
+    await ctx.appManifests.create({
+      id: 'demo-cooldown',
+      enabled: true,
+      manifest: v2Manifest({}),
+    });
+
+    ctx.agent.handler = async (_m, path) => {
+      if (path.endsWith('/manifest_preflight')) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            capabilities: { schemas: [1, 2], features: [...AGENT_MANIFEST_FEATURES] },
+            checks: [],
+            installed: null,
+          },
+        };
+      }
+      return { status: 200, body: { ok: true, taskId: 'task-cd' } };
+    };
+
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/app-catalog/manifest_install`,
+      {
+        method: 'POST',
+        headers: authHeaders(cookie),
+        body: JSON.stringify({ params: { manifestId: 'demo-cooldown', values: {} } }),
+      },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    const preflightReq = ctx.agent.requests.find((r) => r.path.endsWith('/manifest_preflight'));
+    expect(preflightReq?.bypassCooldown).toBe(true);
+    const installReq = ctx.agent.requests.find((r) => r.path.endsWith('/manifest_install'));
+    expect(installReq?.bypassCooldown).toBe(true);
+  });
 });

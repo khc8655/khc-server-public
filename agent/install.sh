@@ -862,9 +862,11 @@ install -d -m 0755 "$UNIT_DIR" "$ETC_DIR" "$OPT_DIR" "$ETC_DIR/khc" "$OPT_DIR/kh
 # wireguard conf 含私钥，目录收紧到 0700。
 install -d -m 0700 "$ETC_DIR/wireguard"
 TOKEN_FILE="$CONFIG_DIR/token"
+TOKEN_GENERATED=0
 if [ ! -s "$TOKEN_FILE" ]; then
   (umask 077; "$PYTHON" "$PREFIX/khc_agent.py" token --token-file "$TOKEN_FILE" >/dev/null)
   chmod 0600 "$TOKEN_FILE"
+  TOKEN_GENERATED=1
   log "已生成节点 token: $TOKEN_FILE"
 fi
 
@@ -1076,7 +1078,9 @@ else
   log "  WARN     : http://<IP 或域名>:$PORT   (明文，--insecure-http；仅测试，生产禁用)"
 fi
 log "  token    : $TOKEN_FILE"
-echo
-echo "节点 token（填入 Worker / 面板，仅显示这一次）："
-cat "$TOKEN_FILE"
+if [ "$TOKEN_GENERATED" = "1" ]; then
+  echo
+  echo "节点 token（填入 Worker / 面板，仅显示这一次）："
+  cat "$TOKEN_FILE"
+fi
 echo
