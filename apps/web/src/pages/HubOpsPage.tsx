@@ -61,7 +61,7 @@ type OpsDrawer =
   | { kind: 'process'; process: HostOpsProcess; hostUptime: number | null }
   | { kind: 'fw-edit' }
   | { kind: 'key-add' }
-  | { kind: 'svc-logs'; unit: string }
+  | { kind: 'svc-logs'; unit: string; user?: string | null }
   | { kind: 'cron-edit'; entry: HostOpsCronEntry | null }
   | { kind: 'diag' }
   | { kind: 'diag-check'; check: DiagnosticCheck };
@@ -308,7 +308,7 @@ export default function HubOpsPage() {
             onClose={() => setDrawer(null)}
             footer={<Button label={zh.common.close} onClick={() => setDrawer(null)} />}
           >
-            <SvcLogsPanel hubId={hubId} unit={drawer.unit} />
+            <SvcLogsPanel hubId={hubId} unit={drawer.unit} user={drawer.user} />
           </Drawer>
         );
       case 'cron-edit':
@@ -468,7 +468,7 @@ export default function HubOpsPage() {
         <ServicesSegment
           hubId={hubId}
           disabled={opsDisabled}
-          onOpenLogs={(unit) => setDrawer({ kind: 'svc-logs', unit })}
+          onOpenLogs={(unit, user) => setDrawer({ kind: 'svc-logs', unit, user })}
         />
       ) : null}
       {segment === 'processes' ? (

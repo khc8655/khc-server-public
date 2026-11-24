@@ -503,7 +503,7 @@ describe('主机问题：7 类问题由 /state.ops 派生', () => {
     expect(hostCodes({ mem: { total: 1000, available: 40, percent: 96 }, swap: undefined })).toContain('memory_low');
   });
 
-  it('units_failed：过滤受管单元，evidence 只列前 5 个名字', () => {
+  it('units_failed：过滤受管单元，非受管降级为 info，evidence 只列前 5 个名字', () => {
     expect(
       hostCodes({ services: { failedUnits: ['caddy.service', 'khc-agent.service', 'wg-quick@wg0.service'] } }),
     ).toEqual([]);
@@ -512,7 +512,9 @@ describe('主机问题：7 类问题由 /state.ops 派生', () => {
       { services: { failedUnits: ['a.service', 'b.service', 'c.service', 'd.service', 'e.service', 'f.service'] } },
       'units_failed',
     );
-    expect(problem.severity).toBe('warn');
+    expect(problem.severity).toBe('info');
+    expect(problem.hint).toContain('主机运维');
+    expect(problem.hint).toContain('清除失败状态');
     expect(problem.evidence).toMatchObject({
       count: 6,
       units: 'a.service, b.service, c.service, d.service, e.service',

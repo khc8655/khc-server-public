@@ -88,6 +88,7 @@ let taskState: 'done' | 'error' | 'running' = 'done';
 let removedManagedKey = false;
 /** 模拟发行版自带单元失败（真机 aws-hui-us 上的 fwupd / apt-daily-upgrade 就是这个形态）。 */
 let systemUnitFailed = false;
+let userAppServiceIncluded = false;
 let requests: { url: string; init?: RequestInit }[] = [];
 type LogsErrorsMode = 'data' | 'empty' | 'error' | 'loading';
 let logsErrorsMode: LogsErrorsMode = 'data';
@@ -369,18 +370,22 @@ function mockApi() {
           return json({ ok: true, data: {} });
         }
         if (verb === 'svc.list') {
+          const baseServices = [
+            { unit: 'caddy.service', load: 'loaded', active: 'active', sub: 'running', description: 'Caddy' },
+            { unit: 'ssh.service', load: 'loaded', active: 'active', sub: 'running', description: 'OpenBSD Secure Shell server' },
+            { unit: 'khc-r3-driver.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'KHC R3 driver' },
+            ...(systemUnitFailed
+              ? [{ unit: 'fwupd.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'Firmware update daemon' }]
+              : []),
+            ...(userAppServiceIncluded
+              ? [{ unit: 'khc-magpie-default.service', load: 'loaded', active: 'active', sub: 'running', description: 'magpie gateway', scope: 'user', user: 'khc-app-magpie' }]
+              : []),
+          ];
           return json({
             ok: true,
             data: {
-              services: [
-                { unit: 'caddy.service', load: 'loaded', active: 'active', sub: 'running', description: 'Caddy' },
-                { unit: 'ssh.service', load: 'loaded', active: 'active', sub: 'running', description: 'OpenBSD Secure Shell server' },
-                { unit: 'khc-r3-driver.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'KHC R3 driver' },
-                ...(systemUnitFailed
-                  ? [{ unit: 'fwupd.service', load: 'loaded', active: 'failed', sub: 'failed', description: 'Firmware update daemon' }]
-                  : []),
-              ],
-              count: systemUnitFailed ? 4 : 3,
+              services: baseServices,
+              count: baseServices.length,
             },
           });
         }
@@ -413,6 +418,7 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   removedManagedKey = false;
   systemUnitFailed = false;
+  userAppServiceIncluded = false;
   mockApi();
 });
 
@@ -515,6 +521,39 @@ describe('主机运维页（ui-redesign §4：状态带 + 分段对象表 + 唯�
     const item = await screen.findByRole('menuitem', { name: '清除失败状态' });
     expect((item as HTMLButtonElement).disabled).toBe(true);
     expect(item.getAttribute('title')).toBe('这个单元当前不是失败状态，无需清除');
+  });
+
+  it('托管应用用户级服务（systemd --user）列出并在日志与重启时透传 user', async () => {
+    userAppServiceIncluded = true;
+    await renderRoute('/hubs/tyo-1/ops');
+    const magpieRow = (await screen.findAllByText('khc-magpie-default.service'))
+      .map((element) => element.closest('tr'))
+      .find((element): element is HTMLTableRowElement => element !== null);
+    if (!magpieRow) throw new Error('missing magpie row');
+
+    // 日志：携带 user = khc-app-magpie
+    await userEvent.click(within(magpieRow).getByRole('button', { name: '更多操作' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: '日志' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/serving/)).toBeTruthy();
+    const closeButton = within(dialog).getAllByRole('button', { name: '关闭' }).at(0);
+    if (!closeButton) throw new Error('missing close button');
+    await userEvent.click(closeButton);
+
+    // 重启：L2 确认后携带 user = khc-app-magpie
+    await userEvent.click(within(magpieRow).getByRole('button', { name: '更多操作' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: '重启' }));
+    const confirm = await screen.findByRole('dialog');
+    await userEvent.click(within(confirm).getByRole('button', { name: '重启' }));
+    await waitFor(() => expect(screen.getAllByText(/已重启 khc-magpie-default\.service/).length).toBeGreaterThan(0));
+
+    const svcCalls = requests
+      .filter((req) => req.url.endsWith('/apps/host-ops/call') && req.init?.body)
+      .map((req) => JSON.parse(String(req.init!.body)) as { params: { verb: string; params: Record<string, unknown> } });
+    const magpieLogs = svcCalls.find((c) => c.params.verb === 'svc.logs' && c.params.params.unit === 'khc-magpie-default.service');
+    const magpieRestart = svcCalls.find((c) => c.params.verb === 'svc.restart' && c.params.params.unit === 'khc-magpie-default.service');
+    expect(magpieLogs?.params.params).toMatchObject({ unit: 'khc-magpie-default.service', user: 'khc-app-magpie', lines: 200 });
+    expect(magpieRestart?.params.params).toEqual({ unit: 'khc-magpie-default.service', user: 'khc-app-magpie' });
   });
 
   it('状态带 CPU 下钻进程段，行点击在唯一抽屉展示详情（无二级弹窗）', async () => {
