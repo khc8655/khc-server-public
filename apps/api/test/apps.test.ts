@@ -259,6 +259,9 @@ describe('apps: 配置仓库 + Agent 转发', () => {
     );
     const taskBody = (await task.json()) as { task: { state: string } };
     expect(taskBody.task.state).toBe('done');
+    const taskReq = ctx.agent.requests.find((r) => r.path === '/tasks/t_1');
+    expect(taskReq?.bypassCooldown).toBe(true);
+    expect(taskReq?.timeoutMs).toBe(10_000);
   });
 
   it('rollback = 旧配置生成新 rev 再 apply', async () => {

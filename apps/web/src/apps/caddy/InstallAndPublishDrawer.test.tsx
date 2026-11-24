@@ -854,4 +854,97 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     const certSelect = (await screen.findByLabelText(/选择全局证书/)) as HTMLSelectElement;
     expect(certSelect.value).toBe(wildcardCert.id);
   });
+
+  it('安装轮询连续遇到 2 次 502 hub_unreachable 后自动恢复并完成发布', async () => {
+    window.scrollTo = vi.fn();
+    let taskPolls = 0;
+    let applyCount = 0;
+    const onPublished = vi.fn();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
+          return json({ ok: true, accepted: true, taskId: 'task-flaky', result: { taskId: 'task-flaky' } });
+        }
+        if (url === '/api/v1/nodes/hub-1/tasks/task-flaky') {
+          taskPolls += 1;
+          if (taskPolls === 1) {
+            return json({
+              task: { id: 'task-flaky', state: 'running', progress: 10, logs: ['downloading'], result: null, error: null },
+            });
+          }
+          if (taskPolls <= 3) {
+            return json(
+              { error: { code: 'hub_unreachable', message: 'Hub 不可达（连续失败后冷却中，稍后自动重试）' } },
+              502,
+            );
+          }
+          return json({
+            task: { id: 'task-flaky', state: 'done', progress: 100, logs: ['downloading', 'started'], result: {}, error: null },
+          });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site') {
+          return json({
+            app: {
+              app: 'caddy-site',
+              schemaVersion: 1,
+              config: { sites: [] },
+              rev: 2,
+              appliedRev: 1,
+              updatedAt: NOW,
+            },
+          });
+        }
+        if (url === '/api/v1/nodes/hub-1/apps/caddy-site/apply') {
+          applyCount += 1;
+          return json({ ok: true });
+        }
+        return json({});
+      }),
+    );
+
+    renderWizard({ onPublished, installTimeoutMs: 5_000 });
+    expect(await screen.findByText('magpie')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+
+    expect(await screen.findByText(/已安装并发布/)).toBeTruthy();
+    expect(taskPolls).toBe(4);
+    expect(applyCount).toBe(1);
+    expect(onPublished).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('正在重试读取进度')).toBeNull();
+  });
+
+  it('安装轮询遇到非瞬态 404 时立即失败，不再无限重试', async () => {
+    window.scrollTo = vi.fn();
+    let taskPolls = 0;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [magpieManifest] });
+        if (url === '/api/v1/nodes/hub-1/apps/app-catalog/recipe_install') {
+          return json({ ok: true, accepted: true, taskId: 'task-missing', result: { taskId: 'task-missing' } });
+        }
+        if (url === '/api/v1/nodes/hub-1/tasks/task-missing') {
+          taskPolls += 1;
+          return json({ error: { code: 'not_found', message: '任务不存在' } }, 404);
+        }
+        return json({});
+      }),
+    );
+
+    renderWizard({ installTimeoutMs: 5_000 });
+    expect(await screen.findByText('magpie')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '选择并配置' }));
+    await userEvent.click(screen.getByRole('button', { name: '开始安装并发布' }));
+
+    expect(await screen.findByText('任务不存在')).toBeTruthy();
+    expect(taskPolls).toBe(1);
+    expect(screen.getByRole('button', { name: '重新安装' })).toBeTruthy();
+  });
 });

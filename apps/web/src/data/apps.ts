@@ -83,6 +83,27 @@ export async function fetchTask(hubId: string, taskId: string): Promise<TaskResp
   return taskResponseSchema.parse(body);
 }
 
+/** 轮询节点任务时遇到可恢复的网络/控制面短暂波动（5xx / 408 / 429 / 冷却 / fetch 网络错），可继续重试。 */
+export function isTransientTaskPollError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return (
+      error.status >= 500 ||
+      error.status === 408 ||
+      error.status === 429 ||
+      error.code === 'hub_unreachable' ||
+      error.code === 'timeout'
+    );
+  }
+  return error instanceof TypeError;
+}
+
+/** 任务轮询退避时长（连续失败后指数退避，并随 pollIntervalMs 缩放上限以保持测试高速）。 */
+export function taskPollBackoffMs(pollIntervalMs: number, consecutiveErrors: number): number {
+  if (consecutiveErrors <= 0) return pollIntervalMs;
+  const cap = Math.max(pollIntervalMs, Math.min(6_000, pollIntervalMs * 8));
+  return Math.min(pollIntervalMs * 2 ** Math.min(consecutiveErrors - 1, 3), cap);
+}
+
 /** apply 响应里 hostFw 报告的人话消息（“已自动放行 …”回显，passthrough 字段）。 */
 export function hostFwMessages(envelope: AgentEnvelope): string[] {
   const record = envelope as unknown as Record<string, unknown>;

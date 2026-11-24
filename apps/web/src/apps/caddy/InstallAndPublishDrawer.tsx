@@ -15,7 +15,7 @@ import {
   type Node,
   type TaskResponse,
 } from '@khc/contracts';
-import { fetchTask, runAppAction } from '../../data/apps';
+import { fetchTask, isTransientTaskPollError, runAppAction, taskPollBackoffMs } from '../../data/apps';
 import { appManifestsQueryOptions } from '../../data/appManifests';
 import { buildDomainEndpoint, normalizeDomain } from '../../data/endpoint';
 import { callHostOps, isHostOpsAbortError, normalizeFirewallShow } from '../../data/hostOps';
@@ -77,7 +77,7 @@ export interface InstallAndPublishDrawerProps {
   certificates: Certificate[];
   existingSites: CaddySite[];
   offlineReason?: string;
-  /** 测试可注入更短轮询间隔，生产默认 800ms */
+  /** 测试可注入更短轮询间隔，生产默认 2000ms */
   pollIntervalMs?: number;
   /** 安装任务轮询上限（毫秒）；Agent 脚本超时 900s + 余量，测试可注入更短值 */
   installTimeoutMs?: number;
@@ -121,7 +121,7 @@ export function InstallAndPublishDrawer({
   certificates,
   existingSites,
   offlineReason,
-  pollIntervalMs = 800,
+  pollIntervalMs = 2000,
   installTimeoutMs = INSTALL_POLL_MAX_MS,
   onClose,
   onPublished,
@@ -175,6 +175,7 @@ export function InstallAndPublishDrawer({
   const [installDone, setInstallDone] = useState(false);
   const [task, setTask] = useState<TaskResponse | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);
+  const [pollWarning, setPollWarning] = useState<string | null>(null);
   const [publishedEndpoints, setPublishedEndpoints] = useState<PublishedEndpointSummary[]>([]);
   const publishedIdsRef = useRef<Set<string>>(new Set());
 
@@ -488,6 +489,7 @@ export function InstallAndPublishDrawer({
     if (!selectedApp || !canStartInstall) return;
     setStep(3);
     setActionError(null);
+    setPollWarning(null);
     try {
       if (!skipInstall) {
         setPhase('installing');
@@ -505,24 +507,57 @@ export function InstallAndPublishDrawer({
         if (!envelope.ok || !envelope.taskId) {
           throw envelope.error ?? new Error(zh.hosted.wizardFailedInstall);
         }
-        let current = await fetchTask(hubId, envelope.taskId);
-        if (cancelledRef.current) return;
-        setTask(current);
         const pollDeadline = Date.now() + installTimeoutMs;
-        while (current.task.state === 'pending' || current.task.state === 'running') {
-          if (Date.now() >= pollDeadline) {
-            throw new Error(
-              fmt(zh.hosted.wizardInstallTimeout, { seconds: String(Math.round(installTimeoutMs / 1000)) }),
+        let current: TaskResponse | null = null;
+        let consecutivePollErrors = 0;
+
+        while (true) {
+          if (current !== null || consecutivePollErrors > 0) {
+            const remaining = pollDeadline - Date.now();
+            if (remaining <= 0) {
+              throw new Error(
+                fmt(zh.hosted.wizardInstallTimeout, {
+                  seconds: String(Math.round(installTimeoutMs / 1000)),
+                }),
+              );
+            }
+            const delay = taskPollBackoffMs(pollIntervalMs, consecutivePollErrors);
+            await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
+            if (cancelledRef.current) return;
+          }
+
+          try {
+            const next = await fetchTask(hubId, envelope.taskId);
+            if (cancelledRef.current) return;
+            consecutivePollErrors = 0;
+            setPollWarning(null);
+            current = next;
+            setTask(next);
+            if (current.task.state !== 'pending' && current.task.state !== 'running') {
+              break;
+            }
+          } catch (pollErr) {
+            if (cancelledRef.current) return;
+            if (!isTransientTaskPollError(pollErr)) {
+              throw pollErr;
+            }
+            if (Date.now() >= pollDeadline) {
+              throw new Error(
+                fmt(zh.hosted.wizardInstallTimeout, {
+                  seconds: String(Math.round(installTimeoutMs / 1000)),
+                }),
+              );
+            }
+            consecutivePollErrors += 1;
+            const reason =
+              pollErr instanceof Error && pollErr.message ? pollErr.message : '网络波动';
+            setPollWarning(
+              `暂时无法读取节点进度（${reason}），任务仍在节点后台运行，将自动重试…`,
             );
           }
-          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-          if (cancelledRef.current) return;
-          current = await fetchTask(hubId, envelope.taskId);
-          if (cancelledRef.current) return;
-          setTask(current);
         }
-        if (current.task.state !== 'done') {
-          throw current.task.error ?? new Error(zh.hosted.wizardFailedInstall);
+        if (!current || current.task.state !== 'done') {
+          throw current?.task.error ?? new Error(zh.hosted.wizardFailedInstall);
         }
         setInstallDone(true);
         await refreshHubRuntime(queryClient, hubId, { force: true });
@@ -535,6 +570,7 @@ export function InstallAndPublishDrawer({
       }
     } catch (cause) {
       if (cancelledRef.current) return;
+      setPollWarning(null);
       setPhase('failed');
       setActionError(cause);
     }
@@ -544,7 +580,13 @@ export function InstallAndPublishDrawer({
     if (!task) return;
     try {
       const next = await fetchTask(hubId, task.task.id);
-      if (!cancelledRef.current) setTask(next);
+      if (cancelledRef.current) return;
+      setTask(next);
+      setPollWarning(null);
+      if (next.task.state === 'done' && phase === 'failed' && !installDone) {
+        setInstallDone(true);
+        setActionError(null);
+      }
     } catch {
       /* 轮询循环会在下一拍重试 */
     }
@@ -647,6 +689,7 @@ export function InstallAndPublishDrawer({
                   setStep(2);
                   setPhase('idle');
                   setActionError(null);
+                  setPollWarning(null);
                 }}
               />
             ) : null}
@@ -1255,6 +1298,10 @@ export function InstallAndPublishDrawer({
                 enabled={fwAlertEnabled}
                 appLabel={selectedApp.def.name}
               />
+            ) : null}
+
+            {phase === 'installing' && pollWarning ? (
+              <Banner tone="warn" title="正在重试读取进度" description={pollWarning} />
             ) : null}
 
             {actionError ? (

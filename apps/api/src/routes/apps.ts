@@ -38,7 +38,7 @@ const ACTION_PATTERN = /^[a-z][a-z0-9_-]{1,31}$/;
 const SYNC_TIMEOUT_MS = 15_000;
 const SYNC_RETRY_WINDOW_MS = 60_000;
 const SYNC_RETRY_INTERVAL_MS = 750;
-const TASK_TIMEOUT_MS = 5_000;
+const TASK_TIMEOUT_MS = 10_000;
 
 function toPublicApp(record: AppConfigRecord) {
   const { nodeId: _nodeId, secretsEnc: _secretsEnc, ...rest } = record;
@@ -363,7 +363,7 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       'GET',
       `/tasks/${encodeURIComponent(c.req.param('taskId'))}`,
       undefined,
-      { timeoutMs: TASK_TIMEOUT_MS },
+      { timeoutMs: TASK_TIMEOUT_MS, bypassCooldown: true },
     );
     if (response.status >= 400) throwAgentError(response.status, response.body);
     return c.json(taskResponseSchema.parse(response.body));

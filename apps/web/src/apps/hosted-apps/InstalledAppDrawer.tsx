@@ -10,7 +10,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AgentState, TaskResponse } from '@khc/contracts';
 import { compareSemver } from '../../data/agent';
-import { fetchTask, friendlyAgentError, runAppAction } from '../../data/apps';
+import {
+  fetchTask,
+  friendlyAgentError,
+  isTransientTaskPollError,
+  runAppAction,
+  taskPollBackoffMs,
+} from '../../data/apps';
 import {
   appStatus,
   canUpgrade,
@@ -155,22 +161,48 @@ export function InstalledAppDrawer({
   );
 
   const pollTask = async (taskId: string): Promise<TaskResponse> => {
-    let current = await fetchTask(hubId, taskId);
-    if (!mountedRef.current) return current;
-    setTask(current);
     const maxPolls = Math.ceil(90_000 / Math.max(pollIntervalMs, 5));
-    for (
-      let i = 0;
-      i < maxPolls && (current.task.state === 'pending' || current.task.state === 'running');
-      i += 1
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      if (!mountedRef.current) return current;
-      current = await fetchTask(hubId, taskId);
-      if (!mountedRef.current) return current;
-      setTask(current);
+    let current: TaskResponse | null = null;
+    let consecutivePollErrors = 0;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= maxPolls; attempt += 1) {
+      if (attempt > 0) {
+        const delay = taskPollBackoffMs(pollIntervalMs, consecutivePollErrors);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!mountedRef.current) {
+          if (current) return current;
+          throw lastError instanceof Error ? lastError : new Error('任务查询已取消');
+        }
+      }
+
+      try {
+        const next = await fetchTask(hubId, taskId);
+        if (!mountedRef.current) return next;
+        consecutivePollErrors = 0;
+        lastError = null;
+        current = next;
+        setTask(next);
+        if (current.task.state !== 'pending' && current.task.state !== 'running') {
+          return current;
+        }
+      } catch (pollErr) {
+        if (!mountedRef.current) {
+          if (current) return current;
+          throw pollErr;
+        }
+        if (!isTransientTaskPollError(pollErr)) {
+          throw pollErr;
+        }
+        consecutivePollErrors += 1;
+        lastError = pollErr;
+      }
     }
-    return current;
+
+    if (lastError !== null) {
+      throw lastError;
+    }
+    return current!;
   };
 
   const controlUnit = async (unitName: string, op: 'start' | 'stop' | 'restart') => {
