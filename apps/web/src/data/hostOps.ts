@@ -940,6 +940,10 @@ export interface HostOpsService {
   active: string;
   sub: string;
   description: string;
+  /** 面板安装应用（systemd --user）为 `'user'`，系统服务省略或为 `'system'` */
+  scope?: 'system' | 'user';
+  /** 用户级服务所属的托管应用账号（如 `khc-app-<app>`） */
+  user?: string | null;
 }
 
 export interface HostOpsSvcLogs {
@@ -972,6 +976,8 @@ export function normalizeServices(data: unknown): HostOpsService[] {
     const item = asRecord(value);
     const unit = asString(item.unit);
     if (!unit) return [];
+    const scope = item.scope === 'user' ? 'user' : item.scope === 'system' ? 'system' : undefined;
+    const user = typeof item.user === 'string' && item.user ? item.user : undefined;
     return [
       {
         unit,
@@ -979,6 +985,8 @@ export function normalizeServices(data: unknown): HostOpsService[] {
         active: asString(item.active) || '—',
         sub: asString(item.sub) || '—',
         description: asString(item.description) || '',
+        ...(scope ? { scope } : {}),
+        ...(user ? { user } : {}),
       },
     ];
   });

@@ -41,7 +41,7 @@
 ``snippets``（托管片段文件名）/ ``validate{ok,rc,message}`` / ``lastReloadAt`` /
 ``lastReloadOk`` / ``lastReloadSource`` / ``lastError`` / ``siteHealth[]``。
 ``siteHealth`` 对已生效配置里的 enabled 站点并发执行 HEAD/GET 探测（1.5s 超时，总预算 8s，SWR 异步刷新）：
-``ok`` / ``warn``（4xx、TLS 证书校验失败=自签/internal）/ ``down`` / ``unknown``。
+``ok``（<400 与 401/403 鉴权拦阻）/ ``warn``（其余 4xx/5xx、TLS 证书校验失败=自签/internal）/ ``down`` / ``unknown``。
 
 ## 动作
 
@@ -133,6 +133,12 @@ HEALTH_CACHE_TTL = 15.0
 HEALTH_STALE_TTL = 300.0
 HEALTH_COLD_WAIT = 0.4
 HEALTH_MAX_WORKERS = 4
+# 401/403 说明上游与鉴权层均正常响应（例如带登录 Key 或 BasicAuth 的面板），不报 warn
+_AUTH_OK_STATUSES = frozenset({401, 403})
+
+
+def _is_probe_ok_status(code: int) -> bool:
+    return code < 400 or code in _AUTH_OK_STATUSES
 
 # 模式影响（docs/dual-mode.md §6）：应用自己的判断，核心只汇总。
 MODE_CADDY_NOT_RUNNING = "MODE_BLOCKED_CADDY_NOT_RUNNING"
@@ -2513,7 +2519,7 @@ class CaddySite(Adapter):
                     "code": "upstream_down",
                     "severity": "warn",
                     "title": f"{len(warned)} 个站点探测异常",
-                    "hint": f"{names} 返回 4xx 或 TLS 校验失败（自签证书），请确认是否符合预期。",
+                    "hint": f"{names} 返回错误状态码或 TLS 校验失败（自签证书），请确认是否符合预期。",
                     "evidence": {"sites": len(sites), "warn": len(warned), "names": names},
                 }
             )
@@ -2670,7 +2676,7 @@ class CaddySite(Adapter):
 
         try:
             status = self._http_status(url, "HEAD", insecure=False, timeout=timeout, headers=headers)
-            if status < 400:
+            if _is_probe_ok_status(status):
                 return result("ok", status)
             return result("warn", status, f"HTTP {status}")
         except urllib.error.HTTPError as exc:
@@ -2684,12 +2690,15 @@ class CaddySite(Adapter):
             if code in (405, 501):  # 某些服务不支持 HEAD
                 try:
                     status = self._http_status(url, "GET", insecure=False, timeout=timeout, headers=headers)
-                    if status < 400:
+                    if _is_probe_ok_status(status):
                         return result("ok", status)
                     return result("warn", status, f"HTTP {status}")
                 except urllib.error.HTTPError as exc2:
                     try:
-                        return result("warn", int(exc2.code), f"HTTP {exc2.code}")
+                        code2 = int(exc2.code)
+                        if _is_probe_ok_status(code2):
+                            return result("ok", code2)
+                        return result("warn", code2, f"HTTP {code2}")
                     finally:
                         try:
                             exc2.close()
@@ -2698,6 +2707,8 @@ class CaddySite(Adapter):
                 except Exception as exc2:  # noqa: BLE001
                     state = "warn" if _is_tls_verify_error(exc2) else "down"
                     return result(state, None, self._probe_error(exc2))
+            if _is_probe_ok_status(code):
+                return result("ok", code)
             return result("warn", code, f"HTTP {code}")
         except Exception as exc:  # noqa: BLE001
             if not _is_tls_verify_error(exc):

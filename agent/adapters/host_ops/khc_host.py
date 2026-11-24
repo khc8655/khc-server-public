@@ -64,7 +64,7 @@ import tempfile
 import time
 from typing import Any, Mapping, Optional
 
-SCRIPT_VERSION = "1.5.4"
+SCRIPT_VERSION = "1.5.5"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -124,6 +124,8 @@ PROTECTED_SERVICE_PREFIXES = ("systemd-",)
 PROTECTED_SERVICES = frozenset({"ssh.service", "sshd.service", "dbus.service"})
 # 服务段只展示 failed + 面板受管单元，避免把整机所有 running 服务都搬回前端。
 MANAGED_SERVICE_PREFIXES = ("khc-", "wg-quick@")
+# 托管应用（app_manifests.create 模式）的运行用户前缀：仅允许枚举并控制这些用户的 --user 单元。
+APP_USER_PREFIX = "khc-app-"
 
 
 def _is_managed_service(unit: str) -> bool:
@@ -1858,6 +1860,92 @@ def _service_unit_param(params: Mapping[str, Any]) -> str:
     return unit
 
 
+def _service_user_param(params: Mapping[str, Any]) -> Optional[str]:
+    raw = params.get("user")
+    if raw is None:
+        return None
+    user = _as_text(raw)
+    if not user:
+        return None
+    if not USER_RE.match(user) or not user.startswith(APP_USER_PREFIX):
+        raise HostError(
+            "E_BAD_REQUEST",
+            f"运行用户不合法: {user}（仅允许 {APP_USER_PREFIX}* 托管应用用户）",
+        )
+    return user
+
+
+def _list_app_users() -> list[tuple[str, int]]:
+    try:
+        entries = pwd.getpwall()
+    except Exception:
+        return []
+    users: list[tuple[str, int]] = []
+    for entry in entries:
+        name = entry.pw_name
+        if name.startswith(APP_USER_PREFIX) and USER_RE.match(name):
+            users.append((name, int(entry.pw_uid)))
+    users.sort(key=lambda item: item[0])
+    return users
+
+
+def _lookup_app_uid(user: str) -> int:
+    try:
+        return int(pwd.getpwnam(user).pw_uid)
+    except KeyError as exc:
+        raise HostError("E_BAD_REQUEST", f"应用运行用户不存在: {user}") from exc
+
+
+def _user_systemctl_cmd(user: str, uid: int, *args: str) -> list[str]:
+    return [
+        "runuser",
+        "-u",
+        user,
+        "--",
+        "env",
+        f"XDG_RUNTIME_DIR=/run/user/{uid}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+        "systemctl",
+        "--user",
+        *args,
+    ]
+
+
+def _parse_service_units(
+    stdout: str,
+    *,
+    scope: Optional[str] = None,
+    user: Optional[str] = None,
+    limit: int = MAX_SVC_SERVICES,
+) -> list[dict[str, Any]]:
+    services: list[dict[str, Any]] = []
+    if limit <= 0:
+        return services
+    for line in stdout.splitlines():
+        tokens = line.split(None, 4)
+        if len(tokens) < 4 or not tokens[0].endswith(".service"):
+            continue
+        active = tokens[2]
+        # 做减法：只回 failed 单元 + 面板受管单元（khc-* / wg-quick@* / caddy）。
+        if active != "failed" and not _is_managed_service(tokens[0]):
+            continue
+        entry: dict[str, Any] = {
+            "unit": tokens[0],
+            "load": tokens[1],
+            "active": active,
+            "sub": tokens[3],
+            "description": (tokens[4] if len(tokens) > 4 else "").strip(),
+        }
+        if scope is not None:
+            entry["scope"] = scope
+        if user is not None:
+            entry["user"] = user
+        services.append(entry)
+        if len(services) >= limit:
+            break
+    return services
+
+
 def svc_list_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     rc, stdout, stderr = _run(
         # --plain：failed 单元默认带 "●" 前缀，不加会让解析器把整行丢掉，
@@ -1868,52 +1956,78 @@ def svc_list_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     )
     if rc != 0:
         raise HostError("E_UNSUPPORTED", f"systemctl 不可用: {(stderr or stdout).strip()[:200]}")
-    services: list[dict[str, Any]] = []
-    for line in stdout.splitlines():
-        tokens = line.split(None, 4)
-        if len(tokens) < 4 or not tokens[0].endswith(".service"):
-            continue
-        active = tokens[2]
-        # 做减法：只回 failed 单元 + 面板受管单元（khc-* / wg-quick@* / caddy）。
-        if active != "failed" and not _is_managed_service(tokens[0]):
-            continue
-        services.append(
-            {
-                "unit": tokens[0],
-                "load": tokens[1],
-                "active": active,
-                "sub": tokens[3],
-                "description": (tokens[4] if len(tokens) > 4 else "").strip(),
-            }
-        )
-        if len(services) >= MAX_SVC_SERVICES:
+    services = _parse_service_units(stdout, limit=MAX_SVC_SERVICES)
+    for app_user, uid in _list_app_users():
+        remaining = MAX_SVC_SERVICES - len(services)
+        if remaining <= 0:
             break
+        u_rc, u_stdout, _ = _run(
+            _user_systemctl_cmd(
+                app_user,
+                uid,
+                "list-units",
+                "--type=service",
+                "--state=running,failed",
+                "--no-legend",
+                "--no-pager",
+                "--plain",
+            ),
+            timeout=5,
+        )
+        if u_rc != 0:
+            continue
+        services.extend(_parse_service_units(u_stdout, scope="user", user=app_user, limit=remaining))
     return ok({"services": services, "count": len(services)})
 
 
 def svc_logs_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     unit = _service_unit_param(params)
+    user = _service_user_param(params)
     lines_count = _int_param(params, "lines", 100)
     if lines_count < 1 or lines_count > MAX_SVC_LOG_LINES:
         raise HostError("E_BAD_REQUEST", f"lines 必须在 1..{MAX_SVC_LOG_LINES}")
-    rc, stdout, stderr = _run(
-        ["journalctl", "-u", unit, "-n", str(lines_count), "--no-pager", "-o", "short-iso"],
-        timeout=15,
-    )
+    if user is None:
+        cmd = ["journalctl", "-u", unit, "-n", str(lines_count), "--no-pager", "-o", "short-iso"]
+    else:
+        uid = _lookup_app_uid(user)
+        cmd = [
+            "journalctl",
+            f"_UID={uid}",
+            f"_SYSTEMD_USER_UNIT={unit}",
+            "-n",
+            str(lines_count),
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ]
+    rc, stdout, stderr = _run(cmd, timeout=15)
     if rc != 0:
         raise HostError("E_UNSUPPORTED", f"journalctl 读取失败: {(stderr or stdout).strip()[:200]}")
     logs = [line[:2000] for line in stdout.splitlines()[-lines_count:]]
-    return ok({"unit": unit, "lines": logs, "count": len(logs)})
+    data: dict[str, Any] = {"unit": unit, "lines": logs, "count": len(logs)}
+    if user is not None:
+        data["user"] = user
+    return ok(data)
 
 
 def svc_restart_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     unit = _service_unit_param(params)
-    rc, _, stderr = _run(["systemctl", "restart", unit], timeout=30)
+    user = _service_user_param(params)
+    if user is None:
+        restart_cmd = ["systemctl", "restart", unit]
+        active_cmd = ["systemctl", "is-active", unit]
+    else:
+        uid = _lookup_app_uid(user)
+        restart_cmd = _user_systemctl_cmd(user, uid, "restart", unit)
+        active_cmd = _user_systemctl_cmd(user, uid, "is-active", unit)
+    rc, _, stderr = _run(restart_cmd, timeout=30)
     if rc != 0:
         raise HostError("E_INVALID", f"重启失败: {stderr.strip()[:300]}")
-    active_rc, _, _ = _run(["systemctl", "is-active", unit], timeout=8)
+    active_rc, _, _ = _run(active_cmd, timeout=8)
     data: dict[str, Any] = {"unit": unit, "restarted": True, "active": active_rc == 0}
-    if unit == "khc-agent.service":
+    if user is not None:
+        data["user"] = user
+    if user is None and unit == "khc-agent.service":
         data["note"] = "khc-agent 正在重启，当前连接会短暂中断，稍后自动恢复"
     return ok(data)
 
@@ -1931,14 +2045,25 @@ def svc_reset_failed_verb(params: Mapping[str, Any], args: list[str]) -> dict[st
     """
 
     unit = _service_unit_param(params)
-    rc, _, stderr = _run(["systemctl", "reset-failed", unit], timeout=15)
+    user = _service_user_param(params)
+    if user is None:
+        reset_cmd = ["systemctl", "reset-failed", unit]
+        failed_cmd = ["systemctl", "is-failed", unit]
+    else:
+        uid = _lookup_app_uid(user)
+        reset_cmd = _user_systemctl_cmd(user, uid, "reset-failed", unit)
+        failed_cmd = _user_systemctl_cmd(user, uid, "is-failed", unit)
+    rc, _, stderr = _run(reset_cmd, timeout=15)
     if rc != 0:
         raise HostError("E_INVALID", f"清除失败状态失败: {stderr.strip()[:300]}")
     # 回读真实状态：reset-failed 之后单元通常是 inactive；若它在失败循环里，
     # 会立刻再变 failed。把结论一并返回，省得前端再猜。
-    _, failed_out, _ = _run(["systemctl", "is-failed", unit], timeout=8)
+    _, failed_out, _ = _run(failed_cmd, timeout=8)
     still_failed = (failed_out or "").strip() == "failed"
-    return ok({"unit": unit, "reset": True, "stillFailed": still_failed})
+    data: dict[str, Any] = {"unit": unit, "reset": True, "stillFailed": still_failed}
+    if user is not None:
+        data["user"] = user
+    return ok(data)
 
 
 # ---------------------------------------------------------------------------

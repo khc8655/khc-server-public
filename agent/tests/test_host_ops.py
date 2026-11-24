@@ -3219,6 +3219,109 @@ class SvcCronVerbTests(ScriptTestBase):
         self.assertIn("note", result["data"])
         self.assertIn("短暂中断", result["data"]["note"])
 
+    def test_svc_list_includes_managed_app_user_units(self) -> None:
+        self.runner.on(
+            "systemctl",
+            lambda argv, input_text: (0, "caddy.service loaded active running Caddy\n", ""),
+        )
+
+        def runuser_handler(argv, input_text):
+            if "khc-app-broken" in argv:
+                return (1, "", "Failed to connect to bus")
+            return (
+                0,
+                "khc-magpie-default.service loaded active running magpie gateway\n"
+                "dbus.service loaded active running D-Bus\n",
+                "",
+            )
+
+        self.runner.on("runuser", runuser_handler)
+        with mock.patch.object(
+            HOST_SCRIPT,
+            "_list_app_users",
+            return_value=[("khc-app-broken", 993), ("khc-app-magpie", 994)],
+        ):
+            result = self.run_verb("svc.list")
+        self.assertTrue(result["ok"])
+        services = result["data"]["services"]
+        self.assertEqual([s["unit"] for s in services], ["caddy.service", "khc-magpie-default.service"])
+        self.assertNotIn("scope", services[0])
+        self.assertEqual(
+            services[1],
+            {
+                "unit": "khc-magpie-default.service",
+                "load": "loaded",
+                "active": "active",
+                "sub": "running",
+                "description": "magpie gateway",
+                "scope": "user",
+                "user": "khc-app-magpie",
+            },
+        )
+        runuser_calls = self.runner.commands("runuser")
+        self.assertTrue(any("XDG_RUNTIME_DIR=/run/user/994" in call for call in runuser_calls))
+        self.assertTrue(any("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/994/bus" in call for call in runuser_calls))
+
+    def test_svc_user_scope_logs_restart_reset_and_rejects_bad_user(self) -> None:
+        self.runner.on(
+            "journalctl",
+            lambda argv, input_text: (0, "2026-11-24T23:00:00+0800 magpie[1]: ready\n", ""),
+        )
+        self.runner.on(
+            "runuser",
+            lambda argv, input_text: (0, "failed\n" if "is-failed" in argv else "", ""),
+        )
+        with mock.patch.object(HOST_SCRIPT, "_lookup_app_uid", return_value=994):
+            logs_res = self.run_verb(
+                "svc.logs",
+                {"unit": "khc-magpie-default.service", "user": "khc-app-magpie", "lines": 50},
+            )
+            self.assertTrue(logs_res["ok"])
+            self.assertEqual(logs_res["data"]["user"], "khc-app-magpie")
+            j_argv = self.runner.commands("journalctl")[-1]
+            self.assertIn("_UID=994", j_argv)
+            self.assertIn("_SYSTEMD_USER_UNIT=khc-magpie-default.service", j_argv)
+
+            restart_res = self.run_verb(
+                "svc.restart",
+                {"unit": "khc-magpie-default.service", "user": "khc-app-magpie"},
+            )
+            self.assertTrue(restart_res["ok"])
+            self.assertTrue(restart_res["data"]["restarted"])
+            self.assertEqual(restart_res["data"]["user"], "khc-app-magpie")
+            r_calls = self.runner.commands("runuser")
+            self.assertTrue(
+                any(
+                    call[:4] == ["runuser", "-u", "khc-app-magpie", "--"]
+                    and "restart" in call
+                    and "khc-magpie-default.service" in call
+                    for call in r_calls
+                )
+            )
+            self.assertTrue(any("is-active" in call for call in r_calls))
+
+            reset_res = self.run_verb(
+                "svc.reset-failed",
+                {"unit": "khc-magpie-default.service", "user": "khc-app-magpie"},
+            )
+            self.assertTrue(reset_res["ok"])
+            self.assertTrue(reset_res["data"]["stillFailed"])
+            self.assertEqual(reset_res["data"]["user"], "khc-app-magpie")
+            self.assertTrue(any("reset-failed" in call for call in self.runner.commands("runuser")))
+
+        for bad_user in ("root", "ubuntu", "khc-app-../etc", "khc-app;id"):
+            for verb in ("svc.logs", "svc.restart", "svc.reset-failed"):
+                err = self.run_verb(verb, {"unit": "khc-magpie-default.service", "user": bad_user})
+                self.assertFalse(err["ok"], f"{verb} should reject {bad_user}")
+                self.assertEqual(err["error"]["code"], "E_BAD_REQUEST")
+
+        missing_res = self.run_verb(
+            "svc.restart",
+            {"unit": "khc-magpie-default.service", "user": "khc-app-not-exists-xyz"},
+        )
+        self.assertFalse(missing_res["ok"])
+        self.assertEqual(missing_res["error"]["code"], "E_BAD_REQUEST")
+
     # -- cron.list / cron.set ------------------------------------------------
     def test_cron_list_reports_dir_unavailable(self) -> None:
         HOST_SCRIPT.CRON_DIR = os.path.join(self.tmp, "missing-cron.d")

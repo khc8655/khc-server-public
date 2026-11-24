@@ -69,6 +69,10 @@ const PROCESS_DISPLAY_LIMIT = 20;
 
 /* ------------------------------------------------------------------ 服务段 */
 
+function serviceVerbParams(service: HostOpsService): { unit: string; user?: string } {
+  return service.user ? { unit: service.unit, user: service.user } : { unit: service.unit };
+}
+
 /**
  * 服务段（#E1）：进入分段时经 svc.list（30s React Query 缓存）读取 running/failed 单元；
  * 行内「重启」L2 确认（危险操作级别不降低）、「日志」进页面级抽屉（svc.logs 尾读）。
@@ -80,7 +84,7 @@ export function ServicesSegment({
 }: {
   hubId: string;
   disabled: boolean;
-  onOpenLogs: (unit: string) => void;
+  onOpenLogs: (unit: string, user?: string | null) => void;
 }) {
   const [actionError, setActionError] = useState<HostOpsError | null>(null);
   const [restartTarget, setRestartTarget] = useState<HostOpsService | null>(null);
@@ -110,7 +114,7 @@ export function ServicesSegment({
   };
 
   const restart = async (service: HostOpsService) => {
-    const result = await callHostOps(hubId, 'self', 'svc.restart', { unit: service.unit });
+    const result = await callHostOps(hubId, 'self', 'svc.restart', serviceVerbParams(service));
     if (!result.ok) {
       if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
@@ -123,7 +127,7 @@ export function ServicesSegment({
   };
 
   const resetFailed = async (service: HostOpsService) => {
-    const result = await callHostOps(hubId, 'self', 'svc.reset-failed', { unit: service.unit });
+    const result = await callHostOps(hubId, 'self', 'svc.reset-failed', serviceVerbParams(service));
     if (!result.ok) {
       if (result.error) setActionError(result.error);
       throw new Error(hostOpsErrorTitle(result.error));
@@ -188,7 +192,7 @@ export function ServicesSegment({
       <Table
         rows={services}
         columns={columns}
-        rowKey={(service) => service.unit}
+        rowKey={(service) => (service.user ? `${service.user}:${service.unit}` : service.unit)}
         objectLabel={zh.hostOps.services}
         rowActions={() => [
           action('hostOps.svcLogs'),
@@ -205,7 +209,7 @@ export function ServicesSegment({
           return undefined;
         }}
         onRowAction={(ref, service) => {
-          if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit);
+          if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit, service.user);
           else if (ref.id === 'hostOps.svcResetFailed') setResetTarget(service);
           else setRestartTarget(service);
         }}
@@ -552,9 +556,22 @@ export function CronEntryForm({
 /* ------------------------------------------------------------ svc 日志抽屉 */
 
 /** 服务日志面板（#E1）：挂载即经 svc.logs（30s React Query 缓存）尾读 200 行（journalctl short-iso）。 */
-export function SvcLogsPanel({ hubId, unit }: { hubId: string; unit: string }) {
+export function SvcLogsPanel({
+  hubId,
+  unit,
+  user,
+}: {
+  hubId: string;
+  unit: string;
+  user?: string | null;
+}) {
   const logsQuery = useQuery(
-    hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.logs', { unit, lines: 200 }),
+    hostOpsQueryOptions(
+      hubId,
+      HOST_OPS_TARGET_SELF,
+      'svc.logs',
+      user ? { unit, user, lines: 200 } : { unit, lines: 200 },
+    ),
   );
   const logs = useMemo(
     () => (logsQuery.data ? normalizeSvcLogs(logsQuery.data.data) : undefined),

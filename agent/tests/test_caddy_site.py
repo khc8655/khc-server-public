@@ -1948,14 +1948,14 @@ class StatusHealthTests(RenderTestBase):
         self._write_applied(cfg)
         probes_by_url = {
             "https://ok.example.com/": {"state": "ok", "status": 200, "latencyMs": 1, "error": None},
-            "https://warn.example.com/": {"state": "warn", "status": 401, "latencyMs": 2, "error": "HTTP 401"},
+            "https://warn.example.com/": {"state": "warn", "status": 404, "latencyMs": 2, "error": "HTTP 404"},
             "https://down.example.com/": {"state": "down", "status": None, "latencyMs": 3000, "error": "timed out"},
             "https://unknown.example.com/": {"state": "unknown", "status": None, "latencyMs": None, "error": "探测超时预算用尽"},
         }
         with mock.patch.object(self.adapter, "_probe_url", side_effect=lambda url, **_: probes_by_url[url]):
             status = self.adapter.status(self.ctx)
         self.assertEqual([item["state"] for item in status["siteHealth"]], ["ok", "warn", "down", "unknown"])
-        self.assertEqual(status["siteHealth"][1]["error"], "HTTP 401")
+        self.assertEqual(status["siteHealth"][1]["error"], "HTTP 404")
 
     def test_site_health_skips_disabled_sites(self) -> None:
         cfg = config(
@@ -2014,6 +2014,30 @@ class StatusHealthTests(RenderTestBase):
         self.assertEqual(result["status"], 404)
         self.assertEqual(result["error"], "HTTP 404")
 
+        for auth_code in (401, 403):
+            with mock.patch.object(self.adapter, "_http_status", return_value=auth_code):
+                result = self.adapter._probe_url("https://a.example.com/")
+            self.assertEqual(result["state"], "ok")
+            self.assertEqual(result["status"], auth_code)
+            self.assertIsNone(result["error"])
+
+            with mock.patch.object(
+                self.adapter, "_http_status", side_effect=_FakeHTTPError(auth_code, "auth required")
+            ):
+                result = self.adapter._probe_url("https://a.example.com/")
+            self.assertEqual(result["state"], "ok")
+            self.assertEqual(result["status"], auth_code)
+            self.assertIsNone(result["error"])
+
+        for err_code in (500, 502):
+            with mock.patch.object(
+                self.adapter, "_http_status", side_effect=_FakeHTTPError(err_code, "upstream error")
+            ):
+                result = self.adapter._probe_url("https://a.example.com/")
+            self.assertEqual(result["state"], "warn")
+            self.assertEqual(result["status"], err_code)
+            self.assertEqual(result["error"], f"HTTP {err_code}")
+
     def test_probe_url_head_not_allowed_falls_back_to_get(self) -> None:
         calls: list[tuple[str, bool]] = []
 
@@ -2027,6 +2051,16 @@ class StatusHealthTests(RenderTestBase):
             result = self.adapter._probe_url("https://a.example.com/")
         self.assertEqual(result["state"], "ok")
         self.assertEqual(calls, [("HEAD", False), ("GET", False)])
+
+        with mock.patch.object(
+            self.adapter,
+            "_http_status",
+            side_effect=[_FakeHTTPError(405, "method not allowed"), _FakeHTTPError(401, "unauthorized")],
+        ):
+            result = self.adapter._probe_url("https://a.example.com/")
+        self.assertEqual(result["state"], "ok")
+        self.assertEqual(result["status"], 401)
+        self.assertIsNone(result["error"])
 
     def test_probe_url_down_on_connection_error(self) -> None:
         exc = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
@@ -2051,6 +2085,16 @@ class StatusHealthTests(RenderTestBase):
         self.assertEqual(result["status"], 200)
         self.assertIn("TLS", result["error"])
         self.assertEqual(calls, [("HEAD", False), ("GET", True)])
+
+        with mock.patch.object(
+            self.adapter,
+            "_http_status",
+            side_effect=[tls_error, _FakeHTTPError(401, "unauthorized")],
+        ):
+            result = self.adapter._probe_url("https://a.example.com/")
+        self.assertEqual(result["state"], "warn")
+        self.assertEqual(result["status"], 401)
+        self.assertIn("TLS", result["error"])
 
     def test_probe_url_self_signed_tls_still_down_when_unreachable(self) -> None:
         tls_error = urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed"))

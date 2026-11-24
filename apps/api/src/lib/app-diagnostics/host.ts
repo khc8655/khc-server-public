@@ -122,7 +122,7 @@ export function hostProblems(ops: AgentOps | null | undefined, now: number): Ada
     }
   }
 
-  // units_failed：过滤受管单元，evidence 只列前 5 个名字。
+  // units_failed：过滤受管单元，系统自带单元只提示（info）不作告警，evidence 只列前 5 个名字。
   const failedUnits = ops.services?.failedUnits;
   if (Array.isArray(failedUnits)) {
     const units = failedUnits.filter(
@@ -131,13 +131,12 @@ export function hostProblems(ops: AgentOps | null | undefined, now: number): Ada
     if (units.length > 0) {
       problems.push({
         code: 'units_failed',
-        severity: 'warn',
+        severity: 'info',
         title: '系统单元运行失败',
         hint:
-          `可在${HOST_OPS_PAGE}查看服务分段与日志：${units.length} 个 systemd 单元处于 failed` +
-          `（${clip(units.slice(0, MAX_FAILED_UNITS_IN_EVIDENCE).join('、'), 80)}）。` +
-          '请登录节点用 systemctl status <单元>、journalctl -u <单元> 排查，' +
-          '修复后执行 systemctl restart <单元>；受管单元由对应应用诊断展示。',
+          `${units.length} 个系统自带单元处于 failed` +
+          `（${clip(units.slice(0, MAX_FAILED_UNITS_IN_EVIDENCE).join('、'), 80)}），不计入待处理。` +
+          `可在${HOST_OPS_PAGE}查看服务日志或点「清除失败状态」，必要时登录节点用 systemctl status / journalctl -u 排查。`,
         evidence: {
           count: units.length,
           units: clip(units.slice(0, MAX_FAILED_UNITS_IN_EVIDENCE).join(', ')),
