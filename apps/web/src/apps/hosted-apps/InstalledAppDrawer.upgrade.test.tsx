@@ -505,4 +505,54 @@ describe('已装应用抽屉：升级沿用安装参数、单元状态与 v1 条
     expect(confirmTitle.closest('.ui-banner')!.querySelector('.ui-banner-action')).toBeNull();
     expect(within(drawer).getByText(/当前版本 1\.0\.0 → 目标版本 2\.0\.0/).className).toContain('ui-banner-desc');
   });
+
+  it('升级轮询遇到短暂 502 hub_unreachable 时自动重试并在恢复后完成升级', async () => {
+    let taskPolls = 0;
+    let overviewCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') {
+          return json({ appManifests: [upgradeManifest] });
+        }
+        if (url.includes('/overview')) {
+          overviewCalls += 1;
+          return json(makeOverviewResponse({ installedDetail: upInstalled }, '0.8.1'));
+        }
+        if (url.endsWith('/manifest_upgrade')) {
+          return json({ ok: true, taskId: 'task-up-flaky' });
+        }
+        if (url.includes('/tasks/task-up-flaky')) {
+          taskPolls += 1;
+          if (taskPolls <= 2) {
+            return json(
+              { error: { code: 'hub_unreachable', message: 'Hub 不可达（连续失败后冷却中，稍后自动重试）' } },
+              502,
+            );
+          }
+          return json({
+            task: {
+              id: 'task-up-flaky',
+              state: 'done',
+              progress: 100,
+              logs: ['upgraded ok'],
+              result: {},
+              error: null,
+            },
+          });
+        }
+        return json({});
+      }),
+    );
+
+    renderWithRouter(<Harness />);
+    const drawer = await openDrawerAndUpgrade();
+    await userEvent.click(within(drawer).getByRole('button', { name: '确认升级' }));
+
+    expect(await within(drawer).findByText('upgraded ok')).toBeTruthy();
+    await waitFor(() => expect(overviewCalls).toBeGreaterThanOrEqual(2));
+    expect(taskPolls).toBe(3);
+    expect(within(drawer).queryByText(/Hub 不可达/)).toBeNull();
+  });
 });

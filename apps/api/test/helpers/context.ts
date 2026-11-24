@@ -21,6 +21,7 @@ export class FakeAgentClient implements AgentClient {
     body: unknown;
     idempotencyKey?: string;
     timeoutMs?: number;
+    bypassCooldown?: boolean;
   }> = [];
 
   handler: (
@@ -44,6 +45,7 @@ export class FakeAgentClient implements AgentClient {
       body,
       idempotencyKey: opts?.idempotencyKey,
       timeoutMs: opts?.timeoutMs,
+      bypassCooldown: opts?.bypassCooldown,
     });
     const result = await this.handler(method, path, body, node);
     return { status: result.status, body: result.body, route: node.preferredRoute, via: 'fetch' };

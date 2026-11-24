@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.43.3] - 2026-11-24
+### Fixed
+- 修复安装与升级应用轮询任务进度时因单次 `502 hub_unreachable` 或控制面 30 秒冷却误判失败的问题：任务查询接口跳过冷却并将超时放宽至 10 秒。
+- `InstallAndPublishDrawer` 与 `InstalledAppDrawer` 轮询遇瞬态网络/控制面错误自动退避重试并在恢复后继续；超时或失败后点「刷新进度」若任务已完成可直接续做发布。
+
 ## [0.43.2] - 2026-11-24
 ### Fixed
 - 修复边缘回源下 `install-command` 的 `--tls-bootstrap-url` 误用 `*.workers.dev` 导致国内 VM 无法拉取证书的问题，优先解析公开面板域名。
