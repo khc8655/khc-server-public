@@ -826,4 +826,17 @@ describe('manifest-v2: §6 其他兼容契约新增', () => {
     expect(appManifestAnyDefinitionSchema.safeParse(rawMagpie.manifest).success).toBe(true);
     expect(appManifestAnyDefinitionSchema.safeParse(minimalV2()).success).toBe(true);
   });
+
+  it('参数支持可选 advanced 标记且保留该字段（默认向后兼容）', () => {
+    const parsed = appManifestDefinitionV2Schema.parse(
+      minimalV2({
+        params: [
+          { key: 'port', type: 'integer', default: 8080, advanced: true },
+          { key: 'title', type: 'string', default: 'hi' },
+        ],
+      }),
+    );
+    expect(parsed.params[0]).toMatchObject({ key: 'port', advanced: true });
+    expect(parsed.params[1]?.advanced).toBeUndefined();
+  });
 });

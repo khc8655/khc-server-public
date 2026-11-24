@@ -14,6 +14,7 @@ import {
 } from '../../data/forwards';
 import { HOST_OPS_APP } from '../../data/hostOps';
 import {
+  classifyBackend,
   listeningUpstream,
   unpublishedListeningPorts,
   type ListeningPort,
@@ -1502,7 +1503,7 @@ export default function SitesPage() {
       key: 'name',
       type: 'name',
       header: zh.sites.colApp,
-      width: '22%',
+      width: '20%',
       value: (row) =>
         row.kind === 'site'
           ? row.site.name
@@ -1523,10 +1524,28 @@ export default function SitesPage() {
         row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
     },
     {
+      key: 'source',
+      type: 'status',
+      header: '来源',
+      width: '12%',
+      priority: 'low',
+      status: (row) => {
+        if (row.installed) return { tone: 'info', label: '托管应用' };
+        if (row.kind === 'site') {
+          const firstUpstream = row.site.upstreams[0] ?? row.site.upstream ?? '';
+          const isPeerProxy =
+            Boolean(row.site.sourcePeer) ||
+            (row.site.kind === 'proxy' && classifyBackend(firstUpstream, backendContext).kind === 'vm');
+          if (isPeerProxy) return { tone: 'neutral', label: 'Peer 反代' };
+        }
+        return { tone: 'neutral', label: '手动站点' };
+      },
+    },
+    {
       key: 'url',
       type: 'mono',
       header: zh.sites.colAccessUrl,
-      width: '36%',
+      width: '32%',
       value: (row) =>
         row.kind === 'site'
           ? siteAccessUrl(row.site) || row.site.domains.join(', ')
@@ -1581,7 +1600,7 @@ export default function SitesPage() {
       key: 'target',
       type: 'mono',
       header: zh.sites.colTargetSummary,
-      width: '26%',
+      width: '22%',
       value: (row) =>
         row.kind === 'site' ? targetColText(row.site) : installedTargetText(row.installed),
       priority: 'low',
@@ -1590,7 +1609,7 @@ export default function SitesPage() {
       key: 'sync',
       type: 'sync',
       header: zh.sites.colStatus,
-      width: '12%',
+      width: '10%',
       render: (row) => {
         if (row.kind === 'site') {
           return <SyncStatus {...siteSyncProps(row)} />;
@@ -1663,8 +1682,8 @@ export default function SitesPage() {
       ];
     }
     return [
-      action('site.update'),
       ...(row.installed ? [action('app.manage')] : []),
+      action('site.update'),
       row.site.enabled ? action('site.disable') : action('site.enable'),
       action('site.delete'),
     ];
@@ -2141,7 +2160,7 @@ export default function SitesPage() {
             rowActionDisabled={unifiedRowActionDisabled}
             onRowAction={handleUnifiedRowAction}
             onRowOpen={(row) =>
-              row.kind === 'site' ? openEdit(row.site) : openInstalled(row.installed)
+              row.installed ? openInstalled(row.installed) : row.kind === 'site' ? openEdit(row.site) : undefined
             }
           />
 

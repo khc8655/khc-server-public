@@ -253,6 +253,7 @@ export const appManifestParamV2Schema = z
     maxLength: z.number().int().positive().optional(),
     pattern: z.string().max(256).optional(),
     secret: z.boolean().optional(),
+    advanced: z.boolean().optional(),
     options: z.array(appManifestParamOptionV2Schema).min(2).max(16).optional(),
     derive: z
       .string()

@@ -947,4 +947,102 @@ describe('InstallAndPublishDrawer 三步向导（S2）', () => {
     expect(taskPolls).toBe(1);
     expect(screen.getByRole('button', { name: '重新安装' })).toBeTruthy();
   });
+
+  it('参数 advanced: true 默认折叠在「高级」区，展开后可编辑，校验失败时自动展开', async () => {
+    window.scrollTo = vi.fn();
+    const advancedManifest = {
+      id: 'v2-adv',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: {
+        schema: 2,
+        name: 'V2 高级参数应用',
+        version: '2.0.0',
+        runtime: { mode: 'create', user: 'khc-app-v2', linger: true },
+        params: [
+          { key: 'title', type: 'string', label: '实例名称', default: 'my-app' },
+          { key: 'web_port', type: 'integer', label: 'Web 管理页端口', default: 3430, min: 1024, max: 65535, advanced: true },
+          { key: 'download_mirror', type: 'string', label: 'GitHub 镜像地址', default: '', advanced: true },
+        ],
+        endpoints: [
+          { id: 'web', label: 'Web 管理页', protocol: 'http', portParam: 'web_port', bind: 'loopback', publish: 'caddy' },
+        ],
+        units: [{ name: 'v2-adv.service', scope: 'user' }],
+        scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+        sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+        writes: [],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [advancedManifest] });
+        if (url === '/api/v1/nodes/hub-1/state') return json(makeStateResponse({}));
+        return json({});
+      }),
+    );
+
+    renderWizard();
+    await userEvent.click(await screen.findByRole('button', { name: '选择并配置' }));
+
+    // 非高级参数直接展示；advanced 参数默认收起
+    expect(screen.getByLabelText('实例名称')).toBeTruthy();
+    expect(screen.queryByLabelText('GitHub 镜像地址')).toBeNull();
+    expect(screen.queryByLabelText('Web 管理页端口')).toBeNull();
+
+    // 手动展开「高级」后可见并可编辑；触发局部端口冲突后也会保持/自动展开
+    await userEvent.click(screen.getByRole('button', { name: '高级' }));
+    expect(screen.getByLabelText('GitHub 镜像地址')).toBeTruthy();
+    const webPortInput = screen.getByLabelText('Web 管理页端口') as HTMLInputElement;
+    expect(webPortInput).toBeTruthy();
+
+    // 输入与 Agent 端口 2053 冲突的值 → 折叠区（哪怕折叠重渲染或校验报错）保持展开可见错误
+    await userEvent.clear(webPortInput);
+    await userEvent.type(webPortInput, '2053');
+    expect(await screen.findByText('应用内部端口不能与对外端口或 Agent 监听端口（2053）相同。')).toBeTruthy();
+  });
+
+  it('高级参数存在校验错误时，默认即自动展开「高级」区露出错误', async () => {
+    window.scrollTo = vi.fn();
+    const invalidAdvancedManifest = {
+      id: 'v2-adv-err',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 2,
+      manifest: {
+        schema: 2,
+        name: 'V2 高级参数错误',
+        version: '2.0.0',
+        runtime: { mode: 'create', user: 'khc-app-v2', linger: true },
+        params: [
+          { key: 'web_port', type: 'integer', label: 'Web 管理页端口', default: 2053, min: 1024, max: 65535, advanced: true },
+        ],
+        endpoints: [
+          { id: 'web', label: 'Web 管理页', protocol: 'http', portParam: 'web_port', bind: 'loopback', publish: 'caddy' },
+        ],
+        units: [{ name: 'v2-adv-err.service', scope: 'user' }],
+        scripts: { install: '#!/bin/sh\n', uninstall: '#!/bin/sh\n' },
+        sha256: { install: '0'.repeat(64), uninstall: '0'.repeat(64) },
+        writes: [],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/app-manifests') return json({ appManifests: [invalidAdvancedManifest] });
+        if (url === '/api/v1/nodes/hub-1/state') return json(makeStateResponse({}));
+        return json({});
+      }),
+    );
+
+    renderWizard();
+    await userEvent.click(await screen.findByRole('button', { name: '选择并配置' }));
+
+    // 默认值 2053 与 Agent 端口冲突，虽未手动点击「高级」，高级区已自动展开并展示错误
+    expect(await screen.findByLabelText('Web 管理页端口')).toBeTruthy();
+    expect(screen.getByText('应用内部端口不能与对外端口或 Agent 监听端口（2053）相同。')).toBeTruthy();
+  });
 });

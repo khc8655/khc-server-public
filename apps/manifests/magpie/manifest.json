@@ -17,7 +17,8 @@
         "label": "网关端口",
         "default": 3425,
         "min": 1024,
-        "max": 65535
+        "max": 65535,
+        "advanced": true
       },
       {
         "key": "web_port",
@@ -25,7 +26,8 @@
         "label": "Web 管理页端口",
         "default": 3430,
         "min": 1024,
-        "max": 65535
+        "max": 65535,
+        "advanced": true
       },
       {
         "key": "public_url",
@@ -39,25 +41,29 @@
         "type": "string",
         "label": "Web 登录 Key（留空自动生成）",
         "default": "",
-        "secret": true
+        "secret": true,
+        "advanced": true
       },
       {
         "key": "download_mirror",
         "type": "string",
         "label": "GitHub 镜像前缀或直链（可选，国内 VM 推荐，如 https://gh-proxy.org/）",
-        "default": ""
+        "default": "",
+        "advanced": true
       },
       {
         "key": "http_proxy",
         "type": "string",
         "label": "下载代理（可选，如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080）",
-        "default": ""
+        "default": "",
+        "advanced": true
       },
       {
         "key": "version",
         "type": "string",
         "label": "版本（留空默认最新）",
-        "default": ""
+        "default": "",
+        "advanced": true
       }
     ],
     "requires": {

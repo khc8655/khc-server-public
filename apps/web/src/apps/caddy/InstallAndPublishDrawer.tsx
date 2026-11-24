@@ -10,6 +10,7 @@ import {
   MANIFEST_V2_MIN_AGENT,
   type AgentState,
   type AppManifestEndpointV2,
+  type AppManifestParamV2,
   type AppRuntimeMode,
   type Certificate,
   type Node,
@@ -810,7 +811,159 @@ export function InstallAndPublishDrawer({
           )
         ) : null}
 
-        {step === 2 && selectedApp ? (
+        {step === 2 && selectedApp ? (() => {
+          const visibleParams = selectedApp.def.params.filter((param) => !param.derive);
+          const basicParams = visibleParams.filter((param) => !param.advanced);
+          const advancedParams = visibleParams.filter((param) => Boolean(param.advanced));
+          const localConflictForParam = (paramKey: string): number | undefined => {
+            const boundConflict = endpoints.find(
+              (ep) =>
+                ep.portParam === paramKey &&
+                endpointPortStates[ep.id]?.localConflictPort !== undefined,
+            );
+            return boundConflict ? endpointPortStates[boundConflict.id]?.localConflictPort : undefined;
+          };
+          const hasAdvancedError =
+            credentialsMissing ||
+            advancedParams.some(
+              (param) => Boolean(paramErrors[param.key]) || localConflictForParam(param.key) !== undefined,
+            );
+
+          const renderParamField = (param: AppManifestParamV2) => {
+            const id = `wizard-param-${selectedApp.id}-${param.key}`;
+            const label = param.label ?? param.key;
+            const conflictPort = localConflictForParam(param.key);
+            const fieldError =
+              paramErrors[param.key] ??
+              (conflictPort !== undefined
+                ? fmt(zh.hosted.wizardLocalPortConflict, { port: String(conflictPort) })
+                : undefined);
+
+            if (param.type === 'boolean') {
+              return (
+                <Field key={param.key} id={id} label={label}>
+                  <Toggle
+                    checked={Boolean(values[param.key])}
+                    onChange={(checked) =>
+                      setValues((prev) => ({ ...prev, [param.key]: checked }))
+                    }
+                    label={label}
+                  />
+                </Field>
+              );
+            }
+            if (param.type === 'integer') {
+              return (
+                <Field key={param.key} id={id} label={label} error={fieldError}>
+                  <NumberInput
+                    id={id}
+                    value={
+                      typeof values[param.key] === 'number'
+                        ? (values[param.key] as number)
+                        : null
+                    }
+                    min={param.min}
+                    max={param.max}
+                    invalid={Boolean(fieldError)}
+                    onChange={(value) =>
+                      setValues((prev) => ({ ...prev, [param.key]: value }))
+                    }
+                  />
+                </Field>
+              );
+            }
+            if (param.type === 'enum' && param.options) {
+              const currentVal = String(values[param.key] ?? '');
+              const selectedOpt = param.options.find((opt) => opt.value === currentVal);
+              const reqParts: string[] = [];
+              if (selectedOpt?.requires?.memMB) {
+                reqParts.push(`需 ≥ ${selectedOpt.requires.memMB} MB 内存`);
+              }
+              if (selectedOpt?.requires?.diskMB) {
+                reqParts.push(`需 ≥ ${selectedOpt.requires.diskMB} MB 磁盘`);
+              }
+              return (
+                <Field
+                  key={param.key}
+                  id={id}
+                  label={label}
+                  help={reqParts.length > 0 ? reqParts.join(' · ') : undefined}
+                  error={fieldError}
+                >
+                  <Select
+                    id={id}
+                    value={currentVal}
+                    options={param.options.map((opt) => ({
+                      value: opt.value,
+                      label: opt.label,
+                    }))}
+                    onChange={(value) =>
+                      setValues((prev) => ({ ...prev, [param.key]: value }))
+                    }
+                    ariaLabel={label}
+                  />
+                </Field>
+              );
+            }
+
+            if (param.secret) {
+              const shown = Boolean(secretShown[param.key]);
+              return (
+                <Field
+                  key={param.key}
+                  id={id}
+                  label={label}
+                  help={zh.catalog.secretHelp}
+                  error={fieldError}
+                >
+                  <Row gap={2} align="center">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <TextInput
+                        id={id}
+                        type={shown ? 'text' : 'password'}
+                        mono
+                        autoComplete="new-password"
+                        value={String(values[param.key] ?? '')}
+                        invalid={Boolean(fieldError)}
+                        onChange={(value) =>
+                          setValues((prev) => ({ ...prev, [param.key]: value }))
+                        }
+                      />
+                    </div>
+                    <Button
+                      label={shown ? '隐藏' : '显示'}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setSecretShown((prev) => ({
+                          ...prev,
+                          [param.key]: !prev[param.key],
+                        }))
+                      }
+                    />
+                  </Row>
+                </Field>
+              );
+            }
+
+            return (
+              <Field key={param.key} id={id} label={label} error={fieldError}>
+                <TextInput
+                  id={id}
+                  type="text"
+                  mono
+                  autoComplete="off"
+                  value={String(values[param.key] ?? '')}
+                  invalid={Boolean(fieldError)}
+                  onChange={(value) =>
+                    setValues((prev) => ({ ...prev, [param.key]: value }))
+                  }
+                />
+              </Field>
+            );
+          };
+
+          return (
           <Stack gap={4}>
             <Card
               title={`${selectedApp.def.name} · v${selectedApp.def.version}`}
@@ -819,148 +972,7 @@ export function InstallAndPublishDrawer({
               }
             >
               <Stack gap={3}>
-                {selectedApp.def.params
-                  .filter((param) => !param.derive)
-                  .map((param) => {
-                    const id = `wizard-param-${selectedApp.id}-${param.key}`;
-                    const label = param.label ?? param.key;
-                    const boundConflict = endpoints.find(
-                      (ep) =>
-                        ep.portParam === param.key &&
-                        endpointPortStates[ep.id]?.localConflictPort !== undefined,
-                    );
-                    const conflictPort = boundConflict
-                      ? endpointPortStates[boundConflict.id]?.localConflictPort
-                      : undefined;
-                    const fieldError =
-                      paramErrors[param.key] ??
-                      (conflictPort !== undefined
-                        ? fmt(zh.hosted.wizardLocalPortConflict, { port: String(conflictPort) })
-                        : undefined);
-
-                    if (param.type === 'boolean') {
-                      return (
-                        <Field key={param.key} id={id} label={label}>
-                          <Toggle
-                            checked={Boolean(values[param.key])}
-                            onChange={(checked) =>
-                              setValues((prev) => ({ ...prev, [param.key]: checked }))
-                            }
-                            label={label}
-                          />
-                        </Field>
-                      );
-                    }
-                    if (param.type === 'integer') {
-                      return (
-                        <Field key={param.key} id={id} label={label} error={fieldError}>
-                          <NumberInput
-                            id={id}
-                            value={
-                              typeof values[param.key] === 'number'
-                                ? (values[param.key] as number)
-                                : null
-                            }
-                            min={param.min}
-                            max={param.max}
-                            invalid={Boolean(fieldError)}
-                            onChange={(value) =>
-                              setValues((prev) => ({ ...prev, [param.key]: value }))
-                            }
-                          />
-                        </Field>
-                      );
-                    }
-                    if (param.type === 'enum' && param.options) {
-                      const currentVal = String(values[param.key] ?? '');
-                      const selectedOpt = param.options.find((opt) => opt.value === currentVal);
-                      const reqParts: string[] = [];
-                      if (selectedOpt?.requires?.memMB) {
-                        reqParts.push(`需 ≥ ${selectedOpt.requires.memMB} MB 内存`);
-                      }
-                      if (selectedOpt?.requires?.diskMB) {
-                        reqParts.push(`需 ≥ ${selectedOpt.requires.diskMB} MB 磁盘`);
-                      }
-                      return (
-                        <Field
-                          key={param.key}
-                          id={id}
-                          label={label}
-                          help={reqParts.length > 0 ? reqParts.join(' · ') : undefined}
-                          error={fieldError}
-                        >
-                          <Select
-                            id={id}
-                            value={currentVal}
-                            options={param.options.map((opt) => ({
-                              value: opt.value,
-                              label: opt.label,
-                            }))}
-                            onChange={(value) =>
-                              setValues((prev) => ({ ...prev, [param.key]: value }))
-                            }
-                            ariaLabel={label}
-                          />
-                        </Field>
-                      );
-                    }
-
-                    if (param.secret) {
-                      const shown = Boolean(secretShown[param.key]);
-                      return (
-                        <Field
-                          key={param.key}
-                          id={id}
-                          label={label}
-                          help={zh.catalog.secretHelp}
-                          error={fieldError}
-                        >
-                          <Row gap={2} align="center">
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <TextInput
-                                id={id}
-                                type={shown ? 'text' : 'password'}
-                                mono
-                                autoComplete="new-password"
-                                value={String(values[param.key] ?? '')}
-                                invalid={Boolean(fieldError)}
-                                onChange={(value) =>
-                                  setValues((prev) => ({ ...prev, [param.key]: value }))
-                                }
-                              />
-                            </div>
-                            <Button
-                              label={shown ? '隐藏' : '显示'}
-                              variant="ghost"
-                              size="sm"
-                              onClick={() =>
-                                setSecretShown((prev) => ({
-                                  ...prev,
-                                  [param.key]: !prev[param.key],
-                                }))
-                              }
-                            />
-                          </Row>
-                        </Field>
-                      );
-                    }
-
-                    return (
-                      <Field key={param.key} id={id} label={label} error={fieldError}>
-                        <TextInput
-                          id={id}
-                          type="text"
-                          mono
-                          autoComplete="off"
-                          value={String(values[param.key] ?? '')}
-                          invalid={Boolean(fieldError)}
-                          onChange={(value) =>
-                            setValues((prev) => ({ ...prev, [param.key]: value }))
-                          }
-                        />
-                      </Field>
-                    );
-                  })}
+                {basicParams.map(renderParamField)}
 
                 {endpoints
                   .filter(
@@ -975,8 +987,9 @@ export function InstallAndPublishDrawer({
                     />
                   ))}
 
-                <AdvancedSection title={zh.common.advancedSection}>
+                <AdvancedSection title={zh.common.advancedSection} forceOpen={hasAdvancedError}>
                   <Stack gap={3}>
+                    {advancedParams.map(renderParamField)}
                     <Field
                       id="wizard-app-runtime"
                       label={zh.catalog.runtimeLabel}
@@ -1227,7 +1240,8 @@ export function InstallAndPublishDrawer({
               </Card>
             ) : null}
           </Stack>
-        ) : null}
+          );
+        })() : null}
 
         {step === 3 && selectedApp ? (
           <Stack gap={4}>
