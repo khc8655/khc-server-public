@@ -49,15 +49,21 @@ def compute_signature(
 class NonceCache:
     """nonce 防重放缓存（进程内，120 秒）。"""
 
-    def __init__(self, ttl: float = DEFAULT_NONCE_TTL_SECONDS, clock=time.time) -> None:
+    def __init__(
+        self,
+        ttl: float = DEFAULT_NONCE_TTL_SECONDS,
+        clock=time.time,
+        max_entries: int = 10_000,
+    ) -> None:
         self.ttl = float(ttl)
         self._clock = clock
+        self._max_entries = max(1, int(max_entries))
         self._lock = threading.Lock()
         self._seen: dict[str, float] = {}
         self._last_prune = 0.0
 
-    def _prune(self, now: float) -> None:
-        if now - self._last_prune < min(10.0, self.ttl):
+    def _prune(self, now: float, *, force: bool = False) -> None:
+        if not force and now - self._last_prune < min(10.0, self.ttl):
             return
         self._last_prune = now
         expired = [nonce for nonce, deadline in self._seen.items() if deadline <= now]
@@ -73,6 +79,11 @@ class NonceCache:
             deadline = self._seen.get(nonce)
             if deadline is not None and deadline > now:
                 return False
+            if len(self._seen) >= self._max_entries and nonce not in self._seen:
+                self._prune(now, force=True)
+                while len(self._seen) >= self._max_entries:
+                    oldest = next(iter(self._seen))
+                    self._seen.pop(oldest, None)
             self._seen[nonce] = now + self.ttl
             return True
 

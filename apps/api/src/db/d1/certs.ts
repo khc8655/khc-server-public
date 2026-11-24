@@ -29,11 +29,17 @@ interface CertificateRow {
   updated_at: number;
 }
 
+const LIST_COLUMNS =
+  'id, name, domains_json, issuer, not_after, source_node_id, ' +
+  'acme_provider, acme_credential_key, acme_ca, acme_key_type, auto_sync, created_at, updated_at';
+
 const COLUMNS =
   'id, name, domains_json, issuer, not_after, cert_pem_enc, key_pem_enc, source_node_id, ' +
   'acme_provider, acme_credential_key, acme_ca, acme_key_type, auto_sync, created_at, updated_at';
 
-function mapCertificate(row: CertificateRow): Certificate {
+type CertificateListRow = Omit<CertificateRow, 'cert_pem_enc' | 'key_pem_enc'>;
+
+function mapCertificate(row: CertificateListRow): Certificate {
   const acmeKeyType =
     row.acme_key_type === 'rsa' || row.acme_key_type === 'ec' ? row.acme_key_type : null;
   return {
@@ -79,8 +85,8 @@ export class D1CertificateRepo implements CertificateRepo {
 
   async list(): Promise<Certificate[]> {
     const result = await this.db
-      .prepare(`SELECT ${COLUMNS} FROM certificates ORDER BY created_at DESC`)
-      .all<CertificateRow>();
+      .prepare(`SELECT ${LIST_COLUMNS} FROM certificates ORDER BY created_at DESC`)
+      .all<CertificateListRow>();
     return (result.results ?? []).map(mapCertificate);
   }
 

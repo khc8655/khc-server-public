@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { D1CertificateRepo } from '../src/db/d1/certs';
+import { D1SettingsRepo } from '../src/db/d1/settings';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
 
 const CERT_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
@@ -406,5 +408,29 @@ describe('C3：私钥脱敏', () => {
     const body = (await res.json()) as { changes: Array<{ diff: string }> };
     expect(body.changes[0]?.diff).not.toContain('BEGIN PRIVATE KEY');
     expect(body.changes[0]?.diff).toContain('已隐藏私钥');
+  });
+});
+
+describe('D1 list() 查询不拉取加密大字段', () => {
+  it('D1CertificateRepo.list 与 D1SettingsRepo.list SQL 不选 cert_pem_enc/key_pem_enc/value_enc', async () => {
+    const queries: string[] = [];
+    const fakeD1 = {
+      prepare(sql: string) {
+        queries.push(sql);
+        return {
+          all: async () => ({ results: [] }),
+        };
+      },
+    } as unknown as D1Database;
+
+    const certRepo = new D1CertificateRepo(fakeD1, 'test-master-key-0123456789');
+    const settingsRepo = new D1SettingsRepo(fakeD1, 'test-master-key-0123456789');
+    await certRepo.list();
+    await settingsRepo.list();
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0]).not.toContain('cert_pem_enc');
+    expect(queries[0]).not.toContain('key_pem_enc');
+    expect(queries[1]).not.toContain('value_enc');
   });
 });

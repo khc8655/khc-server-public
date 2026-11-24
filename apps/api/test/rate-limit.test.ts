@@ -24,6 +24,16 @@ class FakeD1 {
           row.count += 1;
           return { count: row.count } as T;
         },
+        run: async () => {
+          self.statements.push({ sql, params });
+          if (sql.includes('DELETE FROM rate_limit')) {
+            const cutoff = params[0] as number;
+            for (const [k, v] of self.rows.entries()) {
+              if (v.resetAt < cutoff) self.rows.delete(k);
+            }
+          }
+          return { success: true };
+        },
       }),
     };
   }
@@ -132,5 +142,16 @@ describe('rate-limit（P1-C：D1 固定窗口计数）', () => {
       env,
     );
     expect(other.status).toBe(200);
+  });
+
+  it('每 20 次 D1 计数顺带清理过期 rate_limit 行，避免表无限增长', async () => {
+    const db = new FakeD1();
+    const stores = { db: db as unknown as D1Database };
+    for (let i = 1; i <= 20; i += 1) {
+      await allowRequest(stores, `ip:${i}`, 5, 60);
+    }
+    const cleanups = db.statements.filter((s) => s.sql.includes('DELETE FROM rate_limit'));
+    expect(cleanups).toHaveLength(1);
+    expect(cleanups[0]?.sql).toBe('DELETE FROM rate_limit WHERE reset_at < ?');
   });
 });

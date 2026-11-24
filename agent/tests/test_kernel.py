@@ -677,6 +677,19 @@ class IdempotencyStoreTests(unittest.TestCase):
         clock["now"] += 11
         self.assertIsNone(store.get(scope))
 
+    def test_save_filters_out_expired_entries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="khc-idem-expire-") as tmp:
+            path = os.path.join(tmp, "idempotency.json")
+            clock = {"now": 1000.0}
+            store = IdempotencyStore(ttl=10, clock=lambda: clock["now"], path=path)
+            store.put(("demo", "apply", "old"), {"ok": True})
+            clock["now"] = 1020.0
+            store.put(("demo", "apply", "new"), {"ok": True})
+            with open(path, encoding="utf-8") as fh:
+                saved = fh.read()
+            self.assertNotIn("old", saved)
+            self.assertIn("new", saved)
+
 
 if __name__ == "__main__":
     unittest.main()

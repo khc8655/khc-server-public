@@ -61,6 +61,16 @@ export class MemoryNodeRepo implements NodeRepo {
     return next;
   }
 
+  async touchLastSeenBatch(ids: string[], at: number): Promise<void> {
+    const updatedAt = now();
+    for (const id of new Set(ids)) {
+      const current = this.rows.get(id);
+      if (current) {
+        this.rows.set(id, { ...current, lastSeenAt: at, updatedAt });
+      }
+    }
+  }
+
   async remove(id: string): Promise<boolean> {
     return this.rows.delete(id);
   }

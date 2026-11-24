@@ -612,3 +612,25 @@ class HandlerSocketOptionTests(unittest.TestCase):
         from khc.http import _Handler
 
         self.assertEqual(_Handler.protocol_version, "HTTP/1.1")
+
+    def test_read_body_enforces_overall_deadline(self) -> None:
+        """慢速分片读取超过总截止时间时必须抛出 BadRequest(code='request_timeout')。"""
+
+        from unittest import mock
+        from khc.http import _Handler
+        from khc.util import BadRequest
+
+        class SlowRfile:
+            def read(self, _n: int) -> bytes:
+                return b"x"
+
+        handler = object.__new__(_Handler)
+        handler.headers = {"Content-Length": "100"}
+        handler.rfile = SlowRfile()
+        handler.connection = None
+
+        ticks = iter([100.0, 100.5, 111.0])
+        with mock.patch("khc.http.time.monotonic", side_effect=lambda: next(ticks, 111.0)):
+            with self.assertRaises(BadRequest) as ctx:
+                handler._read_body()
+        self.assertEqual(ctx.exception.code, "request_timeout")

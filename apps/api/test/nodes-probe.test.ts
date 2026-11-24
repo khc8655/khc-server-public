@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { D1NodeRepo } from '../src/db/d1/nodes';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { HubUnreachableError } from '../src/lib/node-client';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
@@ -372,5 +373,48 @@ describe('POST /nodes/probe（一次请求批量探测）', () => {
         expect(item.error).toBeNull();
       }
     }
+  });
+
+  it('多个在线节点仅调用 1 次 touchLastSeenBatch 批量写回；D1 走单条 IN 更新', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    for (let i = 0; i < 4; i += 1) {
+      await createNode(ctx, cookie);
+    }
+    const batchSpy = vi.spyOn(ctx.nodes, 'touchLastSeenBatch');
+    const updateSpy = vi.spyOn(ctx.nodes, 'update');
+    ctx.agent.handler = async () => ({ status: 200, body: stateBody });
+
+    const res = await ctx.app.request(
+      '/api/v1/nodes/probe',
+      { method: 'POST', headers: authHeaders(cookie) },
+      ctx.env,
+    );
+    expect(res.status).toBe(200);
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(batchSpy.mock.calls[0]?.[0]).toHaveLength(4);
+    expect(updateSpy).not.toHaveBeenCalled();
+
+    const executedSql: Array<{ sql: string; params: unknown[] }> = [];
+    const fakeD1 = {
+      prepare(sql: string) {
+        return {
+          bind: (...params: unknown[]) => ({
+            run: async () => {
+              executedSql.push({ sql, params });
+              return { success: true };
+            },
+          }),
+        };
+      },
+    } as unknown as D1Database;
+    const d1Repo = new D1NodeRepo(fakeD1);
+    await d1Repo.touchLastSeenBatch(['nd-1', 'nd-2', 'nd-1'], 1700000100);
+    expect(executedSql).toHaveLength(1);
+    expect(executedSql[0]?.sql).toBe(
+      'UPDATE nodes SET last_seen_at = ?, updated_at = ? WHERE id IN (?, ?)',
+    );
+    expect(executedSql[0]?.params[0]).toBe(1700000100);
+    expect(executedSql[0]?.params.slice(2)).toEqual(['nd-1', 'nd-2']);
   });
 });

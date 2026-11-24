@@ -188,6 +188,35 @@ class CtxStreamingTests(unittest.TestCase):
         self.assertEqual(res2.rc, 0)
         self.assertEqual(injected_lines, ["one", "two"])
 
+    def test_large_streaming_output_bounded_to_tail_chars(self) -> None:
+        py = "import sys; sys.stdout.write(('A' * 500 + '\\n') * 30)"
+        result = default_streaming_runner(["python3", "-c", py], timeout=30, tail_chars=200)
+        self.assertEqual(result.rc, 0)
+        self.assertLessEqual(len(result.stdout), 200)
+        self.assertTrue(result.stdout.endswith("\n"))
+
+    def test_timeout_kills_descendant_process_group(self) -> None:
+        pid_file = os.path.join(self.tmp, "child.pid")
+        script = f"sleep 30 & echo $! > '{pid_file}'; wait"
+        result = default_streaming_runner(["bash", "-c", script], timeout=0.6)
+        self.assertNotEqual(result.rc, 0)
+        self.assertIn("timed out", result.stderr)
+        if os.name == "posix" and os.path.isfile(pid_file):
+            with open(pid_file, encoding="utf-8") as fh:
+                raw = fh.read().strip()
+            if raw.isdigit():
+                child_pid = int(raw)
+                deadline = time.monotonic() + 2.0
+                alive = True
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(child_pid, 0)
+                        time.sleep(0.05)
+                    except OSError:
+                        alive = False
+                        break
+                self.assertFalse(alive, "超时后孤儿孙进程必须随进程组一并结束")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,8 @@ Description=khc-agent (KHC node agent)
 Documentation=https://github.com/khc/khc-server
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -28,6 +30,10 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15
+MemoryHigh=128M
+MemoryMax=256M
+TasksMax=128
+LimitNOFILE=4096
 
 # 只允许写自己管理的目录；systemctl 通过 D-Bus 与 PID1 通信，不受 ProtectSystem 影响。
 # 前缀 "-" 表示路径不存在时忽略——仅用于可能不存在的 @CADDYFILE@（未装 Caddy）、

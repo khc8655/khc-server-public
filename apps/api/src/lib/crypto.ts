@@ -24,15 +24,35 @@ export interface EncKeyOptions {
   previousKey?: string;
 }
 
-async function importAesKey(secret: string): Promise<CryptoKey> {
+const MAX_CACHED_KEYS = 4;
+const aesKeyCache = new Map<string, Promise<CryptoKey>>();
+
+function importAesKey(secret: string): Promise<CryptoKey> {
   if (!secret || secret.length < 16) {
-    throw misconfigured('MASTER_ENC_KEY 未配置（需 ≥16 字符）');
+    return Promise.reject(misconfigured('MASTER_ENC_KEY 未配置（需 ≥16 字符）'));
   }
-  const digest = await crypto.subtle.digest('SHA-256', stringToBytes(secret));
-  return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, [
-    'encrypt',
-    'decrypt',
-  ]);
+  const hit = aesKeyCache.get(secret);
+  if (hit) return hit;
+
+  const pending = (async () => {
+    const digest = await crypto.subtle.digest('SHA-256', stringToBytes(secret));
+    return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
+  })().catch((err) => {
+    if (aesKeyCache.get(secret) === pending) {
+      aesKeyCache.delete(secret);
+    }
+    throw err;
+  });
+
+  if (aesKeyCache.size >= MAX_CACHED_KEYS) {
+    const oldest = aesKeyCache.keys().next().value;
+    if (oldest !== undefined) aesKeyCache.delete(oldest);
+  }
+  aesKeyCache.set(secret, pending);
+  return pending;
 }
 
 export async function encryptSecret(

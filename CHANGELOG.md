@@ -2,6 +2,12 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.45.1] - 2026-11-24
+### Fixed
+- 强化 Workers/D1 免费版稳健性：探活 `last_seen_at` 改为批量更新并去重 Zod 校验，放宽同步动作与 DNS-01 轮询，缓存 AES `CryptoKey` 并精简证书/设置列表查询与定期清理限流表。
+- Agent `0.9.5`：异步处理信号并原子替换 TLS `SSLContext`，证书与升级 unit 改用原子写入，`node_exporter` 改为流式解压，流式输出改用有界缓冲并在超时时查杀进程组。
+- Agent `0.9.5`：状态探针缓存 `caddy` 校验与合并 `systemctl` 查询、为 `host-ops` 进程内调用加锁、增加 HTTP 请求体读取总超时与 systemd 内存/重启限制。
+
 ## [0.45.0] - 2026-11-24
 ### Changed
 - 清单契约新增参数可选标记 `advanced`，安装向导将标为高级的参数默认收进「高级」折叠区（校验失败时自动展开）；`magpie` 仅保留发布设置在主表单，其余低频参数统一收进「高级」。

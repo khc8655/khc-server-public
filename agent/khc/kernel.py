@@ -180,7 +180,8 @@ class StateStore:
     def epoch(self) -> Optional[str]:
         """控制面纪元：None 表示尚未从任何 apply 采纳过（新装/重装/旧版升级）。"""
 
-        value = self._read().get("epoch")
+        with self._lock:
+            value = self._read().get("epoch")
         return value if isinstance(value, str) and value else None
 
     def adopt_epoch(self, epoch: str) -> bool:
@@ -368,10 +369,11 @@ class IdempotencyStore:
         if not self.path:
             return
         ensure_dir(os.path.dirname(os.path.abspath(self.path)), 0o750)
+        now = self._clock()
         entries = [
             {"scope": list(scope), "expiresAt": deadline, "payload": payload}
             for scope, (deadline, payload, in_progress) in self._entries.items()
-            if not in_progress
+            if not in_progress and deadline > now
         ]
         save_json(self.path, {"entries": entries}, mode=0o600)
 
@@ -408,7 +410,7 @@ class IdempotencyStore:
         now = self._clock()
         with self._lock:
             self._entries[scope] = (now + self.ttl, copy.deepcopy(dict(payload)), False)
-            if len(self._entries) > 4096:
+            if len(self._entries) > 256:
                 expired = [key for key, (deadline, _, _) in self._entries.items() if deadline <= now]
                 for key in expired:
                     self._entries.pop(key, None)
@@ -555,6 +557,22 @@ class Kernel:
                 hook(ctx)
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("adapter %s start() failed: %s", adapter.name, exc)
+
+    def close(self) -> None:
+        """优雅停机：通知带后台线程的适配器关闭并等待进行中任务收敛。"""
+
+        for adapter in self.adapters():
+            hook = getattr(adapter, "close", None)
+            if not callable(hook):
+                continue
+            try:
+                hook()
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("adapter %s close() failed: %s", adapter.name, exc)
+        try:
+            self.tasks.join_all(timeout=5.0)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------
     # 元数据
