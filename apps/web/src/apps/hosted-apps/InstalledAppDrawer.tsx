@@ -664,7 +664,7 @@ export function InstalledAppDrawer({
                         <Badge tone="neutral" label={unit.scope} />
                         <Badge tone={unitStatus.tone} label={unitStatus.label} />
                       </Row>
-                      <Row gap={1}>
+                      <Row gap={1} wrap>
                         <Button
                           label="启动"
                           size="sm"

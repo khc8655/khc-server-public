@@ -1551,7 +1551,6 @@ export default function SitesPage() {
       key: 'url',
       type: 'mono',
       header: zh.sites.colAccessUrl,
-      width: '30%',
       value: (row) =>
         row.kind === 'site'
           ? siteAccessUrl(row.site) || row.site.domains.join(', ')
@@ -1615,7 +1614,6 @@ export default function SitesPage() {
       key: 'sync',
       type: 'sync',
       header: zh.sites.colStatus,
-      width: '10%',
       render: (row) => {
         if (row.kind === 'site') {
           return <SyncStatus {...siteSyncProps(row)} />;

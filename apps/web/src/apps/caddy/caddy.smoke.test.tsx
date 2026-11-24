@@ -854,6 +854,11 @@ describe('应用页分段与本机监听端口（U3）', () => {
     expect(within(peerRow).getByText('Peer 反代')).toBeTruthy();
     expect(within(manualRow).getByText('手动站点')).toBeTruthy();
 
+    // 表头与 <col> 不写死内联 width，改走 --ui-col-w 由响应式断点接管（平板隐藏 low 列时不留空白）
+    const tableEl = magpieRow.closest('table')!;
+    expect(Array.from(tableEl.querySelectorAll('th, col')).every((el) => (el as HTMLElement).style.width === '')).toBe(true);
+    expect((tableEl.querySelector('th.ui-col-name') as HTMLElement).style.getPropertyValue('--ui-col-w')).toBe('20%');
+
     // 展开「高级」后仅见未纳管端口 9099，magpie 内部网关 3425 (publish:none) 与已发布 3430 均不露出
     await userEvent.click(screen.getByRole('button', { name: '高级' }));
     expect(await screen.findByText('本机监听端口')).toBeTruthy();
