@@ -1,6 +1,6 @@
 # plan: 按需安全日志诊断与防火墙白名单收口
 
-> 状态：已拍板 ｜ 最后核验：2026-11-25 ｜ 关联：[host-ops](../host-ops.md)、[diagnostics](../diagnostics.md)、[security-boundaries](../security-boundaries.md)
+> 状态：已实施 ｜ 最后核验：2026-11-25 ｜ 关联：[host-ops](../../host-ops.md)、[diagnostics](../../diagnostics.md)、[security-boundaries](../../security-boundaries.md)
 
 ## 1. 背景与实机观察
 

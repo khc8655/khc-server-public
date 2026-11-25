@@ -51,7 +51,7 @@
   选路（同一接入方案内部）：域名走 `fetch`，裸 IP / 非标端口走 TCP socket；两条通道属于同一次连接尝试，失败即返回明确错误，**不跨接入方案切换**。适配器不感知传输差异。
 - **接入方案口径（2026-11-06 修订，取代 D-3「直连首选 / Tunnel 备用」）**：控制通道有**三种并列的接入方案**，每台节点在创建/配置时**选定其一**，运行时只走该方案，失败即报错，**不存在主备关系，也不做跨方案回退**：
   1. **方案 A：https + 域名 + 公网可信证书直连**。节点配域名证书或 IP 证书，`endpoint` 填 `https://<域名或IP>:<端口>`；TLS 由平台强制校验证书（fetch 与 TCP 通道均无跳过校验开关）。
-  2. **方案 B：Cloudflare Tunnel**。Hub 常驻 `cloudflared` 出站、Agent 绑 `127.0.0.1`、`tunnel_endpoint` 填隧道域名；Worker 只连 Cloudflare 可信边缘，节点侧零公网入站端口。备案/端口限制或不想暴露入站端口时**直接选本方案**，不是 A 失败后的兜底。
+  2. **方案 B：Cloudflare Tunnel**。Hub 常驻 `cloudflared` 出站、Agent 绑 `127.0.0.1` **明文 HTTP**（`http://127.0.0.1:<originPort>`）、`tunnel_endpoint` 填隧道域名；Cloudflare Tunnel Public Hostname 源站服务须配置为 **`HTTP`**（非 HTTPS）；Worker 只连 Cloudflare 可信边缘，节点侧零公网入站端口。备案/端口限制或不想暴露入站端口时**直接选本方案**，不是 A 失败后的兜底。
   3. **方案 C：https + 域名 + 自签证书**。Worker 直连自签在平台侧**不可行**（`fetch()` / `cloudflare:sockets` 一律校验证书，无 `rejectUnauthorized:false` 或自定义 CA）；可行的落地形态是把自签放在 Tunnel 源站段（cloudflared `caPool` / `originServerName`）或 Workers VPC 私有服务段，Worker 侧始终面对可信证书。
   三种方案均为既有能力组合，不引入 provider 抽象；引导见 `docs/runbook/node-onboarding.md` §4.1。
   > **已按 ADR-0012 落地（2026-11-07）**：三种并列方案、节点选定其一、无跨方案回退；同方案内 `fetch` / TCP 双通道保留。`orderedRoutes()` 只返回选定方案的单一目标，跨路由重试与 `onRouteSuccess` 自动回写 `preferred_route` 已删除，运行时不改写配置、失败即报明确错误；决策与迁移见 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`。
@@ -67,7 +67,7 @@
 - **端口与 DNS 模式**：Cloudflare 代理支持的 HTTP 端口为 80 / 8080 / 8880 / 2052 / 2082 / 2086 / 2095，HTTPS 端口为 443 / 8443 / 2053 / 2083 / 2087 / 2096；灰云（DNS only）任意端口。**默认 `http://<IP 或域名>:8880`**（走 TCP socket 或 fetch）；方案 A 建议 `https://<域名>:<HTTPS 白名单端口>`（可信证书直连）。
 - **证书**：橙云 → **Cloudflare Origin CA** 证书（Caddy `tls cert key` 即可，无需 DNS 插件/自编译）；灰云 → `acme.sh` DNS-01 公网证书；纯 IP（无域名）→ IP 证书（如 ZeroSSL/IP 类 CA）后走 TCP 通道 TLS。
 - **备案边界**：备案只约束大陆机房 80/443；海外 Hub 不受影响。大陆机器用高位端口 + 域名证书；若备案/端口导致方案 A 不可用，建节点时**直接选方案 B**，不是运行时切换。
-- **方案 B：cloudflared 隧道**（节点创建/配置时选定，不是主入口的兜底）。Hub 上的 `cloudflared` 常驻出站连接，把 `127.0.0.1:8880` 暴露为 `https://<node>-t.<domain>`。不经过公网入站端口，适用于无入站端口、备案受限或主动不暴露端口的节点。前置条件与费用：域名托管在 Cloudflare（Free 计划即可）、Tunnel 本体免费（自托管 connector，无按量费用）；进阶可在隧道入口挂 Access Service Token（免费计划 50 用户额度内）。
+- **方案 B：cloudflared 隧道**（节点创建/配置时选定，不是主入口的兜底）。Hub 上的 `cloudflared` 常驻出站连接，以明文 HTTP 回环转发 `http://127.0.0.1:8880`（或自定义 `originPort`）并暴露为 `https://<node>-t.<domain>`，Cloudflare Tunnel Public Hostname 源站服务须设为 `HTTP`（设成 `HTTPS` 会导致 TLS 握手失败报 502）。不经过公网入站端口，适用于无入站端口、备案受限或主动不暴露端口的节点。前置条件与费用：域名托管在 Cloudflare（Free 计划即可）、Tunnel 本体免费（自托管 connector，无按量费用）；进阶可在隧道入口挂 Access Service Token（免费计划 50 用户额度内）。
 - **选路规则（2026-11-07 已按 ADR-0012 落地）**：`orderedRoutes()` 只返回 `preferred_route` 选定方案对应的**单一**目标（直连类走 `endpoint`、隧道类走 `tunnel_endpoint`），`preferred_route` 语义由「上次成功的路」改为「选定方案」（值仍为 `direct` / `tunnel`，不改契约）；删除跨路由 `continue` 重试与 `onRouteSuccess` 自动回写，运行时**不再改写 `preferred_route`**。节点选定其一，失败即抛明确错误（`HubUnreachableError`），**无跨方案回退、无主备**；同一方案内部的 `fetch` / TCP 双通道保留（域名走 `fetch`，裸 IP / 非标端口走 TCP socket，属实现细节）。三种并列方案、节点选定其一、无跨方案回退的权威口径见 ADR-0012 与上文。
 - 鉴权：每个节点一个随机 token（Agent 本地明文保存，D1 只存加密值供 Worker 签名用）。请求头带 `X-Khc-Ts`、`X-Khc-Nonce`、`X-Khc-Sig = HMAC-SHA256(token, method|path|ts|nonce|sha256(body))`。Agent 校验 ±60s 时间窗，nonce 在内存里保留 120s 防重放。
 - **HMAC 规范化**：签名路径用 **Agent 路径**（不是 Worker 路径），query 不参与签名，GET 的 body hash 用空串 `sha256("")`。
@@ -91,12 +91,12 @@
 |---|---|
 | `GET/POST /nodes`，`GET/PATCH/DELETE /nodes/:id` | 节点（名称、endpoint、绑定域名 `domain`、`accessMode`（domain/tunnel/ip）、`tunnelId`、`tlsCertId`（控制通道面板证书，0016）、`allowInsecure`、固定到期日期 `expiresAt`（YYYY-MM-DD）、token 轮换）；tunnel 模式的 endpoint 由隧道域名推导，IP 直连必须显式 `allowInsecure`。`GET /nodes` 与 `GET /nodes/:id` 额外携带 `summary`（D1 期望配置派生的模式/Peer/站点/转发计数，零节点连接；有配置行但条数为 0 时返回 0，未配置为 null；派生逻辑在 `lib/node-summary.ts`，读取走 `AppConfigRepo.listSummaries` 的明文 `summary_json`，旧行 NULL 才回退 `listForSummary` 解密） |
 | `POST /nodes/probe` | 一次请求探测全部节点（Agent `GET /state`，单片 4 并发、10s 超时；成功才写 `lastSeenAt`，失败项 `reachable:false`，整体始终 200）。响应可选 `apps: [{name,installed,running}]`（只含名称与布尔值、不含 secrets），另附 `projection`（含 `expiresAt` / `expiresDaysLeft`）与顶层 `expiringCerts`（`lib/node-overview.ts` 同源派生，含 502/503/504 应用判定）；`/state` 超时或结构不合法时对应运行态缺失，不影响 `reachable` |
-| `GET /nodes/:id/state` | 转发 Agent `/state`（3s） |
+| `GET /nodes/:id/state` | 转发 Agent `/state`（3s）；Agent 返回 HTTP `401/403/426` 时置 `reachable: false`（与 `/snapshot`、`/nodes/probe` 口径一致） |
 | `GET /nodes/:id/apps` | 已安装应用 + Agent 上可用适配器列表（含版本） |
 | `GET/PUT /nodes/:id/apps/:app` | 读/存应用配置（只写 D1 + revisions，不碰 Hub） |
 | `POST /nodes/:id/apps/:app/:action` | 转发 Agent；`action ∈ {plan, apply, install, uninstall, 以及适配器自定义动作}` |
 | `GET /nodes/:id/tasks/:tid` | 转发任务状态/日志 |
-| `GET /nodes/:id/apps/:app/revisions`，`POST .../rollback/:rev` | 版本历史与回滚（回滚 = 把旧 config 再 apply 一次） |
+| `GET /nodes/:id/apps/:app/revisions`，`POST .../rollback/:rev` | 版本历史与回滚（先校验安全通道 `assertSecureChannelForSecrets` 与展开 `$cert`/`$dnsCred` 再写入新 revision 并 apply；Agent 返回 `202` 时经 `callWithSyncPoll` 轮询收敛） |
 
 上表为**冻结核心**路由。核心之外，`apps/api/src/routes/` 还存在以下编排/扩展路由（以代码为唯一事实来源，此处仅索引）：
 
@@ -107,7 +107,7 @@
 | `GET /nodes/:id/audit` | 节点操作审计查询 | `nodes.ts` |
 | `GET /diagnostics/hints`，`GET /nodes/:id/diagnostics` | 诊断（7 核心码，见 `docs/diagnostics.md`） | `diagnostics.ts` |
 | `GET /nodes/:id/snapshot` | 全部节点的 10s 轻量快照转发（2s 去重，见 `docs/data-layering.md`） | `snapshot.ts` |
-| `GET /settings`，`PUT/DELETE /settings/:key` | 全局设置（DNS 凭据等，0002） | `settings.ts` |
+| `GET /settings`，`PUT/DELETE /settings/:key` | 全局设置（DNS 凭据等，0002）；拒绝写入/删除 `auth.*` 前缀键（`403 forbidden_setting_key`，仅 `/auth/*` 可改） | `settings.ts` |
 | `GET/POST /cf-dns/accounts`，`PUT/DELETE /cf-dns/accounts/:id`，`POST /cf-dns/accounts/:id/refresh` | DNS 多凭据（Token 密文存 `settings.cf_dns_accounts`，只写不回显） | `cfDns.ts` |
 | `GET /cf-dns/zones`，`GET /cf-dns/records?zoneId=`，`POST /cf-dns/records`，`POST /cf-dns/records/:zoneId`，`PATCH/DELETE /cf-dns/records/:zoneId/:recordId`，`DELETE /cf-dns/records/:nodeId` | 跨凭据启用 Zone 汇总；列出现有 A/AAAA/CNAME；全局域名管理可新增/改/删单条记录（设置页）；按 Zone+子域名代建记录并写 `nodes.domain`；按节点联动删除 | `cfDns.ts` |
 | `GET/POST /tunnels`，`PATCH/DELETE /tunnels/:id` | 全局隧道配置（名称、对外域名、源站端口、cloudflared Token 密文）。面板只存配置，不做 Cloudflare Tunnel CRUD；被节点引用时禁止删除 | `tunnels.ts` |
@@ -302,7 +302,7 @@ export default function Page({ config, save, run, state }: AppPageProps) { ... }
    - 应用定义存 D1，安装时由 Worker 按 `manifestId` 读出正文随请求下发，浏览器不能直传正文；随包不携带任何应用脚本。
    - 脚本校验 sha256、`writes` 只允许 `~/` 家目录相对路径；参数走 `KHC_PARAM_*` 环境变量。
    - 运行身份在安装时二选一（参数 `runtimeMode`，定义里的 `runtime.mode` 只是默认选项）：`root` 经 `systemd-run` 一次性单元在 Agent 沙箱外以 root 执行；`create` 新建或沿用面板建过的应用用户（家目录在 `/var/lib/khc-apps/home/`、nologin、非管理员组），以 `runuser -u` 执行。安装身份与参数值记在 Agent 数据目录（0600），升级与卸载沿用（见 `docs/security-boundaries.md` §8）。
-   - 脚本最后输出 `KHC_RESULT={"cards":[...]}`；密码类参数不进任务日志。
+   - 脚本最后输出 `KHC_RESULT={"cards":[...]}`；密码类参数与 `KHC_RESULT=` 行在进入流式任务日志及失败 `stdout`/`stderr` 详情前会被剥离，脚本自动生成的密钥只经 `result.cards` 返回面板。
    - 动作：`manifest_install` / `manifest_upgrade` / `manifest_uninstall`（后台任务，返回 `{taskId}`）；`recipe_install` / `recipe_uninstall` 是别名（不带 `manifest` 返回 400 `manifest_required`）。任务结果里的 `cards` 不写 D1、不进审计。
 
 ---

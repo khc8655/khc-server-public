@@ -1,6 +1,6 @@
 # 故障排查手册（troubleshooting）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：`docs/runbook/node-onboarding.md`、`docs/diagnostics.md`、`docs/agent-lifecycle.md`
 > 范围：控制面（Worker/面板）与 Agent 的线上故障排查；按症状组织，每节 = 症状 → 判定链 → 处置 → 验证
 
 ## 1. Agent 离线 / 节点不可达
@@ -13,7 +13,11 @@
 4. **传输通道**：Worker→Agent 双通道——域名走原生 fetch，裸 IP 一律走 `cloudflare:sockets` TCP 通道（裸 IP 的 fetch 恒为 Cloudflare 403 error 1003，属平台行为不是故障）。节点 `/state` 的 `via` 字段标明实际通道（`"tcp"`/`"fetch"`）。
 5. **路由内回退与冷却**（feat/server-capabilities 后行为）：**同一次调用**中域名 fetch 失败（403/1003、超时、连接拒绝等网络类错误）会**自动回退 TCP 直连**，幂等键不变、回退后重新签名，不会重复执行写动作；回退在日志/诊断里可见（routeErrors 逐通道记录）。全部通道失败后该节点进入 **30s 探测冷却**——冷却期内面板对该节点直接报冷却剩余秒数，不再反复重试拖慢交互（诊断探测不受冷却限制）。彻底不可达时错误为 `HubUnreachableError` 502 + 逐通道明细。
 6. **自签证书节点**：若错误信息为「证书校验失败（节点可能使用自签名证书…）」，这不是网络不可达——域名 fetch 通道与裸 IP 的 TCP 通道 TLS **均由平台强制校验证书，自签证书不可用**。处置优先级按 D-3 传输加密口径（见 node-onboarding §4.1）：**可信证书直连首选**（公网域名/IP 证书）→ 明文 `http://<IP>:<端口>` 仅限可信网络临时用 → **cloudflared Tunnel 备用**（国内 VM 备案/端口受限时）；Agent 侧 `--tls` 自签的限制见 node-onboarding §5.3。
-7. **偶发不可达但重试即恢复** → 见 §6 超时踩线，不是真离线。
+7. **Cloudflare Tunnel `HTTP 502` / `530` 与不完整响应**：
+   - `530`：`cloudflared` 隧道未连接，或域名 DNS 仍停留在旧 A 记录而未指向代理 `CNAME <tunnelId>.cfargotunnel.com`。
+   - `502`（`cloudflared` 日志含 `tls: first record does not look like a TLS handshake`）：Agent 在 Tunnel 模式下以明文 HTTP 回环监听 `127.0.0.1:<originPort>`，需在 Cloudflare Zero Trust Public Hostname 把源站类型改为 **`HTTP`**（`http://127.0.0.1:<port>`），不可设为 `HTTPS`。
+   - **TCP 响应截断错误**：`tcp-fetch` 会显式拒绝 `Content-Length` 长度不足或 `chunked` 未收齐结束块的截断响应，遇此报错先排查网络抖动或上游提前断连。
+8. **偶发不可达但重试即恢复** → 见 §6 超时踩线，不是真离线。
 
 ## 2. 防火墙锁死与恢复
 
@@ -24,6 +28,7 @@ host-ops 的 `fw.*` 只管理 `table inet khc_fw`（nftables），安全网设�
 - **60 秒确认机制**：`fw.apply` 成功后用 `systemd-run --on-active=60` 预约自动回滚；**必须在 60s 内 `fw.confirm`** 才持久化。实测不确认约 70s 后规则自动回滚、`fw.show` 状态复位 `none`，SSH 会话全程不受影响。
 - **回读校验**（feat/server-capabilities，`6816fd5`）：`nft -f` 成功后 Agent 会**回读 `nft list table inet khc_fw` 实际内容**与生成的 ruleset 比对（签名集合 + 基线子串，兼容 nft 排版差异）；不一致抛 `E_FW_VERIFY`，message 带差异摘要与可操作提示。校验失败时**不写新状态、不取消 60s 回滚定时器**——旧规则会自动恢复，不再出现"已应用"假成功。遇到 `E_FW_VERIFY` 属静默失败被拦下，按 message 提示处理后重试。
 - `fw.apply` 报 `E_UNSUPPORTED（systemd-run 不可用）` = 回滚定时器建不起来，规则**未**被修改（保护性失败）。
+- **白名单收口（`allowlist`）与关闭公网 SSH（`closePublicSsh`）**：Hub 节点可选启用白名单收口（`policy drop`）并单独开启 `closePublicSsh`（须 L3 确认，自动保留 WG 内网 SSH、Agent、回环与受管应用端口并受 60 秒自动回滚保护）；如确认后需要应急恢复公网 SSH，需先经 WireGuard 内网或云厂商 VNC 登录删除/更新规则。精简云镜像若内核支持 `nf_tables` 但缺 `nft` 二进制，可在 Hub 防火墙卡片触发受控 `install_nftables`。
 
 **锁死恢复**（确认机制失灵或手工误操作 nft 时）：
 
@@ -88,7 +93,7 @@ sudo /var/lib/khc-agent/host-ops/khc-host keys.list              # 绕过 Agent 
 1. **token 不匹配**：重装 Agent 时 `install.sh` 若发现 token 文件缺失会**重新生成** token（并只显示一次），与面板记录不一致 → 401。处置：把面板侧 token 重新写入机器（onboarding §5.2 的非交互写法），或在面板轮换节点 token。注意：实测记录过卸载后 token 文件被清除的情况，重装前建议先备份 `/etc/khc-agent/token`。
 2. **时钟漂移**：签名时间窗 ±60s。`timedatectl status` 看 RTC 偏差；`sudo timedatectl set-ntp true` 同步后重试。
 3. **nonce 重放**：同一请求重放（120s 内同 nonce）会 401——属防重放设计，正常操作不会触发。
-4. 对 `/state` 之外的所有 Agent 端点 401、`/health` 正常 = 鉴权层工作正常的表现（实测 F1/F2：伪造/缺失签名全 401）。
+4. 对 `/state` 之外的所有 Agent 端点 401、`/health` 正常 = 鉴权层工作正常的表现（实测 F1/F2：伪造/缺失签名全 401）。当 Agent 对 `/state` 或 `/overview` 返回 HTTP `401`/`403`/`426` 时，控制面与 `/snapshot`、`/nodes/probe` 一致置 `reachable: false`，工作区写入/应用按钮自动禁用。
 
 ## 8. 登录限流
 

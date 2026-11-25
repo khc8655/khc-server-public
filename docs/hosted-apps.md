@@ -1,6 +1,6 @@
 # 托管应用（应用清单 · 面板安装 · 一键发布）
 
-> 状态：现行 ｜ 最后核验：2026-11-24 ｜ 关联：`apps/manifests/`、`apps/web/src/data/manifestApps.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：`apps/manifests/`、`apps/web/src/data/manifestApps.ts`、`apps/web/src/apps/caddy/InstallAndPublishDrawer.tsx`
 
 ## 1. 是什么
 
@@ -64,7 +64,7 @@ curl -fsSL --connect-timeout 10 --max-time 300 \
 
 清单脚本（安装、升级、卸载）走 `Ctx.run_streaming`（`agent/khc/adapters.py`）：子进程输出逐行与 `\r` 进度帧节流回写任务日志，运行中就能看到「下载 / 校验 / 写 unit / 启动」走到哪一步。不得改回 `subprocess.run(capture_output=True)`：整段缓冲会让脚本不退出就一行日志都没有，卡住时看不出卡在哪。超时与取消必须能真的杀掉进程，实现用 `select` 轮询分片读，**不能用会阻塞的 `readline()`**。
 
-执行器还会拦截脚本输出中形如 `KHC_PROGRESS=<1..99>[ 说明]` 的行，自动更新任务进度百分比并把说明文本写入日志，使面板进度条不再一直停在 `1%`。
+执行器还会拦截脚本输出中形如 `KHC_PROGRESS=<1..99>[ 说明]` 的行，自动更新任务进度百分比并把说明文本写入日志，使面板进度条不再一直停在 `1%`；同时在进入流式任务日志与失败 `stdout`/`stderr` 详情前剥离 `KHC_RESULT=` 行，确保脚本生成的密钥与凭据只通过结果卡片 `result.cards` 返回。
 
 ### 3.3 实例约定
 

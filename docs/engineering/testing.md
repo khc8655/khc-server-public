@@ -1,6 +1,6 @@
 # 测试与验收规范
 
-> 状态：现行 ｜ 最后核验：2026-11-08 ｜ 关联：`./scripts/verify.sh`、`docs/engineering/release.md`、`.github/workflows/ci.yml`
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：`./scripts/verify.sh`、`docs/engineering/release.md`、`.github/workflows/ci.yml`
 > 范围：测试分层、功能覆盖矩阵、发版类型必测项、真机验收与缺口计划
 
 本文回答三个问题：**平台有哪些功能要测、每一层怎么测、不同类型的发版分别必须跑哪些测试**。所有数量以实跑为准，不在文档里写死“应有 N 个用例”。
@@ -29,7 +29,7 @@
 | Web 面板 | `apps/web/src/` | 静态 assets（随 Worker 部署） | 同上 |
 | Agent 内核 | `agent/khc_agent.py`、`agent/khc/` | `khc-agent-<VERSION>.tar.gz`（签名清单） | `agent/khc/util.py` VERSION |
 | 应用适配器 | `agent/adapters/*.py` | 随 Agent 包 | 随 Agent VERSION |
-| 数据模型 | `migrations/0001–0011` | D1 schema（只增不改） | 迁移文件序号 |
+| 数据模型 | `migrations/` | D1 schema（只增不改） | 迁移文件序号 |
 
 ### 2.2 功能矩阵
 
@@ -37,7 +37,7 @@
 |---|---|---|---|---|---|---|
 | 1 | 登录与会话 | 口令登录、session 过期、TOTP、限流 | `routes/auth.ts`、`lib/session|crypto` | L1/L2/L3 | 较全 | 中 |
 | 2 | 节点接入 | IP 直连 / 域名 HTTPS / Tunnel、探活、改接入、删除 | `routes/nodes.ts`、`AccessForm` | L1/L2/L3/L6 | 较全 | 高 |
-| 3 | 状态观测 | `/state` 一次性探测、10s 控制面快照转发、停表手动刷新 | `routes/snapshot.ts`、`data/snapshot.ts` | L1/L2/L3/L6 | 中 | 高 |
+| 3 | 状态观测 | `/state` 一次性探测、10s 控制面快照转发、`HubBar` 停表文案与「刷新状态」 | `routes/snapshot.ts`、`data/snapshot.ts` | L1/L2/L3/L6 | 中 | 高 |
 | 4 | 应用配置 | 保存（纯 D1）、plan/apply/rollback、rev/appliedRev、失败回滚 | `routes/apps.ts`、`lib/agent-commands` | L2/L4/L6 | 中 | 高 |
 | 5 | Caddy 站点 | 反代/静态/重定向、TLS 四模式、端口、健康、启停/校验/重载、接管外部配置 | `adapters/caddy_site.py`、`apps/caddy/` | L1/L4/L3/L6 | 中 | 高 |
 | 6 | 证书 | 自签/ACME 签发、inspect、安装到 Agent TLS、续期、到期诊断 | `adapters/certificates.py`、`routes/certs.ts` | L1/L4/L2/L6 | 中 | 中 |
@@ -142,6 +142,7 @@
 | session 过期 | 401 → 重新登录，写操作不静默成功 |
 | TOTP 开启/关闭 | 开启后登录需动态码；错误码拒绝；恢复码/关闭流程正确 |
 | 写请求缺 Origin/JSON | 按写守卫拒绝（若启用），错误可读 |
+| 通用设置保护键 | `PUT/DELETE /settings/auth.*` 返回 `403 forbidden_setting_key` |
 
 ### 4.2 节点接入
 
@@ -149,7 +150,7 @@
 |---|---|
 | IP 直连创建 | endpoint 为 `http://IP:8880`，明文风险确认后可提交 |
 | 域名 HTTPS 创建 | 只能选已有 DNS 记录，端口按协议推导（443） |
-| Tunnel 创建 | 只带 `tunnelId`，对外地址自动生成 |
+| Tunnel 创建 | 只带 `tunnelId`，对外地址自动生成；Public Hostname 源站配为 `HTTP`（`http://127.0.0.1:<originPort>`） |
 | 探活成功/失败 | 成功更新列表状态与 lastSeen；失败给 3 条排查提示 |
 | 改接入方式 | 保存后入口地址切换，旧入口失效；离线时仍可保存 |
 | 删除节点 L3 | 必须输入节点名；勾选联动删除 DNS；卸载脚本可复制 |
@@ -160,12 +161,10 @@
 
 | 用例 | 期望 |
 |---|---|
-| 直连快照 | 有 HTTPS 域名时浏览器直连 Agent，10s 一帧 |
-| 转发快照 | 无域名时经 Worker `/snapshot`，2s 去重 |
+| 转发快照 | 经 Worker `/nodes/:id/snapshot` 转发，10s 一帧；非 force 并发请求在途去重并在完成后缓存 2s；浏览器超时 10s |
 | 多标签页 | BroadcastChannel 只允许 leader 发请求 |
-| 停表 | 达到上限后显示“已停止自动刷新 · 截至时间”，提供“手动刷新” |
-| 降级 | 直连失败回退控制面快照，并给出原因 |
-| 控制面探测失败但快照正常 | 显示“仅观测可达/未确认”，不误报永久离线 |
+| 停表与统一刷新 | 达到上限后 `HubBar` 显示「自动刷新已暂停 · 数据截至 …」，点击「刷新状态」同时强制重拉 `/overview?force=1` 并重启 10s 快照循环 |
+| 控制面探测失败但快照正常 | 显示“仅观测可达/未确认”，不误报永久离线；Agent HTTP 401/403/426 置 `reachable: false` |
 | `/state` 慢/超时 | 页面可重试，不把未返回当离线；其他节点不受影响 |
 
 ### 4.4 应用配置与执行
@@ -179,6 +178,8 @@
 | 重复 apply | 幂等键命中，响应一致，`exec_counter` 不重复累加 |
 | 节点缺适配器 | 诊断报 `agent.state_invalid`，不假装成功 |
 | 删除/卸载 | 文件、unit、端口、状态全部清理 |
+| 回滚预检与异步收敛 | `rollback` 先检查安全通道与 `$cert`/`$dnsCred` 再建新 rev；Agent 返回 `202` 时经 `callWithSyncPoll` 等待完成 |
+| 批量导入预校验 | `POST /nodes/:id/import` 任一条校验失败返回 400 且 D1 零部分写入 |
 
 ### 4.5 Caddy / 证书
 
@@ -198,7 +199,7 @@
 | 用例 | 期望 |
 |---|---|
 | 接口校验 | 名称/地址/CIDR/端口非法被拒 |
-| Peer CRUD | 新增/改名/禁用/删除，导出 .conf 与一键脚本 |
+| Peer CRUD | 新增/改名/禁用/删除，导出 .conf 与一键脚本；`reach`/`reachPeers`/`egress` 经保存/重载规范化后不丢失 |
 | 换钥生命周期 | pending → cutover → confirm/cancel，超时可恢复旧钥 |
 | 配置迁移 | 跨节点迁移后 Peer 地址/路由正确 |
 | 状态解析 | `wg show` 多 Peer、离线、握手时间解析正确 |
@@ -214,6 +215,7 @@
 | 文件读写 | 白名单内可写；符号链接/越权路径拒绝 |
 | 防火墙/公钥/cron | 变更可回滚；受限公钥只能执行允许命令 |
 | 异步任务 | 进度/取消/失败/超时状态正确，页面可刷新 |
+| 安全日志与收口防护 | `logs.security` 按需只读（120s 缓存）且高频爆破触发 `ssh_bruteforce` 诊断；防火墙支持 `allowlist` / `closePublicSsh`（L3 确认 + 自动保留规则）/ `install_nftables` |
 
 ### 4.8 诊断 / 双模式 / 生命周期
 
