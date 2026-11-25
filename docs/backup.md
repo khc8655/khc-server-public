@@ -1,6 +1,6 @@
 # 节点备份 / 恢复（C4）
 
-> 状态：现行 ｜ 最后核验：2026-11-11 ｜ 关联：apps/api/src/lib/crypto.ts、agent/khc/release_verify.py、apps/api/src/routes/backup.ts
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：apps/api/src/lib/crypto.ts、agent/khc/release_verify.py、apps/api/src/routes/backup.ts
 > 范围：节点配置导出/导入 + 控制面灾备（secrets 与 D1）与密钥轮换
 
 ## 1. 备份内容
@@ -30,6 +30,7 @@
 
 - 只写 `app_configs`（生成新 rev），**不自动 apply**；操作者逐项 plan/apply。
 - 最多 50 个应用；应用名重复/非法 → 400；节点 id 以 URL 为准（备份里的 node.id 不覆盖目标节点）。
+- 整批校验（应用数上限、重名/非法应用名、目标配置预先合并敏感字段）全部通过后才写入 D1，任一条校验失败返回 400 且保证 D1 零部分写入。
 - 审计 `node.import`（只记 app 列表）。
 
 ## 3. UI（变更单 #010）

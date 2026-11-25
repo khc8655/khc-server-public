@@ -1,16 +1,16 @@
 # 安全与边界说明（security-boundaries）
 
-> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`agent/khc-agent.service`、`apps/api/src/lib/rate-limit.ts`、`apps/api/src/lib/agent-commands.ts`
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：`agent/khc-agent.service`、`apps/api/src/lib/rate-limit.ts`、`apps/api/src/lib/agent-commands.ts`
 > 范围：回答"装了这个 Agent / 这个 Worker 之后，它们到底被授权做什么、不能做什么"；面向安全审计与边界自查
 
 ## 1. 控制面（Worker + 面板）
 
-- **会话**：登录成功发 JWT cookie `khc_sess`，有效期 8h（`SESSION_TTL_SEC`）；所有 `/api/v1` 路由（除登录本身）要求会话。启用 TOTP 后登录需追加 6 位验证码，令牌携带会话版本 `ver`（取自 settings 的 `auth.session_epoch`）；启用/禁用 TOTP 或「全部登出」递增该版本，当前浏览器立刻清除会话并刷新本 isolate 缓存，但其他设备 / 其他 isolate 上的既有旧会话受 15 秒 isolate 缓存（`SESSION_EPOCH_CACHE_TTL_MS`）叠加 D1 读副本同步延迟（通常数秒）影响，仍可短暂有效（8h TTL 与 cookie 名称/属性不变）。
+- **会话**：登录成功发 JWT cookie `khc_sess`，有效期 8h（`SESSION_TTL_SEC`）；所有 `/api/v1` 路由（除登录本身）要求会话。启用 TOTP 后登录需追加 6 位验证码，令牌携带会话版本 `ver`（取自 settings 的 `auth.session_epoch`）；启用/禁用 TOTP 或「全部登出」递增该版本，当前浏览器立刻清除会话并刷新本 isolate 缓存，但其他设备 / 其他 isolate 上的既有旧会话受 15 秒 isolate 缓存（`SESSION_EPOCH_CACHE_TTL_MS`）叠加 D1 读副本同步延迟（通常数秒）影响，仍可短暂有效（8h TTL 与 cookie 名称/属性不变）。通用设置接口 `PUT/DELETE /api/v1/settings/:key` 拒绝操作 `auth.*` 前缀键（`403 forbidden_setting_key`），`auth.totp_secret`、`auth.totp_pending`、`auth.session_epoch` 等鉴权内部键只能由 `/auth/*` 专用端点读写。
 - **D1 读副本一致性书签**：`/api/*` 响应按需追加 `khc_d1bm` Cookie（`HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800`，不设 `Domain`），仅携带非敏感的 Cloudflare D1 Read Replication 提交书签，用于保证单浏览器读己之写顺序一致，不含用户身份、令牌或业务密文；退出登录（`/api/v1/auth/logout` 与 `/api/v1/auth/logout-all`）时同步以 `Max-Age=0` 清除。
 - **登录限流**：10 次失败 / 300s / 每源 IP，第 11 次 429。存储三级降级（P1-C，迁移 0006）：**D1 单语句原子 upsert**（`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`，跨 isolate 计数，主路径）→ KV（未绑定则跳过）→ 进程内 Map（本地 dev 兜底）。存储异常不阻塞登录主路径。
 - **Worker→Agent 传输**：域名走原生 fetch，裸 IP 走 `cloudflare:sockets` TCP 通道（同一接入方案内的两条传输通道）；均要求 HMAC 签名（见 §4）。**接入方案口径（2026-11-06 修订，取代 D-3「直连首选 / Tunnel 备用」）**：三种**并列**方案，节点创建/配置时**选定其一**，运行时只走该方案，失败即报错，无主备、无跨方案回退——
   - **方案 A：https + 域名 + 公网可信证书直连**（域名/IP 证书，平台强制校验证书）。Agent 支持直接 TLS 监听（`--tls-cert` / `--tls-key`，主端口复用，SIGHUP 热重载）；Worker 侧拒绝明文通道下发证书私钥/DNS 凭据（`secure-channel.ts`，400 `insecure_channel_secret`，development 豁免）。
-  - **方案 B：Cloudflare Tunnel**（cloudflared 常驻出站、Agent 绑 `127.0.0.1`，TLS 由 Cloudflare 托管），适用于无入站端口或备案/端口受限节点，**不是 A 失败后的兜底**。
+  - **方案 B：Cloudflare Tunnel**（cloudflared 常驻出站、Agent 绑 `127.0.0.1:<originPort>` 明文 HTTP，Cloudflare Tunnel Public Hostname 源站服务须配置为 `HTTP` 而非 `HTTPS`，外网 TLS 由 Cloudflare 托管），适用于无入站端口或备案/端口受限节点，**不是 A 失败后的兜底**。
   - **方案 C：https + 域名 + 自签证书**：Worker 直连自签在平台侧不可行（无跳过校验/自定义 CA 开关），只能把自签放在 Tunnel 源站段（`caPool` / `originServerName`）或 Workers VPC 私有服务段。
   引导见 `docs/runbook/node-onboarding.md` §4.1。**已按 ADR-0012 落地：三种并列方案、节点选定其一、无跨方案回退；同方案内 fetch / TCP 双通道保留**（`orderedRoutes()` 只返回选定方案单一目标，删跨路由重试与 `onRouteSuccess` 自动回写）；权威口径见 `docs/design-v3.md` §1.1 与 `docs/engineering/adr/ADR-0012-connection-scheme-selection.md`。未配证书的明文 HTTP 仅有 HMAC 防请求篡改，**无传输机密性**（凭据、WireGuard 私钥会过公网），仅限可信网络临时使用。
 - **审计**：节点/配置/动作全部落 `audit` 表（actor/node/app/action/detail）。
@@ -77,6 +77,7 @@ Agent 可写路径 = unit 的 `ReadWritePaths` 全集（system 模式默认值�
 - **只管理 `table inet khc_fw`**，不碰系统其余 nftables 规则。
 - **锁定保护**（P1-B 修复后）：`deny` 规则按「协议 + 端口」两维判定——tcp 保护 SSH 端口 + Agent 实际监听端口（`/proc` 实测 Agent 进程 LISTEN socket，不依赖配置登记）；udp 保护 WG 端口。命中即 `E_LOCKOUT` 拒绝，规则不生效；协议不匹配（如 `deny udp/22`）不误拦。
 - **60 秒确认 + 自动回滚**：`fw.apply` 用 `systemd-run --on-active=60` 预约回滚；`fw.confirm` 才持久化。实测不确认约 70s 自动回滚、SSH 会话不受影响。`systemd-run` 不可用时 `E_UNSUPPORTED` 保护性失败（规则未被修改）。
+- **白名单收口与安全操作动作**：支持 `mode: allowlist`（`table inet khc_fw` `policy drop`，仅放行回环、自动保留的 WG 内网 SSH / Agent / 面板受管应用端口及用户白名单规则）；仅 Hub 节点可开启可选 `closePublicSsh`（须 L3 二次确认，仍自动保留 WG 内网 SSH、Agent、回环与受管应用端口，并受 60 秒自动回滚保护）；Hub 内核支持 `nf_tables` 但缺少 `nft` 二进制时，仅 Hub 节点可触发受控 `install_nftables`（`khc.pkg.ensure_packages(["nftables"])`）。
 
 ### 6.1 主机 iptables 自动放行边界（批次 S 方案 B，Agent 0.1.11）
 
@@ -125,7 +126,7 @@ Agent 可写路径 = unit 的 `ReadWritePaths` 全集（system 模式默认值�
 
 - 记录在 Agent 数据目录（`<data>/app-manifests/<id>--<instance>.json`，目录 0700、文件 0600、属主 root），应用用户不可写。
 - 记录含 `values`（本次生效的参数值，**包括 secret 与 derive 参数**），供升级与卸载沿用。secret 值本来就由安装脚本写进应用自己的配置，记录不新增暴露面。
-- `values` 不外泄：`read_installed_manifests` 是字段白名单、不拷贝它；`status()`、`/state`、`manifest_installed`、任务日志、错误详情与 `KHC_RESULT` 都不含参数值。日志与错误详情按**合并后**的值遮罩 secret（包括只存在于记录里的）。结果卡片是给用户看的输出，不遮罩（`kind: secret` 由面板掩码显示）。
+- `values` 不外泄：`read_installed_manifests` 是字段白名单、不拷贝它；`status()`、`/state`、`manifest_installed`、任务日志、错误详情与 `KHC_RESULT` 都不含参数值。日志与错误详情按**合并后**的值遮罩 secret（包括只存在于记录里的）；`KHC_RESULT=` 行会在进入流式任务日志及失败 `stdout`/`stderr` 详情前剥离，脚本自动生成的密钥/令牌只通过授权结果卡片 `result.cards` 返回（`kind: secret` 由面板掩码显示）。
 - 卸载即删记录；旧记录（0.8.0 写的）没有 `values`，缺参数时按 `param_invalid` 拒绝，不用空串顶替（卸载脚本常用参数拼路径）。
 
 ## 9. 自查命令集（对应实测 F1–F4）

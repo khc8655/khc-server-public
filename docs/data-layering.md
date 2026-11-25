@@ -14,7 +14,7 @@ C. 浏览器 → Worker /nodes/:id/snapshot ──HMAC──▶ Agent /snapshot 
 ```
 
 - 控制面是**唯一入口**，浏览器不再直连 Agent（`live-ticket`、8899 端口与 `/_live/snapshot` 已下线）；进入节点工作区时仅在 `HubChannelsProvider` 拉取一次 `/overview`（聚合节点详情、控制面 `/state` 与 D1 投影并回填共享缓存），工作区内切换子页不再发 `/state` 或 `/nodes/:id`，**不做周期轮询**。
-- 轻量快照只提供 **CPU/内存/磁盘/负载/uptime/tasks**，页面可见时每 10s 轮询一次、隐藏即停、支持 `BroadcastChannel` 多标签页共享、单次 10 分钟/60 次上限（ADR-0010）；连不上/到顶时页面保留上一帧并给出状态文案。
+- 轻量快照只提供 **CPU/内存/磁盘/负载/uptime/tasks**，页面可见时每 10s 轮询一次、隐藏即停、支持 `BroadcastChannel` 多标签页共享、单次 10 分钟/60 次上限（ADR-0010）；Worker `/nodes/:id/snapshot` 对非 `force` 并发请求在整个在途周期内去重复用并在完成后维持 2s 短缓存，浏览器侧 `SNAPSHOT_TIMEOUT_MS` 为 10s（在 Worker 8s 内部超时之上留出 2s 余量）；连不上/到顶时页面保留上一帧并给出状态文案。
 - 浏览器不持有节点 token 与直连票据。
 
 ## 2. D1 中保留什么
@@ -43,6 +43,7 @@ C. 浏览器 → Worker /nodes/:id/snapshot ──HMAC──▶ Agent /snapshot 
 - WireGuard 握手、peer 在线状态、rx/tx
 - Caddy 站点健康、validate/reload 结果
 - port-forward unit 运行状态、socat 版本
+- `logs.security` 安全日志聚合与主机错误日志（按需只读，120s/30s 短缓存，不落 D1）
 - 诊断结果
 
 `GET /nodes/:id/overview`（及节点证书作用域内的 `/state` 共享缓存）仅用于「打开工作区时探测一次」控制面可达性、更新
@@ -71,7 +72,7 @@ control.reachable === null   → presence = unknown, canApply = false
 canSave 恒为 true（保存只写 D1，与通道无关，见 docs/design-v3.md §1.2）
 ```
 
-- **写闸门分两级**：保存类（PUT 应用配置/节点字段）永远允许；执行类由 `canApply` 决定。
+- **写闸门分两级**：保存类（PUT 应用配置/节点字段）永远允许；执行类由 `canApply` 决定。当 Agent 对 `/state` 或 `/overview` 返回 HTTP `401/403/426` 时，控制面与 `/snapshot`、`/nodes/probe` 一致置 `control.reachable = false`（`canApply = false`），避免状态误判为可应用。
 
 ## 5. 失败矩阵
 

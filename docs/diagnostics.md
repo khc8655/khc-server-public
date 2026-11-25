@@ -1,6 +1,6 @@
 # 诊断（Diagnostics）设计与错误码目录
 
-> 状态：现行 ｜ 最后核验：2026-11-13 ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：docs/design-v3.md §2.1、apps/api/src/lib/diagnostics/
 > 范围：诊断 7 核心码、控制面/主机补充问题与 API
 > **唯一权威范围**：核心错误码、适配器问题契约、Worker 诊断 API 形状、修复动作边界。
 > **一句话**：诊断只回答两件事——**节点连得上吗？哪个应用坏了、下一步点什么？** 核心只保留 7 个码，应用问题由适配器自己上报。
@@ -100,7 +100,7 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 |---|---|---|---|
 | `disk_full` | warn / error | 空间或 inode 使用率 ≥ 85% warn、≥ 95% error；取最严重的一条 | 已有 `ops.disks[].percent` / `inodesPercent` |
 | `memory_low` | warn | 有 swap：可用内存 < 10% 且 swap 已用 > 50%；无 swap：可用内存 < 5% | 已有 `ops.mem` / `ops.swap`（不是 `ops.memory`） |
-| `units_failed` | warn | 存在非受管 failed 单元；evidence 列前 5 个名字 | 已有 `ops.services.failedUnits` |
+| `units_failed` | info | 存在非受管 failed 单元；evidence 列前 5 个名字（降噪不计入需处理告警） | 已有 `ops.services.failedUnits` |
 | `reboot_required` | info | `rebootRequired === true` | 已有 `ops.rebootRequired` |
 | `oom_killed` | warn | `oom.lastIncreaseAt` 在最近 24 小时内（> 0 且不晚于 now） | 新增 `ops.oom = {total, lastIncreaseAt, bootId?}` |
 | `fs_readonly` | error | `rootReadonly === true` | 新增 `ops.rootReadonly` |
@@ -133,16 +133,17 @@ ACME 证书（续期会失败）时才保持 `error`。前端「诊断 · N 项�
 | wireguard | `wireguard_dir_missing` | error | `/etc/wireguard` 不存在（unit 白名单为 `-` 前缀，Agent 仍能启动）；**无 action**，按 hint `sudo install -d -m 0700 /etc/wireguard` 或重跑 install.sh；plan/apply 同样以该 code 拒绝 |
 | caddy-site | `inactive` | error | 服务未运行；action `caddy.service` |
 | caddy-site | `config_failed` | error | validate 或 reload 失败合并；evidence `validateOk/lastReloadOk` |
-| caddy-site | `upstream_down` | error/warn | down=error，4xx/TLS=warn；只报一行 |
+| caddy-site | `upstream_down` | error/warn | down=error，4xx（不含正常的 401/403 鉴权响应）/TLS=warn；只报一行 |
 | caddy-site | `port_conflict` | error | plan/apply 前读 `/proc/net/tcp{,6}` 识别真实监听者（含 Agent 自身），`details.occupiedBy` 指出占用进程；Caddy 自身监听不算冲突 |
 | certificates | `expiring` | info/warn/error | 最近到期证书；≤30 天 info、≤14 天 warn、≤3 天或过期 error（来源：证书库 D1，Worker 侧生成） |
 | certificates | `acme_failed` | error | 缺 acme.sh/openssl（reason=env_missing）或最近一次签发失败（reason=dns_credential/issue_failed） |
 | certificates | `tls_cert_expiring` | warn | **Agent 自己**的控制通道证书 ≤30 天到期（reason=expiring）；evidence `certPath/notAfter/daysLeft/renewalTimer` |
 | certificates | `tls_cert_expired` | error | 同上但已过期（reason=expired）；控制面会拒绝该节点 |
 | port-forward | `unit_failed` | error | 缺 socat（reason=socat_missing）或单元未运行；action `app.apply` |
+| host-ops | `ssh_bruteforce` | warn | 近 24h SSH 鉴权失败次数 ≥50（≥500 提示高危）；数据来自按需 `logs.security`（120s 缓存、零写 D1），引导启用防火墙白名单收口或关闭公网 22 端口；无 action |
 | host | `disk_full` | warn / error | 空间或 inode ≥ 85% / ≥ 95%；evidence `disk/path/metric/percent`；无 action |
 | host | `memory_low` | warn | 可用内存与 swap 组合判定；evidence `availablePercent/swapPercent/hasSwap`；无 action |
-| host | `units_failed` | warn | 非受管 failed 单元；evidence `count` 与前 5 个 `units`；无 action |
+| host | `units_failed` | info | 非受管 failed 单元；evidence `count` 与前 5 个 `units`；无 action |
 | host | `reboot_required` | info | 存在 reboot-required 标记；evidence `rebootRequired`；无 action |
 | host | `oom_killed` | warn | 24h 内 oom_kill 增长；evidence `total/lastIncreaseAt`；无 action |
 | host | `fs_readonly` | error | 根挂载只读；evidence `rootReadonly`；无 action |

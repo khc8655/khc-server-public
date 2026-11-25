@@ -1,6 +1,6 @@
 # 节点接入 Runbook（node-onboarding）
 
-> 状态：现行 ｜ 最后核验：2026-11-23 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：`docs/agent-lifecycle.md`、`docs/runbook/troubleshooting.md`、`agent/install.sh`
 > 范围：把一台干净 Linux 机器从零接入面板，直至节点 `/state` 上线的端到端步骤
 
 ## 1. 前置条件
@@ -112,7 +112,7 @@ acme.sh 自带续期任务（依赖 cron，容器镜像里常装不上）；`--r
 不支持 `--acme`，仍需手动签发；路径换成 `~/.config/khc-agent/tls/`，去掉 `sudo`，
 `--reloadcmd` 改为 `systemctl --user reload khc-agent`。
 
-**方案 B：Cloudflare Tunnel。** Hub 安装常驻 `cloudflared` 出站连接，Agent 收敛监听 `127.0.0.1`（零公网入站端口），节点 `tunnel_endpoint` 填隧道域名并**选定本方案**。适用于无入站端口、备案/端口受限或主动不暴露端口的节点；**不是方案 A 失败后的兜底**。**前置条件**：域名托管在 Cloudflare（Free 计划即可）。**费用**：Tunnel 本体免费（自托管 connector，无按量费用）；进阶可在隧道入口挂 Access Service Token（免费计划 50 用户额度内）增强准入。
+**方案 B：Cloudflare Tunnel。** Hub 安装常驻 `cloudflared` 出站连接，Agent 以**明文 HTTP 回环**监听 `http://127.0.0.1:<originPort>`（零公网入站端口），节点 `tunnel_endpoint` 填隧道域名并**选定本方案**。Cloudflare Zero Trust Public Hostname 的源站服务类型**必须选 `HTTP`**（`http://127.0.0.1:<port>` 或 `http://localhost:<port>`），**切勿选 `HTTPS`**（否则 `cloudflared` 报 `tls: first record does not look like a TLS handshake` 并返回 `HTTP 502`）；且域名 DNS 记录必须是已开启代理的 `CNAME` 指向 `<tunnelId>.cfargotunnel.com`（不可残留旧 A 记录）。适用于无入站端口、备案/端口受限或主动不暴露端口的节点；**不是方案 A 失败后的兜底**。**前置条件**：域名托管在 Cloudflare（Free 计划即可）。**费用**：Tunnel 本体免费（自托管 connector，无按量费用）；进阶可在隧道入口挂 Access Service Token（免费计划 50 用户额度内）增强准入。
 
 **方案 C：https + 域名 + 自签证书。** Worker 直连自签不可行——`fetch()` 与 `cloudflare:sockets` 的 TLS 一律校验证书，没有 `rejectUnauthorized:false` 或自定义 CA 开关（见 §5.3）。自签要落地，需把它放在 **Tunnel 源站段**（cloudflared `caPool` 指向自签 CA PEM 并配 `originServerName`，保留源站身份验证）或 **Workers VPC 私有服务段**；两种形态下 Worker 侧始终面对 Cloudflare 可信证书。`noTLSVerify: true` 会关闭源站校验，官方标注不推荐用于生产。
 
@@ -217,6 +217,7 @@ hub 上线并应用 WireGuard 配置后，手机/服务器类 peer 的接入不�
 | 面板文案以为 Caddy 会自动签证书 | 旧版误导文案（2026-11-07 已修正）；Caddy 只装包不写 Agent 证书 | 本页 §4.1 / §5.3 |
 | `sha256sum -c` 失败 | 发布包与清单不符（签名清单机制，属按设计拒绝） | 核对面板 Agent 卡的版本与 `docs/agent-releases.md` |
 | 装完面板仍离线 | 云防火墙未放行所选端口；或 endpoint 的 scheme/port 与实际不符 | 本页 §4 + troubleshooting §1 |
+| Tunnel 节点建好后报 502 / 530 | Public Hostname 源站误设为 `HTTPS`（应为 `HTTP://127.0.0.1:<originPort>`）、DNS 仍指向旧 A 记录未改为代理 `CNAME <tunnelId>.cfargotunnel.com`，或 `cloudflared` 未运行 | 本页 §4.1「方案 B」+ troubleshooting §1 |
 | Agent 起来了但面板 401 | token 与面板记录不一致（如重装后换了 token） | troubleshooting §7 |
 | `--check` 报 WARN | 缺 wg/caddy/socat 等可选依赖 | 需要对应应用时装：`POST /nodes/:id/apps/<app>/install`，或安装 Agent 时加 `--with-caddy` 等代装参数（本页 §5.3） |
 | WG/端口转发外网连不进且面板 apply 提示「主机 iptables 不可用/自动放行失败」 | Agent 无法操作主机 iptables（非 root/被容器裁剪），自动放行降级 | 本页 §7.1，人工在主机放行 listenPort |
