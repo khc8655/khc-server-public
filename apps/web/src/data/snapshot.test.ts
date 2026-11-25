@@ -97,6 +97,16 @@ describe('SnapshotLoop：10s 节奏 / 可见性 / 上限 / 环形缓冲', () => 
     await vi.advanceTimersByTimeAsync(0);
     expect(h.calls()).toBe(4);
     expect(h.last()?.status).toBe('stopped');
+
+    // 手动重启自动循环：重置计数并重新进入 10s 自动轮询
+    h.loop.restart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.calls()).toBe(5);
+    expect(h.last()?.status).toBe('live');
+    expect(h.last()?.capped).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.calls()).toBe(6);
   });
 
   it('环形缓冲只保留最近 N 个点', async () => {

@@ -182,6 +182,36 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+const PEER_REACH_VALUES: ReadonlySet<string> = new Set<WgPeerReach>(['hub', 'peers', 'all']);
+const PEER_EGRESS_VALUES: ReadonlySet<string> = new Set<WgPeerEgress>(['internal', 'all']);
+
+function normalizeWgPeer(item: unknown): WgPeer {
+  const peer = asRecord(item);
+  const reach =
+    typeof peer.reach === 'string' && PEER_REACH_VALUES.has(peer.reach)
+      ? (peer.reach as WgPeerReach)
+      : undefined;
+  const reachPeers = Array.isArray(peer.reachPeers) ? asStringList(peer.reachPeers) : undefined;
+  const egress =
+    typeof peer.egress === 'string' && PEER_EGRESS_VALUES.has(peer.egress)
+      ? (peer.egress as WgPeerEgress)
+      : undefined;
+  const normalized: WgPeer = {
+    name: asString(peer.name),
+    publicKey: asString(peer.publicKey),
+    privateKey: asString(peer.privateKey),
+    allowedIps: asStringList(peer.allowedIps),
+    keepalive: asNumber(peer.keepalive, 25),
+    endpoint: typeof peer.endpoint === 'string' ? peer.endpoint : null,
+    enabled: asBoolean(peer.enabled, true),
+  };
+  // 未显式配置时保持 undefined，沿用 N-6 对存量 Peer「全体互通 / 仅内网」的兼容默认。
+  if (reach !== undefined) normalized.reach = reach;
+  if (reachPeers !== undefined) normalized.reachPeers = reachPeers;
+  if (egress !== undefined) normalized.egress = egress;
+  return normalized;
+}
+
 /** D1 里的原始 config → 稳定结构；缺失字段落回适配器默认值。 */
 export function normalizeWgConfig(raw: Record<string, unknown> | null | undefined): WgConfig {
   const source = asRecord(raw);
@@ -200,20 +230,7 @@ export function normalizeWgConfig(raw: Record<string, unknown> | null | undefine
   };
 
   const peers = Array.isArray(source.peers)
-    ? source.peers
-        .map((item) => {
-          const peer = asRecord(item);
-          return {
-            name: asString(peer.name),
-            publicKey: asString(peer.publicKey),
-            privateKey: asString(peer.privateKey),
-            allowedIps: asStringList(peer.allowedIps),
-            keepalive: asNumber(peer.keepalive, 25),
-            endpoint: typeof peer.endpoint === 'string' ? peer.endpoint : null,
-            enabled: asBoolean(peer.enabled, true),
-          } satisfies WgPeer;
-        })
-        .filter((peer) => peer.name.length > 0)
+    ? source.peers.map(normalizeWgPeer).filter((peer) => peer.name.length > 0)
     : [];
 
   return { interface: interfaceConfig, peers };

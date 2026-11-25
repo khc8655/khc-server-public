@@ -1,6 +1,6 @@
 # 数据分层：控制面与快照
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：docs/design-v3.md §2.3、ADR-0010、ADR-0021
+> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：docs/design-v3.md §2.3、ADR-0010、ADR-0021
 > 范围：D1/Agent 数据归属边界（配置 vs 运行快照）
 
 本文件定义 khc-server 的数据归属，避免“实时状态”和“可恢复配置”混在一起。
@@ -94,7 +94,7 @@ canSave 恒为 true（保存只写 D1，与通道无关，见 docs/design-v3.md 
 - **刷新策略**：打开页面拉一次 + 写后/手动刷新。`QueryClient` 默认
   `retry: false`、`refetchOnWindowFocus: false`、`refetchOnReconnect: false`；全仓无
   `refetchInterval`。
-- **工作区单一入口与分段缓存**：进入节点工作区只请求一次 `/overview` 并回填节点与运行态缓存，切换工作区页签不重发 `/state` 或 `/nodes/:id`（写操作后由 `refreshHubRuntime` 按需刷新 `/overview`）。主机运维页各分段（服务、进程、定时任务、SSH 公钥、日志错误）读结果缓存 30s（失败不缓存，手动刷新可重拉）；服务类写操作后只刷新 `svc.list` 与 `/snapshot`（2.1s 内避开 Worker 2s 去重窗口）。
+- **工作区单一入口与分段缓存**：进入节点工作区只请求一次 `/overview` 并回填节点与运行态缓存，切换工作区页签不重发 `/state` 或 `/nodes/:id`（写操作后由 `refreshHubRuntime` 按需刷新 `/overview`）。节点栏右侧「刷新状态」会同时强制重拉 `/overview?force=1`（更新 Peer 在线、站点与服务）并重启 10s 快照自动轮询（`live.restart()`）。主机运维页各分段（服务、进程、定时任务、SSH 公钥、日志错误）读结果缓存 30s（失败不缓存，手动刷新可重拉）；服务类写操作后只刷新 `svc.list` 与 `/snapshot`（2.1s 内避开 Worker 2s 去重窗口）。
 - **不做按节点 fan-out**：概览页只拉 `/nodes` + `/certificates`；`/hubs` 打开不探测，
   [刷新状态] 才 1 + N 次（单次、手动）；证书站点占用只在打开详情/删除确认时按需拉取。
 - **页内进度回执**：host-ops 任务 1→2→4→8s 退避（≤120s 约 16 次）；模式切换

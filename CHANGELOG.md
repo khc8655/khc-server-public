@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.46.1] - 2026-11-25
+### Fixed
+- WireGuard 配置归一化保留 Peer 的 `reach`、`reachPeers` 与 `egress` 策略字段，编辑保存或重开抽屉不再回退为「Hub + 所有 Peer」；缺省字段沿用 N-6 默认。
+- 将工作区快照提示与刷新入口收口至节点栏右侧，点击「刷新状态」同时强制重拉 `/overview?force=1` 与重启 10s 快照轮询，不再遮挡内容区按钮。
+
 ## [0.46.0] - 2026-11-25
 ### Added
 - Agent `0.10.0`：`host-ops` 新增只读动词 `logs.security` 并在诊断中按需统计近 24 小时 SSH 爆破与扫描来源摘要，不写 D1、平时零流量。
