@@ -47,7 +47,7 @@ beforeEach(() => {
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
       if (url === '/api/v1/nodes') return json({ nodes: [buildNode()] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node: buildNode() });
-      if (url === '/api/v1/nodes/tyo-1/overview') {
+      if (url === '/api/v1/nodes/tyo-1/overview' || url === '/api/v1/nodes/tyo-1/overview?force=1') {
         return json({
           node: buildNode(),
           reachable: true,
@@ -216,5 +216,28 @@ describe('AppShell 与页面渲染', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: '添加节点' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/hubs');
+  });
+
+  it('HubBar 右侧展示同步状态与「刷新状态」，点击同时强制刷新 /overview?force=1 与 /snapshot（不压内容区）', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    await renderRoute('/hubs/tyo-1');
+    expect(await screen.findByRole('heading', { name: 'tyo-1' })).toBeTruthy();
+
+    const hubContent = document.querySelector('.ui-hub-content') as HTMLElement;
+    expect(hubContent.textContent).not.toContain('手动刷新');
+    expect(hubContent.textContent).not.toContain('已停止自动刷新');
+
+    const hubBarRight = document.querySelector('.ui-hubbar-right') as HTMLElement;
+    expect(hubBarRight).toBeTruthy();
+    const refreshBtn = await within(hubBarRight).findByRole('button', { name: '刷新状态' });
+
+    const beforeCount = fetchMock.mock.calls.length;
+    fireEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      const tail = fetchMock.mock.calls.slice(beforeCount).map((call) => String(call[0]));
+      expect(tail).toContain('/api/v1/nodes/tyo-1/overview?force=1');
+      expect(tail).toContain('/api/v1/nodes/tyo-1/snapshot');
+    });
   });
 });

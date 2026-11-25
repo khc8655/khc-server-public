@@ -4417,6 +4417,22 @@
   text-decoration: none;
 }
 
+.ui-hubbar-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-hubbar-sync-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ui-hubbar-divider {
   width: 1px;
   height: 18px;
@@ -4624,8 +4640,15 @@
     white-space: normal;
   }
 
-  .ui-hubbar:not(.has-subitems) .ui-hubbar-right {
-    display: none;
+  .ui-hubbar-right {
+    width: 100%;
+    padding: var(--s1) 0 var(--s15);
+    border-top: 1px solid var(--line);
+  }
+
+  .ui-hubbar-sync {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .ui-hubbar-row {

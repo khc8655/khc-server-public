@@ -74,4 +74,51 @@ describe('wireguard 数据层', () => {
     expect(migrated.allowedIps).toEqual(['10.99.0.3/32']);
     expect(migrated.keepalive).toBe(25);
   });
+
+  it('normalizeWgConfig 保留 reach / reachPeers / egress，且缺省字段保持 undefined（N-6 兼容）', () => {
+    const normalized = normalizeWgConfig({
+      interface: DEFAULT_WG_INTERFACE,
+      peers: [
+        {
+          name: 'phone-1',
+          publicKey: 'k1',
+          privateKey: 'p1',
+          allowedIps: ['10.99.0.2/32'],
+          reach: 'hub',
+          egress: 'internal',
+        },
+        {
+          name: 'laptop-1',
+          publicKey: 'k2',
+          privateKey: 'p2',
+          allowedIps: ['10.99.0.3/32'],
+          reach: 'peers',
+          reachPeers: ['phone-1', 'nas-1'],
+          egress: 'all',
+        },
+        {
+          name: 'legacy-1',
+          publicKey: 'k3',
+          privateKey: 'p3',
+          allowedIps: ['10.99.0.4/32'],
+          reach: 'invalid-value',
+          egress: 'bogus',
+        },
+      ],
+    });
+
+    const [phone, laptop, legacy] = normalized.peers;
+    if (!phone || !laptop || !legacy) throw new Error('missing normalized peers');
+
+    expect(phone).toMatchObject({ reach: 'hub', egress: 'internal' });
+    expect('reachPeers' in phone).toBe(false);
+    expect(laptop).toMatchObject({
+      reach: 'peers',
+      reachPeers: ['phone-1', 'nas-1'],
+      egress: 'all',
+    });
+    expect(legacy.reach).toBeUndefined();
+    expect(legacy.reachPeers).toBeUndefined();
+    expect(legacy.egress).toBeUndefined();
+  });
 });

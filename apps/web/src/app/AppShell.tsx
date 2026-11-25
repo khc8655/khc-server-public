@@ -30,9 +30,9 @@ import {
 import { zh, fmt } from '../i18n/zh';
 import { useTheme } from './theme';
 import {
+  HubBarRefreshControl,
   HubChannelsProvider,
   HubReadOnlyNotice,
-  HubSnapshotNotice,
   useConnectionIndicator,
 } from './HubChannelsProvider';
 import { TaskCenter } from './TaskCenter';
@@ -42,9 +42,9 @@ import { TaskCenter } from './TaskCenter';
  * 节点栏 + 连接指示：HubBar 本身不读 context（它是 ui/ 里的通用组件），
  * 由这里取好数据传下去（P-4 A）。
  */
-function HubBarWithConnection(props: Omit<HubBarProps, 'connection'>) {
+function HubBarWithConnection(props: Omit<HubBarProps, 'connection' | 'right'>) {
   const connection = useConnectionIndicator();
-  return <HubBar {...props} connection={connection} />;
+  return <HubBar {...props} connection={connection} right={<HubBarRefreshControl />} />;
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -317,7 +317,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
               />
               <div className="ui-content ui-hub-content">
                 <HubReadOnlyNotice />
-                <HubSnapshotNotice />
                 {children}
               </div>
             </HubChannelsProvider>

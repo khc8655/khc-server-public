@@ -642,4 +642,36 @@ describe('WireGuard 页', () => {
     );
     expect(screen.queryByText('公网地址未配置')).toBeNull();
   });
+
+  it('编辑 Peer 可达范围并保存后重新打开，回显仍保持已保存策略（不回退「Hub + 所有 Peer」）', async () => {
+    const calls = mockApi({ peers: [peerConfig], rev: 1, appliedRev: 1 });
+    await renderWireGuard();
+    await screen.findAllByText('pixel-8');
+
+    await userEvent.click(screen.getAllByRole('button', { name: '更多操作' })[0] as HTMLElement);
+    await userEvent.click(await screen.findByRole('menuitem', { name: '编辑' }));
+
+    const drawer = (await screen.findAllByRole('dialog')).at(-1);
+    if (!drawer) throw new Error('missing peer drawer');
+    const reachSelect = within(drawer).getByLabelText('可达范围') as HTMLSelectElement;
+    expect(reachSelect.value).toBe('all');
+
+    await userEvent.selectOptions(reachSelect, 'hub');
+    await userEvent.click(within(drawer).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      const put = calls.find((call) => call.url.endsWith('/apps/wireguard') && call.method === 'PUT');
+      expect(put).toBeTruthy();
+      const body = put?.body as { config?: { peers?: Array<Record<string, unknown>> } };
+      expect(body.config?.peers?.[0]?.reach).toBe('hub');
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await userEvent.click(screen.getAllByRole('button', { name: '更多操作' })[0] as HTMLElement);
+    await userEvent.click(await screen.findByRole('menuitem', { name: '编辑' }));
+    const reopened = (await screen.findAllByRole('dialog')).at(-1);
+    if (!reopened) throw new Error('missing reopened peer drawer');
+    expect((within(reopened).getByLabelText('可达范围') as HTMLSelectElement).value).toBe('hub');
+  });
 });

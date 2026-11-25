@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useState,
   type ReactNode,
 } from 'react';
 import {
@@ -23,7 +24,7 @@ import {
   useMarkHubReachable,
 } from '../data/queries';
 import { setHubWriteGuard } from '../data/writeGuard';
-import { Banner, Button, Row } from '../ui';
+import { Banner, Button } from '../ui';
 import { zh, fmt } from '../i18n/zh';
 import { formatStamp } from '../i18n/format';
 import { channelRows, connectionState } from '../apps/host-ops/connectionState';
@@ -197,31 +198,58 @@ export function useConnectionIndicator(): {
 }
 
 /**
- * 状态快照提示条：统一展示「实时快照（10s）」与「已停止自动刷新 · 截至 xx:xx」。
- * 只做信息展示 + 手动刷新，不新增导航/页面范式。
+ * 节点栏右侧同步状态与统一刷新入口：
+ * 收口原本压在内容区主按钮上方的快照提示条；点击时同时强制刷新控制面 `/overview?force=1`
+ * （含 Peer 在线状态、站点与服务）并重置 10s 自动快照预算。
  */
-export function HubSnapshotNotice() {
-  const { live } = useHubChannelsContext();
-  if (live.mode === 'none') return null;
-  if (live.status === 'disabled' && live.receivedAt === null && live.error === null) return null;
+export function HubBarRefreshControl() {
+  const { live, overviewQuery, refreshRuntime } = useHubChannelsContext();
+  const [pending, setPending] = useState(false);
 
-  const at = live.receivedAt !== null ? formatStamp(live.receivedAt) : null;
-  const updated = at ? ` · ${fmt(zh.snapshot.updatedAt, { time: at })}` : '';
-  let text =
-    live.status === 'stopped'
-      ? fmt(zh.snapshot.stoppedAt, { time: at ?? '—' })
-      : `${zh.snapshot.modeForward}${updated}`;
-  if (live.status === 'fallback') {
-    text = `${text} · ${fmt(zh.snapshot.unavailable, { reason: live.error ?? zh.snapshot.unknownReason })}`;
+  const snapshotAt = live.receivedAt ?? 0;
+  const overviewAt = overviewQuery.dataUpdatedAt ?? 0;
+  const latestMs = Math.max(snapshotAt, overviewAt);
+  const timeText = latestMs > 0 ? formatStamp(latestMs) : null;
+
+  let statusText: string;
+  if (live.mode === 'none') {
+    statusText = timeText ? fmt(zh.snapshot.updatedAt, { time: timeText }) : zh.snapshot.noData;
+  } else if (live.status === 'stopped') {
+    statusText = timeText ? `${zh.snapshot.stoppedShort} · ${timeText}` : zh.snapshot.stoppedShort;
+  } else if (live.status === 'fallback') {
+    statusText = timeText
+      ? `${zh.snapshot.unavailableShort} · ${timeText}`
+      : zh.snapshot.unavailableShort;
+  } else {
+    statusText = timeText ? `${zh.snapshot.modeForward} · ${timeText}` : zh.snapshot.modeForward;
   }
 
+  const title =
+    live.status === 'fallback' && live.error
+      ? fmt(zh.snapshot.unavailable, { reason: live.error })
+      : zh.snapshot.refreshTitle;
+
+  const busy = pending || overviewQuery.isFetching;
+
+  const handleRefresh = () => {
+    if (busy) return;
+    setPending(true);
+    if (live.mode !== 'none') live.restart();
+    void refreshRuntime({ force: true }).finally(() => setPending(false));
+  };
+
   return (
-    <Row justify="between" gap={2}>
-      <span className="ui-muted">{text}</span>
-      {live.status === 'stopped' || live.status === 'fallback' ? (
-        <Button label={zh.snapshot.refresh} size="sm" onClick={() => live.refresh()} />
-      ) : null}
-    </Row>
+    <div className="ui-hubbar-sync">
+      <span className="ui-hubbar-sync-text" title={title}>
+        {statusText}
+      </span>
+      <Button
+        label={busy ? zh.snapshot.refreshing : zh.snapshot.refresh}
+        size="sm"
+        loading={busy}
+        onClick={handleRefresh}
+      />
+    </div>
   );
 }
 

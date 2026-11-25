@@ -427,6 +427,8 @@ export interface HubBarProps {
   items: SidebarNavItem[];
   /** 二级模块切换（应用发布 / 内网穿透 / 服务器运维） */
   subItems?: HubSubItem[];
+  /** 栏右侧扩展区（运行态同步时间与手动刷新按钮） */
+  right?: ReactNode;
   /** 统一连接指示（P-4 A）：三态 + 每类数据的通道说明。 */
   connection?: {
     state: { label: string; tone: Tone };
@@ -442,8 +444,9 @@ export interface HubBarProps {
  * 节点栏只放「状态点 + 节点名」：地址不再出现在这里（2026-11-16 P-1），
  * 只在概况页标题下出现一次。地址带框等宽字体既挤掉节点名，又在页面上重复三次。
  */
-export function HubBar({ activeHub, items, subItems = [], connection }: HubBarProps) {
+export function HubBar({ activeHub, items, subItems = [], right, connection }: HubBarProps) {
   const hasSubItems = subItems.length > 0;
+  const hasRight = hasSubItems || Boolean(right);
   const [channelsOpen, setChannelsOpen] = useState(false);
   return (
     <div className={`ui-hubbar${hasSubItems ? ' has-subitems' : ''}`}>
@@ -496,21 +499,24 @@ export function HubBar({ activeHub, items, subItems = [], connection }: HubBarPr
             ))}
           </nav>
         </div>
-        {hasSubItems ? (
+        {hasRight ? (
           <div className="ui-hubbar-right">
-            <nav className="ui-seg" aria-label={zh.nav.currentHub}>
-              {subItems.map((item) => (
-                <Link
-                  key={item.key}
-                  to={item.href}
-                  className={`ui-seg-item${item.active ? ' is-active' : ''}`}
-                  aria-current={item.active ? 'page' : undefined}
-                >
-                  <span>{item.label}</span>
-                  {item.count !== undefined ? <span className="ui-hubbar-subcount">{item.count}</span> : null}
-                </Link>
-              ))}
-            </nav>
+            {hasSubItems ? (
+              <nav className="ui-seg" aria-label={zh.nav.currentHub}>
+                {subItems.map((item) => (
+                  <Link
+                    key={item.key}
+                    to={item.href}
+                    className={`ui-seg-item${item.active ? ' is-active' : ''}`}
+                    aria-current={item.active ? 'page' : undefined}
+                  >
+                    <span>{item.label}</span>
+                    {item.count !== undefined ? <span className="ui-hubbar-subcount">{item.count}</span> : null}
+                  </Link>
+                ))}
+              </nav>
+            ) : null}
+            {right}
           </div>
         ) : null}
       </div>

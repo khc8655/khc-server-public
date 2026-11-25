@@ -49,6 +49,8 @@ export interface SnapshotObservation extends SnapshotState {
   refresh: () => void;
   /** 兼容旧字段名（页面上的「重新连接」按钮）。 */
   reconnect: () => void;
+  /** 手动刷新并重置自动轮询上限（立即拉一帧并恢复 10s 自动刷新）。 */
+  restart: () => void;
 }
 
 const INITIAL_STATE: SnapshotState = {
@@ -140,7 +142,8 @@ type SharedMessage =
       capped: boolean;
     }
   | { type: 'bye'; id: string }
-  | { type: 'refresh'; id: string; joinedAt: number };
+  | { type: 'refresh'; id: string; joinedAt: number }
+  | { type: 'restart'; id: string; joinedAt: number };
 
 /**
  * 与 React 解耦的轮询状态机（单测可直接驱动）。
@@ -273,6 +276,20 @@ export class SnapshotLoop {
       return;
     }
     void this.tick({ manual: true });
+  }
+
+  /** 手动刷新并重置自动轮询预算（立即拉一帧并重新进入 10s 自动刷新）。 */
+  restart(): void {
+    if (!this.running) return;
+    if (this.shared !== null && !this.leader) {
+      this.post({ type: 'restart', id: this.tabId, joinedAt: this.joinedAt });
+      return;
+    }
+    this.clearTimer();
+    this.startedAt = this.now();
+    this.commit({ pollCount: 0, capped: false });
+    if (this.fetching) return;
+    void this.tick();
   }
 
   private clearTimer(): void {
@@ -436,6 +453,9 @@ export class SnapshotLoop {
         break;
       case 'refresh':
         if (this.leader && !this.fetching) void this.tick({ manual: true });
+        break;
+      case 'restart':
+        if (this.leader) this.restart();
         break;
       default:
         break;
@@ -603,5 +623,6 @@ export function useHubSnapshot(hubId: string): SnapshotObservation {
     ...state,
     refresh: () => loopRef.current?.refresh(),
     reconnect: () => loopRef.current?.refresh(),
+    restart: () => loopRef.current?.restart(),
   };
 }

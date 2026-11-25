@@ -895,13 +895,16 @@ export const zh = {
 
   snapshot: {
     title: '状态快照',
-    modeForward: '实时快照（10s）',
+    modeForward: '10s 快照',
     stopped: '已停止自动刷新',
+    stoppedShort: '自动刷新已暂停',
     stoppedAt: '已停止自动刷新 · 数据截至 {time}',
     updatedAt: '最近 {time}',
-    refresh: '手动刷新',
+    refresh: '刷新状态',
+    refreshTitle: '立即刷新节点运行状态（含 Peer 在线、站点与服务）并重置 10s 自动快照',
     refreshing: '刷新中',
     errorHint: '快照刷新失败，将按 10s 节奏自动重试',
+    unavailableShort: '快照失败 · 10s 重试',
     unavailable: '刷新失败：{reason}，将按 10s 节奏自动重试',
     unknownReason: '未知原因',
     noData: '尚未获取到快照',
