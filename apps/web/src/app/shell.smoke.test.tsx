@@ -16,11 +16,12 @@ function json(body: unknown): Response {
 }
 
 let nodeSummary = { mode: 'caddy' as const, peers: null as number | null, sites: null, forwards: null as number | null };
+let extraNodes: ReturnType<typeof buildNode>[] = [];
 
-function buildNode() {
+function buildNode(id = 'tyo-1', name = id) {
   return {
-    id: 'tyo-1',
-    name: 'tyo-1',
+    id,
+    name,
     endpoint: 'https://203.0.113.10:8880',
     tunnelEndpoint: null,
     liveEndpoint: null,
@@ -40,12 +41,13 @@ function buildNode() {
 beforeEach(() => {
   window.scrollTo = vi.fn();
   nodeSummary = { mode: 'caddy', peers: null, sites: null, forwards: null };
+  extraNodes = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/v1/auth/me') return json({ user: { name: 'admin' } });
-      if (url === '/api/v1/nodes') return json({ nodes: [buildNode()] });
+      if (url === '/api/v1/nodes') return json({ nodes: [buildNode(), ...extraNodes] });
       if (url === '/api/v1/nodes/tyo-1') return json({ node: buildNode() });
       if (url === '/api/v1/nodes/tyo-1/overview' || url === '/api/v1/nodes/tyo-1/overview?force=1') {
         return json({
@@ -239,5 +241,24 @@ describe('AppShell 与页面渲染', () => {
       expect(tail).toContain('/api/v1/nodes/tyo-1/overview?force=1');
       expect(tail).toContain('/api/v1/nodes/tyo-1/snapshot');
     });
+  });
+
+  it('侧边栏默认展示最多 8 个节点，超出时点击原地展开与收起不跳转页面', async () => {
+    extraNodes = Array.from({ length: 9 }, (_, i) => buildNode(`hub-${i + 2}`, `node-${i + 2}`));
+    const router = await renderRoute('/settings');
+    await screen.findByRole('heading', { name: '设置' });
+    const sidebar = document.querySelector('.ui-sidebar') as HTMLElement;
+    expect(await within(sidebar).findByText('node-8')).toBeTruthy();
+    expect(within(sidebar).queryByText('node-9')).toBeNull();
+
+    const expandBtn = within(sidebar).getByRole('button', { name: '展开其余 2 个' });
+    fireEvent.click(expandBtn);
+    expect(router.state.location.pathname).toBe('/settings');
+    expect(within(sidebar).getByText('node-9')).toBeTruthy();
+    expect(within(sidebar).getByText('node-10')).toBeTruthy();
+
+    const collapseBtn = within(sidebar).getByRole('button', { name: '收起' });
+    fireEvent.click(collapseBtn);
+    expect(within(sidebar).queryByText('node-10')).toBeNull();
   });
 });

@@ -413,6 +413,15 @@
   padding: 0;
 }
 
+.ui-card-b-flush > .ui-card {
+  border: 0;
+  border-radius: 0;
+}
+
+.ui-card-b-flush > .ui-banner {
+  margin: var(--s3) var(--s4);
+}
+
 .ui-stat {
   padding: var(--s4);
   background: var(--surface);
@@ -641,6 +650,13 @@
 .ui-col-actions {
   width: 48px;
   text-align: right;
+}
+
+@media (min-width: 640px) {
+  .ui-table col.ui-col-actions[style*='--ui-col-w'],
+  .ui-table th.ui-col-actions[style*='--ui-col-w'] {
+    width: var(--ui-col-w);
+  }
 }
 
 @media (min-width: 1024px) {
@@ -4247,7 +4263,36 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: var(--s4) var(--s3) var(--s1);
+  gap: var(--s2);
+  margin: var(--s4) 0 var(--s1);
+  padding: 0 var(--s1) 0 var(--s3);
+  min-width: 0;
+}
+
+.ui-sidebar-group-row .ui-btn-wrap {
+  flex: none;
+}
+
+.ui-sidebar-hubs-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ui-nav-hub-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  height: 30px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.ui-nav-hub-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .ui-sidebar-group-row .ui-sidebar-group {
@@ -5024,36 +5069,21 @@ button.ui-statusbar-tile:hover {
   font-size: var(--fs-md);
 }
 
-.ui-components-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.ui-components-row {
+.ui-mode-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  min-height: var(--h-row);
-  padding: var(--s2) 0;
-  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
-.ui-components-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.ui-components-info {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
+.ui-mode-info {
+  flex: 1 1 240px;
   min-width: 0;
 }
 
-.ui-components-name {
-  font-weight: var(--fw-medium);
-  color: var(--text);
+.ui-mode-action {
+  flex: none;
 }
 
 @media (max-width: 639px) {
@@ -5062,11 +5092,6 @@ button.ui-statusbar-tile:hover {
     flex-wrap: wrap;
     padding: var(--s2);
     margin: 0 calc(var(--s2) * -1);
-  }
-
-  .ui-components-row {
-    flex-wrap: wrap;
-    min-height: 56px;
   }
 }
 

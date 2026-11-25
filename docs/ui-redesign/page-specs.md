@@ -194,8 +194,8 @@
 ### 2.6 `/hubs/:id/settings` 设置（类型 D）
 
 - **目的**：Agent 接入与生命周期、节点模式切换、内置与扩展组件管理、备份恢复。
-- **首屏**：顶部 Segmented：[Agent 与接入 | 组件 | 备份与恢复]，支持 `?tab=components` / `?tab=backup` / `?action=install` 直达（`?tab=mode` 向后兼容落入 `Agent 与接入`）。`hubQuery` 支持刷新直达按需拉取。`AccessCard` 展示并支持更换控制通道面板证书：**在线仅更换证书**时直接调 `POST /certs/:id/bind` 热重载并关闭抽屉（失败降级显示重装命令）；**改接入参数或离线改证**时留在抽屉切换到 `NodeInstallPanel` 重新生成安装命令并验活。`AgentCard`「安装 Agent」抽屉同样复用 `NodeInstallPanel`。`AgentCard` 对比 `/agent/releases` 最新版并在落后时展示「可升级到 v...」与 [远程升级]。
-- **组件分段**：上方展示内置组件（Caddy / WireGuard / 端口转发 socat）运行状态与能力驱动安装入口，下方承载「扩展组件」表（原 `/apps` 迁入）。
+- **首屏**：顶部 Segmented：[Agent 与接入 | 组件 | 备份与恢复]，支持 `?tab=components` / `?tab=backup` / `?action=install` 直达（`?tab=mode` 向后兼容落入 `Agent 与接入`）。`hubQuery` 支持刷新直达按需拉取。`AccessCard` 展示并支持更换控制通道面板证书：**在线仅更换证书**时直接调 `POST /certs/:id/bind` 热重载并关闭抽屉（失败降级显示重装命令）；**改接入参数或离线改证**时留在抽屉切换到 `NodeInstallPanel` 重新生成安装命令并验活。`AgentCard`「安装 Agent」抽屉同样复用 `NodeInstallPanel`。`AgentCard` 对比 `/agent/releases` 最新版并在落后时展示「可升级到 v...」与 [远程升级]。`ModeCard` 收紧为单行紧凑条（模式徽标 + 一句说明 + 右侧切换按钮；`unknown` 模式隐藏禁用按钮）。
+- **组件分段**：内置组件（Caddy / WireGuard / 端口转发 socat）与下方「扩展组件」（原 `/apps` 迁入，排除内部 `app-catalog` 适配器，条目 ≤5 时隐藏搜索框）统一使用标准化 `Table`（贴边卡片承载，支持行点击与统一操作按钮）。
 - **命名**：页面标题「设置」（Tab 与页头一致）。
 
 ### 2.7 已合并/删除的节点层页面

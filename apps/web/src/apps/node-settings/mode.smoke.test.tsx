@@ -318,18 +318,15 @@ describe('节点模式 UI', () => {
     expect(screen.getByRole('button', { name: '确认切换 · Caddy 网关' })).toBeTruthy();
   });
 
-  it('unknown 模式禁用切换并提示原因', async () => {
+  it('unknown 模式展示提示并隐藏无效切换按钮', async () => {
     mode = 'unknown';
     wireguardRunning = false;
     await renderRoute('/hubs/tyo-1/settings');
     await openModeSegment();
     const badges = await screen.findAllByText('未确认');
     expect(badges.length).toBeGreaterThan(0);
-    expect(badges[0]?.closest('[title]')?.getAttribute('title')).toBe(
-      'Agent 不可达或还没有网络配置，暂时无法切换模式。',
-    );
-    const button = (await screen.findByRole('button', { name: '切换到 Caddy 网关' })) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Agent 不可达或还没有网络配置，暂时无法切换模式。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '切换到 Caddy 网关' })).toBeNull();
   });
 
   it('caddy 模式下 WireGuard 页只读并提示', async () => {
