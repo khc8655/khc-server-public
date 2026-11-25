@@ -1,0 +1,22 @@
+{
+  "instance": "default",
+  "home": [
+    "bin/sing-box",
+    "bin/sing-box-1.14.0",
+    ".config/systemd/user/khc-sing-box-default.service",
+    ".config/khc-sing-box-default/",
+    ".config/khc-sing-box-default/config.json",
+    ".config/khc-sing-box-default/uuid",
+    ".config/khc-sing-box-default/links.txt"
+  ],
+  "appHome": ["config/legacy"],
+  "root": [],
+  "symlinks": [
+    [
+      ".config/systemd/user/default.target.wants/khc-sing-box-default.service",
+      ".config/systemd/user/khc-sing-box-default.service"
+    ]
+  ],
+  "keep": ["bin/other-app"],
+  "appHomeEmpty": true
+}

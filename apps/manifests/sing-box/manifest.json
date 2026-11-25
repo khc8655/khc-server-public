@@ -1,0 +1,160 @@
+{
+  "id": "sing-box",
+  "enabled": true,
+  "manifest": {
+    "schema": 2,
+    "name": "sing-box (TUIC / Hysteria2)",
+    "version": "latest",
+    "runtime": {
+      "mode": "create",
+      "user": "khc-app-sing-box",
+      "linger": true
+    },
+    "params": [
+      {
+        "key": "enable_tuic",
+        "type": "boolean",
+        "label": "启用 TUIC v5 协议",
+        "default": true
+      },
+      {
+        "key": "tuic_port",
+        "type": "integer",
+        "label": "TUIC v5 监听端口（UDP）",
+        "default": 24443,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "enable_hy2",
+        "type": "boolean",
+        "label": "启用 Hysteria2 协议",
+        "default": true
+      },
+      {
+        "key": "hy2_port",
+        "type": "integer",
+        "label": "Hysteria2 监听端口（UDP）",
+        "default": 24444,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "ip_mode",
+        "type": "enum",
+        "label": "连接与出站 IP 协议栈",
+        "default": "ipv4",
+        "options": [
+          {
+            "value": "ipv4",
+            "label": "IPv4（链接使用 IPv4，出站优先 IPv4）"
+          },
+          {
+            "value": "ipv6",
+            "label": "IPv6（链接使用 IPv6，出站优先 IPv6）"
+          },
+          {
+            "value": "dual",
+            "label": "双栈（同时生成 IPv4 与 IPv6 订阅链接）"
+          }
+        ]
+      },
+      {
+        "key": "uuid",
+        "type": "string",
+        "label": "UUID / 密码（留空自动生成并持久复用）",
+        "default": "",
+        "secret": true,
+        "advanced": true
+      },
+      {
+        "key": "server_host",
+        "type": "string",
+        "label": "自定义连接地址（域名或 IP，留空自动探测）",
+        "default": "",
+        "advanced": true
+      },
+      {
+        "key": "sni",
+        "type": "string",
+        "label": "自签证书伪装域名（SNI）",
+        "default": "www.bing.com",
+        "advanced": true
+      },
+      {
+        "key": "node_tag",
+        "type": "string",
+        "label": "节点备注前缀（留空使用主机名）",
+        "default": "",
+        "advanced": true
+      },
+      {
+        "key": "version",
+        "type": "string",
+        "label": "sing-box 版本（留空拉取最新正式版，如 1.14.4）",
+        "default": "",
+        "advanced": true
+      },
+      {
+        "key": "download_mirror",
+        "type": "string",
+        "label": "GitHub 镜像前缀（可选，国内 VM 推荐）",
+        "default": "",
+        "advanced": true
+      },
+      {
+        "key": "http_proxy",
+        "type": "string",
+        "label": "下载代理（可选，如 http://127.0.0.1:7890）",
+        "default": "",
+        "advanced": true
+      }
+    ],
+    "requires": {
+      "arch": [
+        "amd64",
+        "arm64"
+      ],
+      "diskMB": 150,
+      "commands": [
+        "python3",
+        "openssl",
+        "tar"
+      ]
+    },
+    "scripts": {
+      "install": "#!/usr/bin/env bash\n# sing-box 适配脚本（仅 TUIC v5 + Hysteria2，参照 argosbx 方案使用官方 SagerNet/sing-box 内核）。\n#\n# 功能：\n#   1. 可选启用 TUIC v5 / Hysteria2 及自定义 UDP 端口\n#   2. 留空自动生成并持久复用 UUID（升级 / 重装不丢失）\n#   3. 支持 IPv4 / IPv6 / 双栈公网探测与出站策略，并生成对应订阅链接\n#   4. 订阅链接经 KHC_RESULT 保存到节点记录，可在面板「查看访问凭据」随时取回\n#   5. 配合 systemd user unit 实现启动 / 停止 / 重启 / 查看日志 / 更新 / 卸载\nset -euo pipefail\n\nENABLE_TUIC=\"${KHC_PARAM_ENABLE_TUIC:-1}\"\nTUIC_PORT=\"${KHC_PARAM_TUIC_PORT:-24443}\"\nENABLE_HY2=\"${KHC_PARAM_ENABLE_HY2:-1}\"\nHY2_PORT=\"${KHC_PARAM_HY2_PORT:-24444}\"\nIP_MODE=\"${KHC_PARAM_IP_MODE:-ipv4}\"\nUUID_PARAM=\"${KHC_PARAM_UUID:-}\"\nSERVER_HOST=\"${KHC_PARAM_SERVER_HOST:-}\"\nSNI=\"${KHC_PARAM_SNI:-www.bing.com}\"\nNODE_TAG=\"${KHC_PARAM_NODE_TAG:-}\"\nVER_PARAM=\"${KHC_PARAM_VERSION:-}\"\nDOWNLOAD_MIRROR=\"${KHC_PARAM_DOWNLOAD_MIRROR:-}\"\nHTTP_PROXY_URL=\"${KHC_PARAM_HTTP_PROXY:-}\"\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-sing-box-${INSTANCE}.service\"\n\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nBIN_DIR=\"$USER_HOME/bin\"\nCONF_ROOT=\"$USER_HOME/.config\"\nCONF_DIR=\"$CONF_ROOT/khc-sing-box-${INSTANCE}\"\nUNIT_DIR=\"$CONF_ROOT/systemd/user\"\n\nBIN=\"$BIN_DIR/sing-box\"\nUNIT=\"$UNIT_DIR/$UNIT_NAME\"\nCONF_FILE=\"$CONF_DIR/config.json\"\nUUID_FILE=\"$CONF_DIR/uuid\"\nCERT_FILE=\"$CONF_DIR/cert.crt\"\nKEY_FILE=\"$CONF_DIR/private.key\"\nSHA_FILE=\"$CONF_DIR/cert.sha256\"\nSNI_FILE=\"$CONF_DIR/cert.sni\"\nLINKS_FILE=\"$CONF_DIR/links.txt\"\n\n# ---- 1. 参数校验 ----\nif [ \"$ENABLE_TUIC\" != \"1\" ] && [ \"$ENABLE_HY2\" != \"1\" ]; then\n  echo \"请至少启用 TUIC v5 或 Hysteria2 中的一种协议\" >&2\n  exit 1\nfi\nif [ \"$ENABLE_TUIC\" = \"1\" ] && [ \"$ENABLE_HY2\" = \"1\" ] && [ \"$TUIC_PORT\" = \"$HY2_PORT\" ]; then\n  echo \"TUIC v5 与 Hysteria2 不能使用相同 UDP 端口（${TUIC_PORT}）\" >&2\n  exit 1\nfi\ncase \"$IP_MODE\" in\n  ipv4|ipv6|dual) ;;\n  *) echo \"ip_mode 仅支持 ipv4 / ipv6 / dual：${IP_MODE}\" >&2; exit 1 ;;\nesac\n\nSNI=\"${SNI//[[:space:]]/}\"\n[ -n \"$SNI\" ] || SNI=\"www.bing.com\"\nif [[ ! \"$SNI\" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$ ]]; then\n  echo \"SNI 域名格式非法：${SNI}\" >&2\n  exit 1\nfi\n\nSERVER_HOST=\"${SERVER_HOST//[[:space:]]/}\"\nif [ -n \"$SERVER_HOST\" ] && [[ \"$SERVER_HOST\" =~ [[:space:]/?#@] ]]; then\n  echo \"server_host 格式非法：只能填写域名或 IP\" >&2\n  exit 1\nfi\n\nUUID_PARAM=\"${UUID_PARAM//[[:space:]]/}\"\nif [ -n \"$UUID_PARAM\" ] && { [ \"${#UUID_PARAM}\" -lt 8 ] || [ \"${#UUID_PARAM}\" -gt 64 ] || [[ ! \"$UUID_PARAM\" =~ ^[A-Za-z0-9._-]+$ ]]; }; then\n  echo \"UUID / 密码长度须为 8–64 且仅含字母数字或 . _ -\" >&2\n  exit 1\nfi\n\nif [ -n \"$DOWNLOAD_MIRROR\" ] && [[ ! \"$DOWNLOAD_MIRROR\" =~ ^https?://[^[:space:]]+$ ]]; then\n  echo \"download_mirror 必须是 http:// 或 https:// 开头的地址\" >&2\n  exit 1\nfi\nif [ -n \"$HTTP_PROXY_URL\" ] && [[ ! \"$HTTP_PROXY_URL\" =~ ^(https?|socks4a?|socks5h?)://[^[:space:]]+$ ]]; then\n  echo \"http_proxy 仅支持 http/https/socks4/socks5(h):// 地址\" >&2\n  exit 1\nfi\n\ncase \"$(uname -m)\" in\n  x86_64|amd64) ARCH=amd64 ;;\n  aarch64|arm64) ARCH=arm64 ;;\n  *) echo \"不支持的 CPU 架构: $(uname -m)\" >&2; exit 1 ;;\nesac\n\nmkdir -p \"$BIN_DIR\" \"$CONF_DIR\" \"$UNIT_DIR\"\nchmod 0700 \"$CONF_DIR\"\n\nCURL_PROXY_ARGS=()\n[ -n \"$HTTP_PROXY_URL\" ] && CURL_PROXY_ARGS=(--proxy \"$HTTP_PROXY_URL\")\n\n# ---- 2. 下载或更新官方 SagerNet/sing-box 二进制 ----\nVER_TRIMMED=\"${VER_PARAM//[[:space:]]/}\"\nFALLBACK_VER=\"1.14.4\"\nif [ ! -x \"$BIN\" ] || [ -n \"$VER_TRIMMED\" ] || [ \"${KHC_ACTION:-install}\" = \"upgrade\" ]; then\n  if [ -z \"$VER_TRIMMED\" ] || [ \"$VER_TRIMMED\" = \"latest\" ]; then\n    echo \"KHC_PROGRESS=8 解析 sing-box 最新正式版本...\"\n    LATEST_URL=\"https://github.com/SagerNet/sing-box/releases/latest\"\n    if [ -n \"$DOWNLOAD_MIRROR\" ] && [[ \"$DOWNLOAD_MIRROR\" != *.tar.gz ]]; then\n      LATEST_URL=\"${DOWNLOAD_MIRROR%/}/${LATEST_URL}\"\n    fi\n    RESOLVED_URL=\"\"\n    if command -v curl >/dev/null 2>&1; then\n      RESOLVED_URL=\"$(curl -fsSL --connect-timeout 10 --max-time 20 \"${CURL_PROXY_ARGS[@]}\" -o /dev/null -w '%{url_effective}' \"$LATEST_URL\" 2>/dev/null || true)\"\n    fi\n    if [[ \"$RESOLVED_URL\" =~ /releases/tag/v?([0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]*) ]]; then\n      TARGET_VER=\"${BASH_REMATCH[1]}\"\n    else\n      TARGET_VER=\"$FALLBACK_VER\"\n      echo \"未能获取最新版本号，回退使用 ${TARGET_VER}\"\n    fi\n  else\n    TARGET_VER=\"${VER_TRIMMED#[vV]}\"\n    if [[ ! \"$TARGET_VER\" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9._-]{0,32}$ ]]; then\n      echo \"version 格式非法：${VER_PARAM}\" >&2\n      exit 1\n    fi\n  fi\n\n  TAR_URL=\"https://github.com/SagerNet/sing-box/releases/download/v${TARGET_VER}/sing-box-${TARGET_VER}-linux-${ARCH}.tar.gz\"\n  DOWNLOAD_URL=\"$TAR_URL\"\n  if [ -n \"$DOWNLOAD_MIRROR\" ]; then\n    if [[ \"$DOWNLOAD_MIRROR\" == *.tar.gz ]]; then\n      DOWNLOAD_URL=\"$DOWNLOAD_MIRROR\"\n    else\n      DOWNLOAD_URL=\"${DOWNLOAD_MIRROR%/}/${TAR_URL}\"\n    fi\n  fi\n\n  TMP=\"$(mktemp \"${TMPDIR:-/tmp}/khc-singbox.XXXXXX.tar.gz\")\"\n  ERR_FILE=\"$(mktemp \"${TMPDIR:-/tmp}/khc-singbox-err.XXXXXX\")\"\n  EXT_DIR=\"$(mktemp -d \"${TMPDIR:-/tmp}/khc-singbox-ext.XXXXXX\")\"\n  WATCHER_PID=\"\"\n  stop_watcher() {\n    if [ -n \"${WATCHER_PID:-}\" ]; then\n      kill \"$WATCHER_PID\" 2>/dev/null || true\n      wait \"$WATCHER_PID\" 2>/dev/null || true\n      WATCHER_PID=\"\"\n    fi\n  }\n  cleanup_dl() {\n    stop_watcher\n    rm -rf -- \"${TMP:-}\" \"${ERR_FILE:-}\" \"${EXT_DIR:-}\"\n  }\n  trap cleanup_dl EXIT\n\n  DL_MAX=\"${KHC_DL_MAX_TIME:-300}\"\n  echo \"KHC_PROGRESS=15 开始下载 ${DOWNLOAD_URL}（v${TARGET_VER}，连接超时 10s，总上限 ${DL_MAX}s）\"\n\n  dl_fail() {\n    stop_watcher\n    local got=0\n    [ -f \"$TMP\" ] && got=\"$(wc -c < \"$TMP\" 2>/dev/null || echo 0)\"\n    echo \"下载失败：$1；已下载 ${got} 字节\" >&2\n    echo \"排查：国内 VM 可填写 download_mirror（如 https://gh-proxy.org/ ）或 http_proxy。\" >&2\n    exit 1\n  }\n\n  (\n    prev=0\n    while sleep 3; do\n      got=0\n      if [ -f \"$TMP\" ]; then\n        got=\"$(wc -c < \"$TMP\" 2>/dev/null || echo 0)\"\n        got=\"${got//[[:space:]]/}\"\n        [ -n \"$got\" ] || got=0\n      fi\n      delta=$((got - prev))\n      prev=\"$got\"\n      rate_kbs=$((delta / 3 / 1024))\n      mb=$((got / 1048576))\n      mb_tenths=$(((got % 1048576) * 10 / 1048576))\n      pct=$((18 + got * 58 / 35000000))\n      [ \"$pct\" -lt 18 ] && pct=18\n      [ \"$pct\" -gt 76 ] && pct=76\n      printf 'KHC_PROGRESS=%s 已下载 %s.%s MB（速率 %s KB/s）\\n' \"$pct\" \"$mb\" \"$mb_tenths\" \"$rate_kbs\"\n    done\n  ) &\n  WATCHER_PID=$!\n\n  if command -v curl >/dev/null 2>&1; then\n    MAX_TRIES=2\n    attempt=1\n    dl_ok=0\n    last_rc=1\n    while [ \"$attempt\" -le \"$MAX_TRIES\" ]; do\n      rm -f -- \"$TMP\"\n      : > \"$ERR_FILE\"\n      set +e\n      curl -fsSL \\\n        --connect-timeout 10 \\\n        --max-time \"$DL_MAX\" \\\n        --speed-limit 16384 \\\n        --speed-time 20 \\\n        \"${CURL_PROXY_ARGS[@]}\" \\\n        -o \"$TMP\" \"$DOWNLOAD_URL\" 2>\"$ERR_FILE\"\n      last_rc=$?\n      set -e\n      if [ \"$last_rc\" -eq 0 ] && [ -s \"$TMP\" ]; then\n        dl_ok=1\n        break\n      fi\n      err_tail=\"$(tail -n 5 \"$ERR_FILE\" 2>/dev/null | tr '\\r' ' ' || true)\"\n      echo \"第 ${attempt}/${MAX_TRIES} 次下载失败（curl rc=${last_rc}）：${err_tail:-无详细错误}\" >&2\n      [ \"$last_rc\" -eq 22 ] && break\n      attempt=$((attempt + 1))\n      if [ \"$attempt\" -le \"$MAX_TRIES\" ]; then\n        sleep 2\n      fi\n    done\n    stop_watcher\n    [ \"$dl_ok\" -eq 1 ] || dl_fail \"curl 退出码 ${last_rc}\"\n  elif command -v wget >/dev/null 2>&1; then\n    WGET_ENV=()\n    [ -n \"$HTTP_PROXY_URL\" ] && WGET_ENV=(env \"http_proxy=$HTTP_PROXY_URL\" \"https_proxy=$HTTP_PROXY_URL\")\n    set +e\n    \"${WGET_ENV[@]}\" wget -q --tries=2 --timeout=15 --read-timeout=20 -O \"$TMP\" \"$DOWNLOAD_URL\" 2>\"$ERR_FILE\"\n    last_rc=$?\n    set -e\n    stop_watcher\n    [ \"$last_rc\" -eq 0 ] || dl_fail \"wget 失败（rc=${last_rc}）\"\n  else\n    stop_watcher\n    echo \"需要 curl 或 wget\" >&2\n    exit 1\n  fi\n\n  [ -s \"$TMP\" ] || dl_fail \"下载到的是空文件\"\n  echo \"KHC_PROGRESS=80 解压并安装 sing-box...\"\n  tar -xzf \"$TMP\" -C \"$EXT_DIR\"\n  NEW_BIN=\"$(find \"$EXT_DIR\" -type f -name 'sing-box' | head -n 1 || true)\"\n  if [ -z \"$NEW_BIN\" ] || [ ! -s \"$NEW_BIN\" ]; then\n    echo \"压缩包内未找到 sing-box 可执行文件\" >&2\n    exit 1\n  fi\n  install -m 0755 \"$NEW_BIN\" \"$BIN\"\n  rm -f \"$BIN_DIR\"/sing-box-* 2>/dev/null || true\n  cleanup_dl\n  trap - EXIT\nfi\n\n# ---- 3. UUID 生成与持久化 ----\nif [ -n \"$UUID_PARAM\" ]; then\n  UUID=\"$UUID_PARAM\"\n  printf '%s' \"$UUID\" > \"$UUID_FILE\"\nelif [ -s \"$UUID_FILE\" ]; then\n  UUID=\"$(tr -d '[:space:]' < \"$UUID_FILE\")\"\nelse\n  UUID=\"$(\"$BIN\" generate uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')\"\n  printf '%s' \"$UUID\" > \"$UUID_FILE\"\nfi\nchmod 0600 \"$UUID_FILE\"\n\n# ---- 4. 自签 ECDSA TLS 证书与 SHA256 指纹（用于 TUIC / Hysteria2）----\nSTORED_SNI=\"\"\n[ -f \"$SNI_FILE\" ] && STORED_SNI=\"$(tr -d '[:space:]' < \"$SNI_FILE\")\"\nif [ ! -s \"$KEY_FILE\" ] || [ ! -s \"$CERT_FILE\" ] || [ ! -s \"$SHA_FILE\" ] || [ \"$STORED_SNI\" != \"$SNI\" ]; then\n  openssl ecparam -genkey -name prime256v1 -out \"$KEY_FILE\" >/dev/null 2>&1\n  openssl req -new -x509 -days 36500 -key \"$KEY_FILE\" -out \"$CERT_FILE\" -subj \"/CN=${SNI}\" >/dev/null 2>&1\n  openssl x509 -in \"$CERT_FILE\" -outform DER | sha256sum | awk '{print $1}' > \"$SHA_FILE\"\n  printf '%s' \"$SNI\" > \"$SNI_FILE\"\nfi\nchmod 0600 \"$KEY_FILE\" \"$SHA_FILE\" \"$SNI_FILE\"\nchmod 0644 \"$CERT_FILE\"\nCERT_SHA256=\"$(tr -d '[:space:]' < \"$SHA_FILE\")\"\n\n# ---- 5. 公网 IPv4 / IPv6 探测 ----\necho \"KHC_PROGRESS=85 探测节点网络栈并生成配置...\"\nprobe_ip() {\n  local family=\"$1\"\n  shift\n  local raw=\"\" validated=\"\"\n  for endpoint in \"$@\"; do\n    if command -v curl >/dev/null 2>&1; then\n      raw=\"$(curl \"-fsS${family}\" --connect-timeout 4 --max-time 6 \"$endpoint\" 2>/dev/null | tr -d '[:space:]' || true)\"\n    elif command -v wget >/dev/null 2>&1; then\n      raw=\"$(wget \"-${family}\" -qO- --timeout=6 \"$endpoint\" 2>/dev/null | tr -d '[:space:]' || true)\"\n    fi\n    validated=\"$(python3 - \"$family\" \"$raw\" <<'PY'\nimport ipaddress, sys\nfam, text = sys.argv[1], sys.argv[2]\ntry:\n    addr = ipaddress.ip_address(text)\n    if fam == \"4\" and addr.version == 4:\n        print(str(addr))\n    elif fam == \"6\" and addr.version == 6:\n        print(str(addr))\nexcept ValueError:\n    pass\nPY\n)\"\n    if [ -n \"$validated\" ]; then\n      printf '%s' \"$validated\"\n      return 0\n    fi\n  done\n  return 0\n}\n\nPUB_V4=\"\"\nPUB_V6=\"\"\nif [ -z \"$SERVER_HOST\" ]; then\n  if [ \"$IP_MODE\" = \"ipv4\" ] || [ \"$IP_MODE\" = \"dual\" ]; then\n    PUB_V4=\"$(probe_ip 4 https://api4.ipify.org https://icanhazip.com https://ifconfig.me/ip)\"\n  fi\n  if [ \"$IP_MODE\" = \"ipv6\" ] || [ \"$IP_MODE\" = \"dual\" ]; then\n    PUB_V6=\"$(probe_ip 6 https://api6.ipify.org https://icanhazip.com https://ifconfig.me/ip)\"\n  fi\n  if [ \"$IP_MODE\" = \"ipv4\" ] && [ -z \"$PUB_V4\" ]; then\n    echo \"未探测到公网 IPv4 地址，请检查网络或改选 IPv6 / 填写 server_host\" >&2\n    exit 1\n  fi\n  if [ \"$IP_MODE\" = \"ipv6\" ] && [ -z \"$PUB_V6\" ]; then\n    echo \"未探测到公网 IPv6 地址，请检查网络或改选 IPv4 / 填写 server_host\" >&2\n    exit 1\n  fi\n  if [ \"$IP_MODE\" = \"dual\" ] && [ -z \"$PUB_V4\" ] && [ -z \"$PUB_V6\" ]; then\n    echo \"未能探测到公网 IPv4 或 IPv6 地址，请在高级参数填写 server_host\" >&2\n    exit 1\n  fi\nfi\n\nHAS_V6_STACK=0\n[ -f /proc/net/if_inet6 ] && HAS_V6_STACK=1\nLISTEN_ADDR=\"0.0.0.0\"\n[ \"$HAS_V6_STACK\" -eq 1 ] && LISTEN_ADDR=\"::\"\n\nif [ \"$IP_MODE\" = \"ipv6\" ]; then\n  DOMAIN_STRATEGY=\"prefer_ipv6\"\nelse\n  DOMAIN_STRATEGY=\"prefer_ipv4\"\nfi\n\n# ---- 6. 写入 sing-box 配置并校验 ----\npython3 - \"$CONF_FILE\" \"$LISTEN_ADDR\" \"$ENABLE_TUIC\" \"$TUIC_PORT\" \"$ENABLE_HY2\" \"$HY2_PORT\" \"$UUID\" \"$CERT_FILE\" \"$KEY_FILE\" \"$DOMAIN_STRATEGY\" <<'PY'\nimport json, sys\n\nconf_path, listen_addr, en_tuic, tuic_port, en_hy2, hy2_port, uuid_val, cert_file, key_file, strategy = sys.argv[1:11]\ninbounds = []\ntls_block = {\n    \"enabled\": True,\n    \"alpn\": [\"h3\"],\n    \"certificate_path\": cert_file,\n    \"key_path\": key_file,\n}\nif en_tuic == \"1\":\n    inbounds.append({\n        \"type\": \"tuic\",\n        \"tag\": \"tuic5-in\",\n        \"listen\": listen_addr,\n        \"listen_port\": int(tuic_port),\n        \"users\": [{\"uuid\": uuid_val, \"password\": uuid_val}],\n        \"congestion_control\": \"bbr\",\n        \"tls\": dict(tls_block),\n    })\nif en_hy2 == \"1\":\n    inbounds.append({\n        \"type\": \"hysteria2\",\n        \"tag\": \"hy2-in\",\n        \"listen\": listen_addr,\n        \"listen_port\": int(hy2_port),\n        \"users\": [{\"password\": uuid_val}],\n        \"ignore_client_bandwidth\": False,\n        \"tls\": dict(tls_block),\n    })\n\nconfig = {\n    \"log\": {\"disabled\": False, \"level\": \"info\", \"timestamp\": True},\n    \"dns\": {\"servers\": [{\"type\": \"local\", \"tag\": \"local\"}]},\n    \"inbounds\": inbounds,\n    \"outbounds\": [{\"type\": \"direct\", \"tag\": \"direct\"}],\n    \"route\": {\n        \"default_domain_resolver\": {\"server\": \"local\", \"strategy\": strategy},\n        \"rules\": [{\"action\": \"sniff\"}],\n    },\n}\nwith open(conf_path, \"w\", encoding=\"utf-8\") as fh:\n    json.dump(config, fh, indent=2, ensure_ascii=False)\nPY\nchmod 0600 \"$CONF_FILE\"\n\nif ! \"$BIN\" check -c \"$CONF_FILE\"; then\n  echo \"sing-box 配置校验失败：${CONF_FILE}\" >&2\n  exit 1\nfi\n\n# ---- 7. 写入 systemd user unit 并启动 ----\necho \"KHC_PROGRESS=90 启动 systemd 服务...\"\ncat > \"$UNIT\" <<EOF\n[Unit]\nDescription=sing-box TUIC/Hysteria2 service (${INSTANCE})\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=${BIN} run -c ${CONF_FILE}\nRestart=always\nRestartSec=3\nLimitNOFILE=1048576\n\n[Install]\nWantedBy=default.target\nEOF\nchmod 0600 \"$UNIT\"\n\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\nsystemctl --user daemon-reload\nsystemctl --user enable \"$UNIT_NAME\"\nsystemctl --user restart \"$UNIT_NAME\"\n\necho \"KHC_PROGRESS=95 确认服务运行中...\"\nUNIT_ACTIVE=0\nfor _ in $(seq 1 15); do\n  if systemctl --user is-active --quiet \"$UNIT_NAME\"; then\n    UNIT_ACTIVE=1\n    break\n  fi\n  sleep 1\ndone\nif [ \"$UNIT_ACTIVE\" -ne 1 ]; then\n  echo \"sing-box 服务未能进入 active 状态，最近日志：\" >&2\n  journalctl --user -u \"$UNIT_NAME\" -n 20 --no-pager >&2 || true\n  exit 1\nfi\n\n# ---- 8. 生成并保存订阅链接，输出 KHC_RESULT ----\nCORE_VER=\"$(\"$BIN\" version 2>/dev/null | awk '/sing-box version/{print $3; exit}' || true)\"\n[ -n \"$CORE_VER\" ] || CORE_VER=\"unknown\"\nHOST_LABEL=\"${NODE_TAG:-$(hostname -s 2>/dev/null || hostname)}\"\n\npython3 - \"$LINKS_FILE\" \"$ENABLE_TUIC\" \"$TUIC_PORT\" \"$ENABLE_HY2\" \"$HY2_PORT\" \"$UUID\" \"$SNI\" \"$CERT_SHA256\" \"$IP_MODE\" \"$SERVER_HOST\" \"$PUB_V4\" \"$PUB_V6\" \"$HOST_LABEL\" \"$CORE_VER\" <<'PY'\nimport ipaddress, json, os, sys, urllib.parse\n\n(\n    links_file,\n    en_tuic,\n    tuic_port,\n    en_hy2,\n    hy2_port,\n    uuid_val,\n    sni,\n    sha256_hex,\n    ip_mode,\n    server_host,\n    pub_v4,\n    pub_v6,\n    host_label,\n    core_ver,\n) = sys.argv[1:15]\n\nhosts = []\nif server_host:\n    try:\n        addr = ipaddress.ip_address(server_host)\n        fmt_host = f\"[{addr}]\" if addr.version == 6 else str(addr)\n    except ValueError:\n        fmt_host = server_host\n    hosts.append((\"\", fmt_host))\nelse:\n    if pub_v4:\n        hosts.append((\"IPv4\" if pub_v6 else \"\", pub_v4))\n    if pub_v6:\n        hosts.append((\"IPv6\" if pub_v4 else \"\", f\"[{pub_v6}]\"))\n\ncards = []\nall_links = []\nprotos = []\nudp_ports = []\n\nif en_hy2 == \"1\":\n    protos.append(\"hysteria2\")\n    udp_ports.append(f\"{hy2_port}/udp (Hysteria2)\")\n    for stack_label, host_addr in hosts:\n        suffix = f\"-{stack_label.lower()}\" if stack_label else \"\"\n        tag = urllib.parse.quote(f\"{host_label}-hy2{suffix}\", safe=\"-_.\")\n        uri = (\n            f\"hysteria2://{uuid_val}@{host_addr}:{hy2_port}\"\n            f\"?security=tls&alpn=h3&insecure=1&allowInsecure=1&sni={sni}&pinSHA256={sha256_hex}#{tag}\"\n        )\n        all_links.append(uri)\n        title = f\"Hysteria2 订阅链接（{stack_label}）\" if stack_label else \"Hysteria2 订阅链接\"\n        cards.append({\"title\": title, \"value\": uri, \"kind\": \"secret\", \"copy\": True})\n\nif en_tuic == \"1\":\n    protos.append(\"tuic\")\n    udp_ports.append(f\"{tuic_port}/udp (TUIC v5)\")\n    for stack_label, host_addr in hosts:\n        suffix = f\"-{stack_label.lower()}\" if stack_label else \"\"\n        tag = urllib.parse.quote(f\"{host_label}-tuic5{suffix}\", safe=\"-_.\")\n        uri = (\n            f\"tuic://{uuid_val}:{uuid_val}@{host_addr}:{tuic_port}\"\n            f\"?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={sni}\"\n            f\"&insecure=1&allowInsecure=1&allow_insecure=1#{tag}\"\n        )\n        all_links.append(uri)\n        title = f\"TUIC v5 订阅链接（{stack_label}）\" if stack_label else \"TUIC v5 订阅链接\"\n        cards.append({\"title\": title, \"value\": uri, \"kind\": \"secret\", \"copy\": True})\n\nwith open(links_file, \"w\", encoding=\"utf-8\") as fh:\n    fh.write(\"\\n\".join(all_links) + \"\\n\")\nos.chmod(links_file, 0o600)\n\ncards.append({\"title\": \"UUID / 密码\", \"value\": uuid_val, \"kind\": \"secret\", \"copy\": True})\ncards.append({\"title\": \"需放行的 UDP 端口\", \"value\": \"、\".join(udp_ports), \"kind\": \"text\", \"copy\": True})\ncards.append({\"title\": \"sing-box 版本\", \"value\": core_ver, \"kind\": \"text\", \"copy\": False})\n\nfacts = {\n    \"protocols\": \", \".join(protos),\n    \"ipMode\": ip_mode,\n    \"sni\": sni,\n    \"coreVersion\": core_ver,\n}\nprint(\"KHC_RESULT=\" + json.dumps({\"cards\": cards, \"facts\": facts}, ensure_ascii=False))\nPY\n",
+      "uninstall": "#!/usr/bin/env bash\n# sing-box 卸载：停服务并删除 unit、二进制、配置与证书/UUID/订阅记录及 KHC_APP_HOME 残留。\n# 幂等：未安装也能执行；清完逐项复查，仍有残留则在 KHC_RESULT 点名并 exit 1。\nset -euo pipefail\n\nAPP_HOME=\"${KHC_APP_HOME:?缺少 KHC_APP_HOME}\"\nINSTANCE=\"${KHC_INSTANCE:-default}\"\nUNIT_NAME=\"khc-sing-box-${INSTANCE}.service\"\n\nUSER_HOME=\"$(getent passwd \"$(id -un)\" | cut -d: -f6)\"\n[ -n \"$USER_HOME\" ] && [ -d \"$USER_HOME\" ] || USER_HOME=\"$APP_HOME\"\nBIN_DIR=\"$USER_HOME/bin\"\nCONF_ROOT=\"$USER_HOME/.config\"\nCONF_DIR=\"$CONF_ROOT/khc-sing-box-${INSTANCE}\"\nUNIT_DIR=\"$CONF_ROOT/systemd/user\"\n\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\"\n\n# ---- 1. 停服务 ----\nsystemctl --user disable --now \"$UNIT_NAME\" >/dev/null 2>&1 || true\nsystemctl --user reset-failed \"$UNIT_NAME\" >/dev/null 2>&1 || true\n\n# ---- 2. 删除 unit 与二进制 ----\nrm -f \"$UNIT_DIR/$UNIT_NAME\"\nrm -f \"$UNIT_DIR/default.target.wants/$UNIT_NAME\"\nrm -f \"$BIN_DIR/sing-box\" \"$BIN_DIR\"/sing-box-* 2>/dev/null || true\nsystemctl --user daemon-reload >/dev/null 2>&1 || true\n\n# ---- 3. 删除配置、证书、UUID 与订阅文件 ----\nrm -rf \"$CONF_DIR\"\nif [ -n \"$APP_HOME\" ] && [ -d \"$APP_HOME\" ]; then\n  rm -rf \"${APP_HOME:?}\"/.[!.]* \"${APP_HOME:?}\"/* 2>/dev/null || true\nfi\n\n# ---- 4. 复查无残留 ----\nLEFTOVERS=()\nfor path in \\\n  \"$BIN_DIR/sing-box\" \\\n  \"$UNIT_DIR/$UNIT_NAME\" \\\n  \"$UNIT_DIR/default.target.wants/$UNIT_NAME\" \\\n  \"$CONF_DIR\"; do\n  if [ -e \"$path\" ] || [ -L \"$path\" ]; then\n    LEFTOVERS+=(\"$path\")\n  fi\ndone\nwhile IFS= read -r leftover; do\n  [ -n \"$leftover\" ] && LEFTOVERS+=(\"$leftover\")\ndone < <(find \"$BIN_DIR\" -maxdepth 1 -name 'sing-box-*' 2>/dev/null || true)\n\npython3 - \"$INSTANCE\" \"${LEFTOVERS[*]:-}\" <<'PY'\nimport json, sys\n\ninstance, raw = sys.argv[1], sys.argv[2]\nleftovers = [item for item in raw.split() if item]\ncards = [{\"title\": \"sing-box\", \"value\": \"已卸载（unit / 二进制 / 配置 / 证书已清理）\", \"copy\": False}]\naccess = []\nif leftovers:\n    cards.append({\"title\": \"残留\", \"value\": f\"{len(leftovers)} 项\", \"copy\": False})\n    access.append({\n        \"label\": \"清理未完成\",\n        \"value\": \"、\".join(leftovers),\n        \"kind\": \"text\",\n        \"copy\": True,\n    })\nprint(\"KHC_RESULT=\" + json.dumps(\n    {\"access\": access, \"cards\": cards, \"warnings\": leftovers, \"instance\": instance},\n    ensure_ascii=False,\n))\nPY\n\nif [ ${#LEFTOVERS[@]} -gt 0 ]; then\n  echo \"卸载后有残留：${LEFTOVERS[*]}\" >&2\n  exit 1\nfi\n"
+    },
+    "sha256": {
+      "install": "b4b8702f951674cd75245a58dac41143427c560e9ba03a90a3c8fb461833bf20",
+      "uninstall": "b796655976ebebe4146c3051cef4d2b452602584245a9a844bf33d58b7153188"
+    },
+    "writes": [
+      "~/.local/share/khc-apps/sing-box"
+    ],
+    "units": [
+      {
+        "name": "khc-sing-box-{{instance}}.service",
+        "scope": "user"
+      }
+    ],
+    "health": {
+      "type": "unit",
+      "graceSec": 30,
+      "intervalSec": 2
+    },
+    "sources": [
+      {
+        "host": "github.com",
+        "purpose": "SagerNet/sing-box 官方发布包",
+        "pinned": false
+      },
+      {
+        "host": "release-assets.githubusercontent.com",
+        "purpose": "GitHub Release 产物下载重定向",
+        "pinned": false
+      }
+    ]
+  }
+}
