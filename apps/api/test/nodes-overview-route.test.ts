@@ -240,7 +240,7 @@ describe('GET /api/v1/nodes/:id/overview', () => {
       state: unknown;
       overview: { forwards: { total: number } };
     };
-    expect(b401.reachable).toBe(true);
+    expect(b401.reachable).toBe(false);
     expect(b401.error).toContain('Agent 鉴权失败');
     expect(b401.state).toBeNull();
     expect(b401.overview.forwards.total).toBe(1);

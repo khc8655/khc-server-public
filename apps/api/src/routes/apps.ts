@@ -390,6 +390,9 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
     const target = await deps.apps.getRevision(node.id, app, targetRev);
     if (!target) throw notFound('目标版本不存在');
 
+    assertSecureChannelForSecrets(c.env, node, target.config);
+    const resolvedConfig = (await resolveSecretRefs(deps, target.config)) as Record<string, unknown>;
+
     const next = await deps.apps.put(node.id, app, {
       config: target.config,
       schemaVersion: current?.schemaVersion ?? 1,
@@ -397,32 +400,35 @@ export function appRoutes(deps: AppDeps): Hono<AppBindings> {
       actor: c.get('user').name,
     });
 
-    assertSecureChannelForSecrets(c.env, node, next.config);
     const token = await nodeToken(c.env, node);
     const idempotencyKey = newIdempotencyKey();
+    const payload = {
+      config: resolvedConfig,
+      expectRev: next.rev,
+      ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
+      params: {},
+      idempotencyKey,
+    };
     let response;
     try {
-      response = await deps.agent.call(
-        node,
-        token,
-        'POST',
-        `/apps/${encodeURIComponent(app)}/apply`,
-        {
-          config: (await resolveSecretRefs(deps, next.config)) as Record<string, unknown>,
-          expectRev: next.rev,
-          ...(node.revEpoch ? { epoch: node.revEpoch } : {}),
-          params: {},
-          idempotencyKey,
-        },
-        { timeoutMs: SYNC_TIMEOUT_MS, idempotencyKey },
-      );
+      response = await callWithSyncPoll(deps, node, token, app, 'apply', payload, idempotencyKey);
     } catch (error) {
+      await recordApplyFailure(deps, node.id, app, {
+        code: error instanceof AppError ? error.code : 'hub_unreachable',
+        message: unreachableMessage(error).slice(0, 500),
+        at: nowSec(),
+      });
+      if (error instanceof AppError) throw error;
       throw new HubUnreachableError(unreachableMessage(error), {});
     }
-    if (response.status >= 400) throwAgentError(response.status, response.body);
+    if (response.status >= 400) {
+      await recordApplyFailure(deps, node.id, app, extractAgentError(response.body));
+      throwAgentError(response.status, response.body);
+    }
 
     const envelope = agentEnvelopeSchema.parse(response.body);
-    const appliedRev = envelope.ok ? (envelope.appliedRev ?? next.rev) : null;
+    const appliedRev =
+      response.status !== 202 && envelope.ok ? (envelope.appliedRev ?? next.rev) : null;
     if (appliedRev !== null) {
       await deps.apps.setAppliedRev(node.id, app, appliedRev);
       await deps.audit.log({

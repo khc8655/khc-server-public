@@ -81,16 +81,34 @@ function decodeChunkedBytes(input: Uint8Array): Uint8Array {
   const chunks: Uint8Array[] = [];
   const ascii = new TextDecoder();
   let index = 0;
+  let seenTerminator = false;
   while (index < input.length) {
     const lineEnd = findCrlf(input, index);
-    if (lineEnd < 0) break;
-    const size = Number.parseInt(ascii.decode(input.slice(index, lineEnd)).trim(), 16);
-    if (!Number.isFinite(size)) break;
+    if (lineEnd < 0) throw new Error('TCP 分块响应被截断（缺少分块长度行）');
+    const sizeRaw = ascii.decode(input.slice(index, lineEnd)).split(';', 1)[0]?.trim() ?? '';
+    if (!/^[0-9a-fA-F]+$/.test(sizeRaw)) {
+      throw new Error(`TCP 分块响应格式错误（非法长度 ${sizeRaw}）`);
+    }
+    const size = Number.parseInt(sizeRaw, 16);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`TCP 分块响应长度溢出（${sizeRaw}）`);
+    }
     index = lineEnd + 2;
-    if (size === 0) break;
-    if (index + size > input.length) break;
+    if (size === 0) {
+      seenTerminator = true;
+      break;
+    }
+    if (index + size + 2 > input.length) {
+      throw new Error('TCP 分块响应被截断（分块数据不完整）');
+    }
+    if (input[index + size] !== 13 || input[index + size + 1] !== 10) {
+      throw new Error('TCP 分块响应格式错误（分块结尾缺少 CRLF）');
+    }
     chunks.push(input.slice(index, index + size));
     index += size + 2;
+  }
+  if (!seenTerminator) {
+    throw new Error('TCP 分块响应被截断（缺少终止分块）');
   }
   return concatBytes(chunks);
 }
@@ -115,9 +133,16 @@ export function parseHttpResponseBytes(raw: Uint8Array): Response {
   let body: Uint8Array = rawBody;
   if ((headers['transfer-encoding'] ?? '').toLowerCase().includes('chunked')) {
     body = decodeChunkedBytes(rawBody);
-  } else if (headers['content-length']) {
-    const length = Number.parseInt(headers['content-length'], 10);
-    if (Number.isFinite(length)) body = rawBody.slice(0, length);
+  } else if (headers['content-length'] !== undefined) {
+    const rawLength = headers['content-length'].trim();
+    if (!/^\d+$/.test(rawLength)) {
+      throw new Error(`TCP 响应 Content-Length 非法: ${rawLength}`);
+    }
+    const length = Number.parseInt(rawLength, 10);
+    if (!Number.isSafeInteger(length) || rawBody.length < length) {
+      throw new Error(`TCP 响应被截断（期望 ${length} 字节，实际 ${rawBody.length} 字节）`);
+    }
+    body = rawBody.slice(0, length);
   }
 
   const contentType = headers['content-type'] ?? 'application/json';

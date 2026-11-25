@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import grp
 import hashlib
+import json
 import os
 import pwd
 import tempfile
@@ -431,6 +432,43 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(ManifestError) as caught:
             read_manifest_access(ctx, manifest_id="missing-app")
         self.assertEqual(caught.exception.code, "not_installed")
+
+    def test_khc_result_stripped_from_logs_and_failure_details(self):
+        secret = "gen-live-key-987654"
+        cards_json = json.dumps(
+            {
+                "cards": [
+                    {"title": "Web 管理页", "value": f"https://app.example.com/?k={secret}", "kind": "url"},
+                    {"title": "Web 登录 Key", "value": secret, "kind": "secret"},
+                ]
+            }
+        )
+        runner = RecordingRunner(stdout=f"启动服务\nKHC_RESULT={cards_json}\n")
+        self.install(runner)
+        ctx = self.ctx(runner)
+
+        joined_logs = "\n".join(self.logs)
+        self.assertIn("启动服务", joined_logs)
+        self.assertNotIn(secret, joined_logs)
+        self.assertNotIn("KHC_RESULT=", joined_logs)
+        access = read_manifest_access(ctx, manifest_id="test-app")
+        self.assertEqual(access["cards"][1]["value"], secret)
+
+        self.logs.clear()
+        fail_secret = "gen-fail-key-654321"
+        fail_runner = RecordingRunner(
+            rc=1,
+            stdout=f'fatal error line\nKHC_RESULT={{"cards":[{{"value":"{fail_secret}"}}]}}\n',
+            stderr=f'KHC_RESULT={{"secret":"{fail_secret}"}}\nstderr detail\n',
+        )
+        with self.assertRaises(ManifestError) as caught:
+            self.install(fail_runner)
+        self.assertIn("fatal error line", caught.exception.details["stdout"])
+        self.assertIn("stderr detail", caught.exception.details["stderr"])
+        self.assertNotIn(fail_secret, caught.exception.details["stdout"])
+        self.assertNotIn(fail_secret, caught.exception.details["stderr"])
+        self.assertNotIn("KHC_RESULT=", caught.exception.details["stdout"])
+        self.assertNotIn("KHC_RESULT=", "\n".join(self.logs))
 
 
 if __name__ == "__main__":

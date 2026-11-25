@@ -424,16 +424,19 @@ describe('nodes CRUD（v3）', () => {
     expect(body.error).toContain('Hub 不可达');
   });
 
-  it('F-M1：GET /state Agent 401/403 报鉴权类错误，不再误报"格式不合法"', async () => {
+  it('F-M1 / R4：GET /state Agent 401/403/426 标记 reachable=false 并报鉴权/版本错误，不再误报在线', async () => {
     const ctx = makeTestContext();
     const cookie = await loginAsAdmin(ctx);
     const { id } = await createNode(ctx, cookie);
-    for (const status of [401, 403] as const) {
+    for (const status of [401, 403, 426] as const) {
       ctx.agent.handler = async () => ({
         status,
         body: {
           ok: false,
-          error: { code: 'unauthorized', message: 'nonce already used' },
+          error: {
+            code: status === 426 ? 'upgrade_required' : 'unauthorized',
+            message: status === 426 ? 'agent protocol too old' : 'nonce already used',
+          },
         },
       });
 
@@ -444,14 +447,19 @@ describe('nodes CRUD（v3）', () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { reachable: boolean; state: unknown; error: string };
-      expect(body.reachable).toBe(true);
+      expect(body.reachable).toBe(false);
       expect(body.state).toBeNull();
-      expect(body.error).toContain('Agent 鉴权失败');
-      expect(body.error).toContain(`HTTP ${status}`);
-      expect(body.error).toContain('nonce already used'); // 附带 Agent 的错误信息
+      if (status === 426) {
+        expect(body.error).toContain('版本协商失败');
+        expect(body.error).toContain('agent protocol too old');
+      } else {
+        expect(body.error).toContain('Agent 鉴权失败');
+        expect(body.error).toContain(`HTTP ${status}`);
+        expect(body.error).toContain('nonce already used'); // 附带 Agent 的错误信息
+      }
       expect(body.error).not.toContain('格式不合法');
     }
-    // 鉴权失败不算成功快照：不更新可达租约
+    // 鉴权/版本拒绝不算成功快照：不更新可达租约
     const stored = await ctx.nodes.get(id);
     expect(stored?.lastSeenAt).toBeFalsy();
   });

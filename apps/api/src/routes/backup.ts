@@ -140,19 +140,30 @@ export function backupRoutes(deps: AppDeps): Hono<AppBindings> {
       throw badRequest(`备份应用数超过上限 ${MAX_APPS}`);
     }
     const seen = new Set<string>();
-    const imported: Array<{ app: string; rev: number; schemaVersion: number }> = [];
     for (const item of body.apps) {
       if (seen.has(item.app)) throw badRequest(`备份中应用重复：${item.app}`);
       seen.add(item.app);
       if (!APP_RE.test(item.app)) throw badRequest(`应用名非法：${item.app}`);
+    }
+
+    const prepared: Array<{ app: string; schemaVersion: number; merged: Record<string, unknown> }> =
+      [];
+    for (const item of body.apps) {
       const existing = await deps.apps.get(node.id, item.app);
       const safeConfig = stripSecrets(item.config) as Record<string, unknown>;
       const merged = restoreSecrets(existing?.config, safeConfig) as Record<string, unknown>;
+      prepared.push({ app: item.app, schemaVersion: item.schemaVersion, merged });
+    }
+
+    const note = `import ${new Date(body.exportedAt * 1000).toISOString()}`;
+    const actor = c.get('user').name;
+    const imported: Array<{ app: string; rev: number; schemaVersion: number }> = [];
+    for (const item of prepared) {
       const record = await deps.apps.put(node.id, item.app, {
-        config: merged,
+        config: item.merged,
         schemaVersion: item.schemaVersion,
-        note: `import ${new Date(body.exportedAt * 1000).toISOString()}`,
-        actor: c.get('user').name,
+        note,
+        actor,
       });
       imported.push({ app: record.app, rev: record.rev, schemaVersion: record.schemaVersion });
     }

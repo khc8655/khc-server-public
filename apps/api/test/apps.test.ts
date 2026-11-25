@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { HttpAgentClient } from '../src/lib/node-client';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
@@ -374,5 +374,154 @@ describe('apps: 真实 AgentClient 集成（B-6 / T4.15）', () => {
     expect(applyCall?.headers['idempotency-key']).toBeTruthy();
     expect((JSON.parse(applyCall?.body ?? '{}') as { expectRev: number }).expectRev).toBe(1);
     expect((await ctx.apps.get(id, 'node-exporter'))?.appliedRev).toBe(1);
+  });
+});
+
+async function driveUntilSettled(request: Promise<Response> | Response): Promise<Response> {
+  let settled: Response | undefined;
+  const guarded = Promise.resolve(request).then((res) => {
+    settled = res;
+    return res;
+  });
+  const start = Date.now();
+  const STEPS = 120;
+  for (let i = 0; i < STEPS && !settled; i += 1) {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.setSystemTime(start + (i + 1) * 1_000);
+  }
+  if (!settled) throw new Error('请求未在假时钟窗口内收敛');
+  return guarded;
+}
+
+describe('apps: rollback 终态轮询与前置校验（R1）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('rollback 遇到 202 会用同一 idempotencyKey 轮询至 200 后才写 appliedRev', async () => {
+    vi.useFakeTimers();
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const { id } = await createNode(ctx, cookie);
+
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter`,
+      { method: 'PUT', headers, body: JSON.stringify({ config: { port: 9100 } }) },
+      ctx.env,
+    );
+    ctx.agent.handler = async () => ({ status: 200, body: { ok: true, appliedRev: 1 } });
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter/apply`,
+      { method: 'POST', headers, body: '{}' },
+      ctx.env,
+    );
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter`,
+      { method: 'PUT', headers, body: JSON.stringify({ config: { port: 9200 } }) },
+      ctx.env,
+    );
+
+    let pollCount = 0;
+    const keys: Array<string | undefined> = [];
+    ctx.agent.handler = async (_method, path, body) => {
+      if (!path.endsWith('/apply')) return { status: 200, body: { ok: true } };
+      pollCount += 1;
+      keys.push((body as { idempotencyKey?: string })?.idempotencyKey);
+      if (pollCount === 1) {
+        return { status: 202, body: { ok: false, inProgress: true } };
+      }
+      return { status: 200, body: { ok: true, appliedRev: 3 } };
+    };
+
+    const req = ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter/rollback/1`,
+      { method: 'POST', headers, body: '{}' },
+      ctx.env,
+    );
+    const res = await driveUntilSettled(req);
+    expect(res.status).toBe(200);
+    expect(pollCount).toBe(2);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    const body = (await res.json()) as { appliedRev: number | null };
+    expect(body.appliedRev).toBe(3);
+    expect((await ctx.apps.get(id, 'node-exporter'))?.appliedRev).toBe(3);
+  });
+
+  it('rollback 持续返回 202 超时后返回 502，绝不推进 appliedRev 并记录失败摘要', async () => {
+    vi.useFakeTimers();
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const { id } = await createNode(ctx, cookie);
+
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter`,
+      { method: 'PUT', headers, body: JSON.stringify({ config: { port: 9100 } }) },
+      ctx.env,
+    );
+    ctx.agent.handler = async () => ({ status: 200, body: { ok: true, appliedRev: 1 } });
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter/apply`,
+      { method: 'POST', headers, body: '{}' },
+      ctx.env,
+    );
+    await ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter`,
+      { method: 'PUT', headers, body: JSON.stringify({ config: { port: 9200 } }) },
+      ctx.env,
+    );
+
+    ctx.agent.handler = async () => ({ status: 202, body: { ok: false, inProgress: true } });
+
+    const req = ctx.app.request(
+      `/api/v1/nodes/${id}/apps/node-exporter/rollback/1`,
+      { method: 'POST', headers, body: '{}' },
+      ctx.env,
+    );
+    const res = await driveUntilSettled(req);
+    expect(res.status).toBe(502);
+    const stored = await ctx.apps.get(id, 'node-exporter');
+    expect(stored?.rev).toBe(3);
+    expect(stored?.appliedRev).toBe(1);
+    expect(stored?.lastApplyError?.code).toBe('hub_unreachable');
+  });
+
+  it('rollback 目标版本含 $cert 且通道为明文 http 时前置拒绝，不产生孤立修订', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const nodeRes = await ctx.app.request(
+      '/api/v1/nodes',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name: 'plain-node', endpoint: 'http://203.0.113.10:8880' }),
+      },
+      ctx.env,
+    );
+    const { node } = (await nodeRes.json()) as { node: { id: string } };
+    await ctx.app.request(
+      `/api/v1/nodes/${node.id}/apps/caddy-site`,
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ config: { sites: [{ tls: { cert: { $cert: 'c1' } } }] } }),
+      },
+      ctx.env,
+    );
+
+    ctx.env.ENVIRONMENT = 'production';
+    const before = ctx.agent.requests.length;
+    const res = await ctx.app.request(
+      `/api/v1/nodes/${node.id}/apps/caddy-site/rollback/1`,
+      { method: 'POST', headers, body: '{}' },
+      ctx.env,
+    );
+    expect(res.status).toBe(400);
+    expect(ctx.agent.requests.length).toBe(before);
+    expect((await ctx.apps.get(node.id, 'caddy-site'))?.rev).toBe(1);
   });
 });

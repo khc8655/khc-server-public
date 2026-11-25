@@ -18,7 +18,8 @@ const SNAPSHOT_TIMEOUT_MS = 8_000;
 const DEDUPE_MS = 2_000;
 
 interface DedupeEntry {
-  at: number;
+  startedAt: number;
+  settledAt: number | null;
   promise: Promise<NodeSnapshotResponse>;
 }
 
@@ -35,21 +36,26 @@ export function snapshotRoutes(deps: AppDeps): Hono<AppBindings> {
     const force = forceQuery === '1' || forceQuery === 'true';
 
     const now = Date.now();
-    // 过期的去重条目顺手清理（Map 大小受节点数约束，不会无限增长）。
+    // 仅清理已完成且过期的去重条目，在途慢请求期间持续复用（Map 大小受节点数约束）。
     for (const [id, entry] of inflight) {
-      if (now - entry.at > DEDUPE_MS * 5) inflight.delete(id);
+      if (entry.settledAt !== null && now - entry.settledAt > DEDUPE_MS * 5) {
+        inflight.delete(id);
+      }
     }
     if (!force) {
       const existing = inflight.get(node.id);
-      if (existing && now - existing.at < DEDUPE_MS) {
+      if (existing && (existing.settledAt === null || now - existing.settledAt < DEDUPE_MS)) {
         const result = await existing.promise;
         return c.json({ ...result, cached: true });
       }
     }
 
     const entry: DedupeEntry = {
-      at: now,
-      promise: callSnapshot(deps, node, token, force),
+      startedAt: now,
+      settledAt: null,
+      promise: callSnapshot(deps, node, token, force).finally(() => {
+        entry.settledAt = Date.now();
+      }),
     };
     inflight.set(node.id, entry);
     const result = await entry.promise;
