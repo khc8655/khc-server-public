@@ -18,6 +18,12 @@ import { TOTP_PENDING_KEY, TOTP_SECRET_KEY, bumpSessionEpoch } from '../lib/sess
 
 const APP_SECRET_KEY_RE = /^app\.[a-z][a-z0-9-]{0,47}\.[a-z][a-z0-9_]{0,31}$/;
 
+function assertWritableSettingKey(key: string): void {
+  if (key.startsWith('auth.')) {
+    throw new AppError(403, 'forbidden_setting_key', '认证内部设置仅允许通过专用认证接口修改');
+  }
+}
+
 async function readSecret(settings: SettingsRepo, key: string): Promise<string | null> {
   const value = await settings.getValue(key);
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -35,6 +41,7 @@ export function settingsRoutes(deps: AppDeps): Hono<AppBindings> {
 
   router.put('/settings/:key', async (c) => {
     const key = parseParams(c.req.param('key'), settingKeySchema);
+    assertWritableSettingKey(key);
     const body = await parseJsonBody(c, putSettingRequestSchema);
     if (key.startsWith('app.')) {
       if (!APP_SECRET_KEY_RE.test(key)) {
@@ -58,6 +65,7 @@ export function settingsRoutes(deps: AppDeps): Hono<AppBindings> {
 
   router.delete('/settings/:key', async (c) => {
     const key = parseParams(c.req.param('key'), settingKeySchema);
+    assertWritableSettingKey(key);
     const removed = await deps.settings.remove(key);
     if (!removed) throw notFound('设置不存在');
     await deps.audit.log({ actor: c.get('user').name, action: 'setting.delete', detail: { key } });

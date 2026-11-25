@@ -17,8 +17,8 @@ export const SNAPSHOT_POLL_MS = 10_000;
 export const SNAPSHOT_MAX_POLLS = 60;
 export const SNAPSHOT_MAX_SESSION_MS = 10 * 60 * 1000;
 export const SNAPSHOT_RING_SIZE = 120;
-/** 单次请求硬超时：网络中断时不让 fetch 悬挂阻塞后续 10s 轮询。 */
-export const SNAPSHOT_TIMEOUT_MS = 8_000;
+/** 单次请求硬超时：留出 2s 外层转发余量（Worker 内层 /snapshot 预算为 8s）。 */
+export const SNAPSHOT_TIMEOUT_MS = 10_000;
 
 export type SnapshotMode = 'forward' | 'none';
 export type SnapshotStatus = 'disabled' | 'live' | 'stopped' | 'fallback';

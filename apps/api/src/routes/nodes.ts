@@ -273,6 +273,8 @@ async function fetchNodeState(
       const agentMessage = (
         response.body as { error?: { message?: string } } | null
       )?.error?.message;
+      const authOrVersionBlocked =
+        response.status === 401 || response.status === 403 || response.status === 426;
       const error =
         response.status === 401 || response.status === 403
           ? `Agent 鉴权失败（HTTP ${response.status}${agentMessage ? `：${agentMessage}` : ''}）——请核对节点 token 与面板记录是否一致，稍后重试`
@@ -280,7 +282,7 @@ async function fetchNodeState(
             ? `Agent 拒绝服务：版本协商失败${agentMessage ? `（${agentMessage}）` : ''}`
             : `Agent /state 返回格式不合法（HTTP ${response.status}）`;
       return {
-        reachable: true,
+        reachable: !authOrVersionBlocked,
         route: response.route,
         via: response.via,
         state: null,

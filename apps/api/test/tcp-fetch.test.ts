@@ -96,4 +96,16 @@ describe('tcp-fetch: 原始 HTTP 解析', () => {
   it('非法响应抛错', () => {
     expect(() => parseHttpResponse('not http')).toThrow();
   });
+
+  it('P4：Content-Length 或 chunked 截断时明确抛错，不再静默截断', () => {
+    expect(() =>
+      parseHttpResponse('HTTP/1.1 200 OK\r\ncontent-length: 20\r\n\r\n{"ok":true}'),
+    ).toThrow(/截断/);
+    expect(() =>
+      parseHttpResponse('HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n6\r\n{"ok":\r\n'),
+    ).toThrow(/截断/);
+    expect(() =>
+      parseHttpResponse('HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n8\r\n{"ok"'),
+    ).toThrow(/截断/);
+  });
 });

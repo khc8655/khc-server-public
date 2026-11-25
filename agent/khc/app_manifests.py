@@ -1075,6 +1075,14 @@ def _parse_result(stdout: str, result_file: str, ctx: Ctx) -> dict[str, Any]:
     return {}
 
 
+def _strip_result_lines(text: str) -> str:
+    """剥离 KHC_RESULT= 结构化结果行，避免脚本现场生成的密钥泄漏到普通日志与错误摘要。"""
+
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith(RESULT_PREFIX)
+    )
+
+
 def _validate_manifest_ids(manifest_id: Any, instance: Optional[str]) -> tuple[str, str]:
     if not isinstance(manifest_id, str) or not INSTANCE_RE.fullmatch(manifest_id):
         raise ManifestError("manifestId 非法")
@@ -1688,7 +1696,10 @@ def run_manifest(
         return _redact(text, secrets)
 
     def handle_script_line(line: str) -> None:
-        match = PROGRESS_RE.match(line.strip())
+        stripped = line.strip()
+        if stripped.startswith(RESULT_PREFIX):
+            return
+        match = PROGRESS_RE.match(stripped)
         if match:
             pct = max(1, min(99, int(match.group(1))))
             ctx.set_progress(pct)
@@ -1716,8 +1727,8 @@ def run_manifest(
             on_line=handle_script_line,
         )
     raw_stdout = proc.stdout or ""
-    stdout = _redact(raw_stdout, secrets)
-    stderr = _redact(proc.stderr or "", secrets)
+    stdout = _redact(_strip_result_lines(raw_stdout), secrets)
+    stderr = _redact(_strip_result_lines(proc.stderr or ""), secrets)
     if proc.rc != 0:
         raise ManifestError(
             f"脚本执行失败（rc={proc.rc}）",

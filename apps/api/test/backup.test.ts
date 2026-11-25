@@ -311,4 +311,60 @@ describe('C4 备份/恢复（export/import）', () => {
       expect(res.status).toBe(400);
     }
   });
+
+  it('R2：前置校验失败或应用重复时不发生部分写入（已有 rev 与配置零变更）', async () => {
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+    const { id: nodeId } = await createNode(ctx, cookie);
+
+    await ctx.app.request(
+      `/api/v1/nodes/${nodeId}/apps/caddy-site`,
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          config: { sites: [{ domain: 'keep.example.com' }] },
+          schemaVersion: 1,
+        }),
+      },
+      ctx.env,
+    );
+
+    const base = {
+      format: 'khc-backup/v1',
+      version: 1,
+      exportedAt: 1,
+      node: {
+        id: nodeId,
+        name: '原子校验节点',
+        endpoint: 'https://hub.example.com:8443',
+        tunnelEndpoint: null,
+        liveEndpoint: null,
+        preferredRoute: 'direct',
+      },
+    };
+
+    for (const apps of [
+      [
+        { app: 'caddy-site', schemaVersion: 1, config: { sites: [{ domain: 'changed-1.example.com' }] } },
+        { app: 'caddy-site', schemaVersion: 1, config: { sites: [] } },
+      ],
+      [
+        { app: 'caddy-site', schemaVersion: 1, config: { sites: [{ domain: 'changed-2.example.com' }] } },
+        { app: 'Invalid App!', schemaVersion: 1, config: {} },
+      ],
+    ]) {
+      const res = await ctx.app.request(
+        `/api/v1/nodes/${nodeId}/import`,
+        { method: 'POST', headers, body: JSON.stringify({ ...base, apps }) },
+        ctx.env,
+      );
+      expect(res.status).toBe(400);
+    }
+
+    const stored = await ctx.apps.get(nodeId, 'caddy-site');
+    expect(stored?.rev).toBe(1);
+    expect(stored?.config).toEqual({ sites: [{ domain: 'keep.example.com' }] });
+  });
 });

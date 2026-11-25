@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { D1CertificateRepo } from '../src/db/d1/certs';
 import { D1SettingsRepo } from '../src/db/d1/settings';
+import { resetRateLimitForTests } from '../src/lib/rate-limit';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
 
 const CERT_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
@@ -432,5 +433,36 @@ describe('D1 list() 查询不拉取加密大字段', () => {
     expect(queries[0]).not.toContain('cert_pem_enc');
     expect(queries[0]).not.toContain('key_pem_enc');
     expect(queries[1]).not.toContain('value_enc');
+  });
+});
+
+describe('S1：通用设置隔离认证内部命名空间', () => {
+  it('拒绝通过 PUT/DELETE /settings/:key 读写或删除 auth.* 内部认证键', async () => {
+    resetRateLimitForTests();
+    const ctx = makeTestContext();
+    const cookie = await loginAsAdmin(ctx);
+    const headers = authHeaders(cookie);
+
+    await ctx.settings.put('auth.totp_secret', 'JBSWY3DPEHPK3PXP');
+    await ctx.settings.put('auth.session_epoch', 3);
+
+    for (const [method, key, body] of [
+      ['PUT', 'auth.totp_secret', JSON.stringify({ value: 'ATTACKER' })],
+      ['PUT', 'auth.session_epoch', JSON.stringify({ value: 0 })],
+      ['DELETE', 'auth.totp_secret', undefined],
+      ['DELETE', 'auth.pending', undefined],
+    ] as const) {
+      const res = await ctx.app.request(
+        `/api/v1/settings/${key}`,
+        { method, headers, ...(body ? { body } : {}) },
+        ctx.env,
+      );
+      expect(res.status, `${method} ${key}`).toBe(403);
+      const payload = (await res.json()) as { error?: { code?: string } };
+      expect(payload.error?.code).toBe('forbidden_setting_key');
+    }
+
+    expect(await ctx.settings.getValue('auth.totp_secret')).toBe('JBSWY3DPEHPK3PXP');
+    expect(await ctx.settings.getValue('auth.session_epoch')).toBe(3);
   });
 });

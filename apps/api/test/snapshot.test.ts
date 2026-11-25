@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HttpAgentClient, HubUnreachableError } from '../src/lib/node-client';
 import { authHeaders, createNode, loginAsAdmin, makeTestContext } from './helpers/context';
 
@@ -143,5 +143,52 @@ describe('快照转发（无域名节点）', () => {
       ctx.env,
     );
     expect(((await forcedSnap.json()) as { reachable: boolean }).reachable).toBe(true);
+  });
+
+  it('P2：慢快照在途超过 2s 仍持续去重，完成后再进入 2s 短缓存窗口', async () => {
+    let fakeNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+    try {
+      const ctx = makeTestContext();
+      const cookie = await loginAsAdmin(ctx);
+      const { id } = await createNode(ctx, cookie);
+      let calls = 0;
+      let finishAgent: (() => void) | null = null;
+      ctx.agent.handler = async () => {
+        calls += 1;
+        await new Promise<void>((resolve) => {
+          finishAgent = resolve;
+        });
+        return { status: 200, body: SNAPSHOT };
+      };
+
+      const p1 = ctx.app.request(`/api/v1/nodes/${id}/snapshot`, { headers: authHeaders(cookie) }, ctx.env);
+      await vi.waitFor(() => expect(calls).toBe(1));
+
+      // 首次仍在途且已过 2.5s：第二个普通请求仍复用同一在途调用
+      fakeNow += 2_500;
+      const p2 = ctx.app.request(`/api/v1/nodes/${id}/snapshot`, { headers: authHeaders(cookie) }, ctx.env);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(calls).toBe(1);
+
+      finishAgent!();
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(((await r1.json()) as { cached?: boolean }).cached).toBeUndefined();
+      expect(((await r2.json()) as { cached?: boolean }).cached).toBe(true);
+
+      // 完成后 1s 内仍命中短缓存，超过 2s 后重新触发采样
+      fakeNow += 1_000;
+      const r3 = await ctx.app.request(`/api/v1/nodes/${id}/snapshot`, { headers: authHeaders(cookie) }, ctx.env);
+      expect(calls).toBe(1);
+      expect(((await r3.json()) as { cached?: boolean }).cached).toBe(true);
+
+      fakeNow += 2_100;
+      const p4 = ctx.app.request(`/api/v1/nodes/${id}/snapshot`, { headers: authHeaders(cookie) }, ctx.env);
+      await vi.waitFor(() => expect(calls).toBe(2));
+      finishAgent!();
+      await p4;
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
