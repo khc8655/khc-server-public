@@ -200,6 +200,7 @@ function mockApi() {
             { name: 'caddy-site', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
             { name: 'wireguard', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
             { name: 'port-forward', version: '1.0.0', api: 1, capabilities: { pkgInstall: true } },
+            { name: 'app-catalog', version: '1.0.0', api: 1 },
             { name: 'node-exporter', version: '1.8.2', api: 1 },
           ],
           adaptersError: null,
@@ -268,15 +269,21 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     expect(screen.queryByText('SSL 证书与 HTTPS 配置')).toBeNull();
   });
 
-  it('组件分段与 ?tab=components：展示内置组件与扩展组件，未安装组件支持安装入口', async () => {
+  it('组件分段与 ?tab=components：内置与扩展组件共用标准表格，屏蔽内部 app-catalog 并支持安装入口', async () => {
     await renderRoute('/hubs/tyo-1/settings?tab=components');
     expect(await screen.findByText('内置组件')).toBeTruthy();
-    expect(screen.getByText('Caddy')).toBeTruthy();
-    expect(screen.getByText('WireGuard')).toBeTruthy();
-    expect(screen.getByText('端口转发（socat）')).toBeTruthy();
-    expect(await screen.findByRole('button', { name: '安装' })).toBeTruthy();
+    const tables = await screen.findAllByRole('table');
+    expect(tables.length).toBeGreaterThanOrEqual(2);
+    const builtinTable = tables[0]!;
+    expect(within(builtinTable).getByText('Caddy')).toBeTruthy();
+    expect(within(builtinTable).getByText('WireGuard')).toBeTruthy();
+    expect(within(builtinTable).getByText('端口转发（socat）')).toBeTruthy();
+    expect(within(builtinTable).getAllByText('反代站点与自动 HTTPS').length).toBeGreaterThan(0);
+    expect(within(builtinTable).getByRole('button', { name: '安装' })).toBeTruthy();
+    expect(within(builtinTable).getByRole('button', { name: '进入应用' })).toBeTruthy();
     expect(screen.getByText('扩展组件')).toBeTruthy();
     expect((await screen.findAllByText('node-exporter')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('app-catalog')).toBeNull();
   });
 
   it('接入方式抽屉：存量 IP 节点默认 IP 直连，域名模式选记录后同步 domain', async () => {

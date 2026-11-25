@@ -5,7 +5,7 @@ import { Button, Icon, Link, ScopeChip, StatusDot, SyncStatus, Truncate, type Sy
 import { MenuButton } from './overlays';
 import type { ActionRef } from '../registry/actions';
 import { actionLabel, actionMeta } from '../registry/actions';
-import { zh } from '../i18n/zh';
+import { fmt, zh } from '../i18n/zh';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -89,8 +89,10 @@ export function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const [hubMenuOpen, setHubMenuOpen] = useState(false);
-  const visibleHubs = hubs.slice(0, 3);
-  const hiddenCount = hubs.length - visibleHubs.length;
+  const [hubsExpanded, setHubsExpanded] = useState(false);
+  const defaultVisibleHubs = 8;
+  const visibleHubs = hubsExpanded ? hubs : hubs.slice(0, defaultVisibleHubs);
+  const hiddenCount = Math.max(0, hubs.length - defaultVisibleHubs);
 
   return (
     <>
@@ -231,20 +233,37 @@ export function Sidebar({
                 />
               ) : null}
             </div>
-            <nav className="ui-sidebar-nav">
-              {visibleHubs.map((hub) => (
-                <Link
-                  key={hub.id}
-                  to={`/hubs/${encodeURIComponent(hub.id)}`}
-                  className="ui-nav-item ui-nav-hub"
+            <nav className="ui-sidebar-nav ui-sidebar-hubs-nav">
+              {visibleHubs.map((hub) => {
+                const isActive = activeHub?.id === hub.id;
+                return (
+                  <Link
+                    key={hub.id}
+                    to={`/hubs/${encodeURIComponent(hub.id)}`}
+                    className={`ui-nav-item ui-nav-hub${isActive ? ' is-active' : ''}`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <StatusDot tone={statusTone(hub.status)} />
+                    <span className="ui-nav-label">
+                      <Truncate text={hub.name} />
+                    </span>
+                  </Link>
+                );
+              })}
+              {hiddenCount > 0 ? (
+                <button
+                  type="button"
+                  className="ui-nav-item ui-nav-hub-toggle"
+                  aria-expanded={hubsExpanded}
+                  onClick={() => setHubsExpanded((prev) => !prev)}
                 >
-                  <StatusDot tone={statusTone(hub.status)} />
                   <span className="ui-nav-label">
-                    <Truncate text={hub.name} />
+                    {hubsExpanded
+                      ? zh.nav.collapseHubs
+                      : fmt(zh.nav.expandHubs, { count: hiddenCount })}
                   </span>
-                </Link>
-              ))}
-              {hiddenCount > 0 ? <Link to={hubsHref} label={allHubsLabel} muted /> : null}
+                </button>
+              ) : null}
             </nav>
           </>
         ) : null}

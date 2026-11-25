@@ -8,6 +8,7 @@ export const BUILTIN_APP_NAMES = [
   'port-forward',
   'certificates',
   'host-ops',
+  'app-catalog',
 ] as const;
 
 export function isBuiltinApp(app: string): boolean {

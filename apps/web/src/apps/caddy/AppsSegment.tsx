@@ -85,7 +85,7 @@ export function AppsSegment({ hubId }: { hubId: string }) {
   ];
 
   return (
-    <Card title={zh.nodeSettings.extraComponentsTitle}>
+    <Card title={zh.nodeSettings.extraComponentsTitle} padded={false}>
       {appsQuery.data?.adaptersError ? (
         <Banner tone="warn" title={appsQuery.data.adaptersError} />
       ) : null}
@@ -100,11 +100,15 @@ export function AppsSegment({ hubId }: { hubId: string }) {
           description: zh.nodeSettings.extraComponentsEmptyHint,
         }}
         objectLabel={zh.nodeSettings.extraComponentsTitle}
-        search={{
-          value: search,
-          onChange: setSearch,
-          placeholder: zh.common.search,
-        }}
+        search={
+          rows.length > 5 || search.length > 0
+            ? {
+                value: search,
+                onChange: setSearch,
+                placeholder: zh.common.search,
+              }
+            : undefined
+        }
       />
     </Card>
   );

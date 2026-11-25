@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import type { TaskResponse } from '@khc/contracts';
 import { ApiError } from '../../data/client';
 import { fetchTask, friendlyAgentError } from '../../data/apps';
@@ -11,7 +12,17 @@ import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { action } from '../../registry/actions';
 import { paths } from '../../registry/routes';
 import { ConfirmAction } from '../../patterns';
-import { Badge, Banner, Button, Card, Link, Row, Stack, useToast, type Tone } from '../../ui';
+import {
+  Banner,
+  Button,
+  Card,
+  Row,
+  Stack,
+  Table,
+  useToast,
+  type ColumnDef,
+  type Tone,
+} from '../../ui';
 import { fmt, zh } from '../../i18n/zh';
 import { installTaskText } from '../installTaskText';
 import { AppsSegment } from '../caddy/AppsSegment';
@@ -21,6 +32,7 @@ type ComponentKey = 'caddy-site' | 'wireguard' | 'port-forward';
 interface BuiltinRow {
   key: ComponentKey;
   name: string;
+  desc: string;
   installed: boolean | null;
   running: boolean | null;
   canInstall: boolean;
@@ -36,6 +48,7 @@ function componentBadge(installed: boolean | null, running: boolean | null): { t
 }
 
 export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boolean }) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
@@ -63,6 +76,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
     {
       key: CADDY_SITE_APP,
       name: zh.nodeSettings.componentCaddyName,
+      desc: zh.nodeSettings.componentCaddyDesc,
       installed: caddyStatus ? caddyStatus.installed : null,
       running: caddyStatus ? caddyStatus.running : null,
       canInstall: hasPkgInstall(CADDY_SITE_APP),
@@ -72,6 +86,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
     {
       key: WIREGUARD_APP,
       name: zh.nodeSettings.componentWgName,
+      desc: zh.nodeSettings.componentWgDesc,
       installed: wgStatus ? wgStatus.installed : null,
       running: wgStatus ? wgStatus.running : null,
       canInstall: hasPkgInstall(WIREGUARD_APP),
@@ -81,6 +96,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
     {
       key: PORT_FORWARD_APP,
       name: zh.nodeSettings.componentForwardName,
+      desc: zh.nodeSettings.componentForwardDesc,
       installed: pfStatus
         ? pfStatus.socatAvailable === false
           ? false
@@ -148,55 +164,98 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
     }
   };
 
+  const columns: ColumnDef<BuiltinRow>[] = [
+    {
+      key: 'name',
+      type: 'name',
+      header: zh.nodeSettings.colComponent,
+      width: '26%',
+      value: (row) => row.name,
+      dot: (row) => (row.running === true ? 'ok' : 'neutral'),
+    },
+    {
+      key: 'status',
+      type: 'status',
+      header: zh.fields.status,
+      width: '18%',
+      status: (row) => componentBadge(row.installed, row.running),
+    },
+    {
+      key: 'desc',
+      type: 'text',
+      header: zh.nodeSettings.colDesc,
+      value: (row) => row.desc,
+    },
+    {
+      key: 'actions',
+      type: 'actions',
+      header: '',
+      width: '184px',
+      render: (row) => (
+        <span className="ui-cell-actions" onClick={(event) => event.stopPropagation()}>
+          <Row gap={1}>
+            {row.installed === false && row.canInstall ? (
+              <Button
+                label={zh.nodeSettings.componentInstall}
+                size="sm"
+                variant="default"
+                loading={installBusy}
+                disabled={unreachable}
+                disabledReason={zh.channels.unknownWriteReason}
+                onClick={() => setInstallTarget(row)}
+              />
+            ) : null}
+            <Button
+              label={row.toLabel}
+              size="sm"
+              variant="ghost"
+              onClick={() => void navigate({ href: row.to })}
+            />
+          </Row>
+        </span>
+      ),
+    },
+  ];
+
   return (
     <>
-      <Card title={zh.nodeSettings.builtinComponentsTitle}>
-        <Stack gap={3}>
-          <p className="ui-muted">{zh.nodeSettings.builtinComponentsDesc}</p>
-          {installTask ? (
-            <Banner
-              tone="info"
-              title={`${installTask.name} · ${installTaskText(installTask.task, zh.sites.installTaskState)}`}
-              action={
-                <Button
-                  label={zh.sites.installRefresh}
-                  size="sm"
-                  loading={installBusy}
-                  onClick={() => void refreshTask()}
-                />
-              }
-            />
-          ) : null}
-          <div className="ui-components-list">
-            {rows.map((row) => {
-              const badge = componentBadge(row.installed, row.running);
-              return (
-                <div className="ui-components-row" key={row.key}>
-                  <div className="ui-components-info">
-                    <span className="ui-components-name">{row.name}</span>
-                    <Badge tone={badge.tone} label={badge.label} />
-                  </div>
-                  <Row gap={2}>
-                    {row.installed === false && row.canInstall ? (
-                      <Button
-                        label={zh.nodeSettings.componentInstall}
-                        size="sm"
-                        loading={installBusy}
-                        disabled={unreachable}
-                        disabledReason={zh.channels.unknownWriteReason}
-                        onClick={() => setInstallTarget(row)}
-                      />
-                    ) : null}
-                    <Link to={row.to} label={row.toLabel} />
-                  </Row>
-                </div>
-              );
-            })}
-          </div>
-        </Stack>
-      </Card>
+      <Stack gap={4}>
+        {installTask ? (
+          <Banner
+            tone="info"
+            title={`${installTask.name} · ${installTaskText(installTask.task, zh.sites.installTaskState)}`}
+            action={
+              <Button
+                label={zh.sites.installRefresh}
+                size="sm"
+                loading={installBusy}
+                onClick={() => void refreshTask()}
+              />
+            }
+          />
+        ) : null}
 
-      <AppsSegment hubId={hubId} />
+        <Card title={zh.nodeSettings.builtinComponentsTitle} padded={false}>
+          <Table
+            rows={rows}
+            columns={columns}
+            rowKey={(row) => row.key}
+            onRowOpen={(row) => void navigate({ href: row.to })}
+            rowActions={(row) =>
+              row.installed === false && row.canInstall ? [action('app.install')] : []
+            }
+            onRowAction={(_ref, row) => setInstallTarget(row)}
+            rowActionDisabled={() => (unreachable ? zh.channels.unknownWriteReason : undefined)}
+            objectLabel={zh.nodeSettings.builtinComponentsTitle}
+            empty={{
+              icon: 'box',
+              title: zh.nodeSettings.builtinComponentsTitle,
+            }}
+          />
+        </Card>
+
+        <AppsSegment hubId={hubId} />
+      </Stack>
 
       {installTarget ? (
         <ConfirmAction

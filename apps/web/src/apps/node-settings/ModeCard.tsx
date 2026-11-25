@@ -7,7 +7,6 @@ import {
   Card,
   Row,
   Skeleton,
-  Stack,
 } from '../../ui';
 import { zh } from '../../i18n/zh';
 import { ModeBadge } from './ModeBadge';
@@ -19,64 +18,65 @@ export function ModeCard({ hubId, hubName, offline }: { hubId: string; hubName: 
   const mode = modeQuery.data;
   const modeOffline = offline || mode?.reachable === false;
   const target = mode?.target;
-  const disabledReason = modeOffline
-    ? zh.mode.disabledOffline
-    : !mode || mode.mode === 'unknown' || target === null
-      ? zh.mode.unknownHint
-      : undefined;
+  const canShowSwitch = Boolean(mode && mode.mode !== 'unknown' && target !== null);
+  const disabledReason = modeOffline ? zh.mode.disabledOffline : undefined;
   const switchLabel = target === 'wg' ? zh.mode.switchToWg : zh.mode.switchToCaddy;
+
+  const summaryText = (() => {
+    if (!mode) return '';
+    const base =
+      mode.mode === 'wg'
+        ? zh.mode.wgDesc
+        : mode.mode === 'caddy'
+          ? zh.mode.caddyDesc
+          : zh.mode.unknownHint;
+    return modeOffline && mode.mode !== 'unknown' ? `${base}（${zh.mode.offlineHint}）` : base;
+  })();
 
   return (
     <>
       <Card title={zh.mode.title}>
-        <Stack gap={3}>
-          {modeQuery.isLoading && !mode ? (
-            <Stack gap={2}>
-              <Skeleton height={10} width="35%" />
-              <Skeleton height={10} />
-            </Stack>
-          ) : null}
+        {modeQuery.isLoading && !mode ? (
+          <Skeleton height={14} width="45%" />
+        ) : null}
 
-          {modeQuery.error ? (
-            <Banner
-              tone="danger"
-              title={zh.mode.loadError}
-              description={modeQuery.error instanceof Error ? modeQuery.error.message : undefined}
-              action={
-                <Button
-                  label={zh.common.retry}
-                  size="sm"
-                  onClick={() => void modeQuery.refetch()}
-                />
-              }
-            />
-          ) : null}
+        {modeQuery.error ? (
+          <Banner
+            tone="danger"
+            title={zh.mode.loadError}
+            description={modeQuery.error instanceof Error ? modeQuery.error.message : undefined}
+            action={
+              <Button
+                label={zh.common.retry}
+                size="sm"
+                onClick={() => void modeQuery.refetch()}
+              />
+            }
+          />
+        ) : null}
 
-          {mode ? (
-            <>
-              <Row gap={2} wrap>
+        {mode ? (
+          <div className="ui-mode-row">
+            <div className="ui-mode-info">
+              <Row gap={2} align="center" wrap>
                 <ModeBadge mode={mode.mode} />
+                <span className="ui-text-caption">{summaryText}</span>
               </Row>
-              {mode.mode === 'unknown' ? (
-                <Banner tone="info" title={zh.mode.badgeUnknown} description={zh.mode.unknownHint} />
-              ) : null}
-              {modeOffline ? (
-                <Banner tone="neutral" title={zh.mode.offline} description={zh.mode.offlineHint} />
-              ) : null}
-              <Banner tone="neutral" title={zh.mode.wgTitle} description={zh.mode.wgDesc} />
-              <Banner tone="neutral" title={zh.mode.caddyTitle} description={zh.mode.caddyDesc} />
-              <Row gap={2} wrap>
+            </div>
+            {canShowSwitch ? (
+              <div className="ui-mode-action">
                 <Button
                   label={switchLabel}
-                  variant="primary"
+                  size="sm"
+                  variant="default"
                   disabled={Boolean(disabledReason)}
                   disabledReason={disabledReason}
                   onClick={() => setOpen(true)}
                 />
-              </Row>
-            </>
-          ) : null}
-        </Stack>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </Card>
 
       {open && mode ? (
