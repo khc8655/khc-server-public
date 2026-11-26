@@ -4860,6 +4860,12 @@ button.ui-statusbar-tile:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.ui-statusbar-hint {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: 1.2;
+}
+
 .ui-statusbar-tile[data-tone='warn'] .ui-statusbar-value {
   color: var(--warn);
 }

@@ -86,6 +86,14 @@ SCRIPT_GLOBAL_NAMES = (
     "MAX_INPUT_BYTES",
     "ROOT_OVERRIDE",
     "CLEANUP_ROOT",
+    "SWAPFILE_PATH",
+    "FSTAB_PATH",
+    "SYSCTL_D_DIR",
+    "JOURNALD_CONF_D_DIR",
+    "APT_CACHE_DIR",
+    "APT_AVAILABLE",
+    "TUNE_USE_SYSTEMD_RUN",
+    "DISK_FREE_OVERRIDE",
 )
 
 SCRIPT_DEFAULTS = {name: getattr(HOST_SCRIPT, name) for name in SCRIPT_GLOBAL_NAMES}
@@ -230,6 +238,11 @@ class ScriptTestBase(unittest.TestCase):
         HOST_SCRIPT.NFT_AVAILABLE = True
         HOST_SCRIPT.ROOT_OVERRIDE = True  # 模拟 khcops 经 sudo 得到的 root
         HOST_SCRIPT.MAX_OUTPUT_BYTES = 1024 * 1024
+        HOST_SCRIPT.SWAPFILE_PATH = os.path.join(self.tmp, "swapfile")
+        HOST_SCRIPT.APT_CACHE_DIR = os.path.join(self.tmp, "apt-archives")
+        HOST_SCRIPT.DISK_FREE_OVERRIDE = 20 * 1024 ** 3
+        HOST_SCRIPT.TUNE_USE_SYSTEMD_RUN = False
+        os.makedirs(HOST_SCRIPT.APT_CACHE_DIR, exist_ok=True)
         write_uptime(self.proc_root)
 
     def tearDown(self) -> None:
@@ -1565,7 +1578,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.0.1")
+        self.assertEqual(self.adapter.version, "1.1.0")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -4217,3 +4230,283 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         self.assertFalse(fail_res["data"]["available"])
         self.assertEqual(fail_res["data"]["level"], "none")
         self.assertEqual(fail_res["data"]["ssh"]["total"], 0)
+
+    # -- tune.* --------------------------------------------------------------
+    def _seed_tune_proc(
+        self,
+        *,
+        mem_total_kb: int = 1024 * 1024,
+        swap_total_kb: int = 0,
+        swap_free_kb: int = 0,
+        swaps_rows: list[str] | None = None,
+        swappiness: int = 60,
+        bbr_available: str = "reno cubic bbr",
+        bbr_current: str = "cubic",
+        qdisc: str = "fq_codel",
+        root_fs: str = "ext4",
+    ) -> None:
+        _write(
+            os.path.join(self.proc_root, "meminfo"),
+            f"MemTotal:       {mem_total_kb} kB\n"
+            f"MemFree:         200000 kB\n"
+            f"MemAvailable:    600000 kB\n"
+            f"SwapTotal:      {swap_total_kb} kB\n"
+            f"SwapFree:       {swap_free_kb} kB\n",
+        )
+        header = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+        _write(os.path.join(self.proc_root, "swaps"), header + "".join(swaps_rows or []))
+        _write(os.path.join(self.proc_root, "sys", "vm", "swappiness"), f"{swappiness}\n")
+        _write(
+            os.path.join(self.proc_root, "sys", "net", "ipv4", "tcp_available_congestion_control"),
+            f"{bbr_available}\n",
+        )
+        _write(
+            os.path.join(self.proc_root, "sys", "net", "ipv4", "tcp_congestion_control"),
+            f"{bbr_current}\n",
+        )
+        _write(os.path.join(self.proc_root, "sys", "net", "core", "default_qdisc"), f"{qdisc}\n")
+        _write(
+            os.path.join(self.proc_root, "mounts"),
+            f"/dev/vda1 / {root_fs} rw,relatime 0 0\n",
+        )
+
+    def test_tune_status_collects_swap_bbr_journal_and_apt(self) -> None:
+        self.assertIn("tune.status", HOST_SCRIPT.PUBLIC_VERBS)
+        self.assertNotIn("tune.status", HOST_SCRIPT.WRITE_VERBS)
+        self.assertIn("tune.status", ADAPTER_MODULE.peer_allowed_verbs(HOST_SCRIPT))
+
+        self._seed_tune_proc(
+            swap_total_kb=2 * 1024 * 1024,
+            swap_free_kb=1536 * 1024,
+            swaps_rows=[f"{HOST_SCRIPT.SWAPFILE_PATH}                               file\t\t2097148\t\t524288\t\t-2\n"],
+            bbr_current="bbr",
+            qdisc="fq",
+        )
+        _write(os.path.join(self.etc_root, "fstab"), f"{HOST_SCRIPT.SWAPFILE_PATH} none swap sw 0 0 # khc-managed-swap\n")
+        _write(
+            os.path.join(self.etc_root, "systemd", "journald.conf.d", "99-khc.conf"),
+            "[Journal]\nSystemMaxUse=100M\n",
+        )
+        with open(os.path.join(HOST_SCRIPT.APT_CACHE_DIR, "caddy.deb"), "wb") as handle:
+            handle.write(b"x" * 2048)
+        self.runner.on("journalctl", lambda argv, _: (0, "Archived and active journals take up 128.0M in the file system.\n", ""))
+
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        try:
+            res = self.run_verb("tune.status")
+        finally:
+            HOST_SCRIPT.ROOT_OVERRIDE = True
+        self.assertTrue(res["ok"])
+        data = res["data"]
+        self.assertTrue(data["swap"]["active"])
+        self.assertTrue(data["swap"]["managed"])
+        self.assertFalse(data["swap"]["external"])
+        self.assertEqual(data["swap"]["totalBytes"], 2 * 1024 ** 3)
+        self.assertTrue(data["bbr"]["supported"])
+        self.assertTrue(data["bbr"]["enabled"])
+        self.assertTrue(data["journal"]["available"])
+        self.assertEqual(data["journal"]["usedBytes"], 128 * 1024 ** 2)
+        self.assertEqual(data["journal"]["maxUse"], "100M")
+        self.assertTrue(data["journal"]["managed"])
+        self.assertTrue(data["apt"]["available"])
+        self.assertEqual(data["apt"]["cacheBytes"], 2048)
+
+    def test_tune_swap_create_and_remove_idempotent(self) -> None:
+        self._seed_tune_proc()
+        _write(os.path.join(self.etc_root, "fstab"), "UUID=abc / ext4 defaults 0 1\n")
+
+        def on_swapon(argv, _):
+            # 模拟 swapon 生效，更新 /proc/meminfo 与 /proc/swaps
+            self._seed_tune_proc(
+                swap_total_kb=2 * 1024 * 1024,
+                swap_free_kb=2 * 1024 * 1024,
+                swaps_rows=[f"{HOST_SCRIPT.SWAPFILE_PATH} file 2097148 0 -2\n"],
+                swappiness=10,
+            )
+            return 0, "", ""
+
+        def on_swapoff(argv, _):
+            self._seed_tune_proc(swap_total_kb=0, swap_free_kb=0, swaps_rows=[], swappiness=10)
+            return 0, "", ""
+
+        self.runner.on("swapon", on_swapon)
+        self.runner.on("swapoff", on_swapoff)
+
+        res = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["data"]["sizeGb"], 2)
+        self.assertTrue(res["data"]["swap"]["active"])
+        self.assertTrue(res["data"]["swap"]["managed"])
+        self.assertEqual(self.runner.commands("fallocate")[-1], ["fallocate", "-l", "2G", HOST_SCRIPT.SWAPFILE_PATH])
+        self.assertEqual(self.runner.commands("chmod")[-1], ["chmod", "0600", HOST_SCRIPT.SWAPFILE_PATH])
+        self.assertEqual(self.runner.commands("mkswap")[-1], ["mkswap", HOST_SCRIPT.SWAPFILE_PATH])
+        fstab_text = read_text(os.path.join(self.etc_root, "fstab"))
+        self.assertIn("UUID=abc / ext4 defaults 0 1", fstab_text)
+        self.assertIn(f"{HOST_SCRIPT.SWAPFILE_PATH} none swap sw 0 0 # khc-managed-swap", fstab_text)
+        self.assertEqual(
+            read_text(os.path.join(self.etc_root, "sysctl.d", "99-khc-swap.conf")),
+            "vm.swappiness = 10\n",
+        )
+
+        # 关闭并清理（幂等）
+        rem = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertTrue(rem["ok"])
+        self.assertFalse(rem["data"]["swap"]["active"])
+        self.assertNotIn("# khc-managed-swap", read_text(os.path.join(self.etc_root, "fstab")))
+        self.assertFalse(os.path.exists(os.path.join(self.etc_root, "sysctl.d", "99-khc-swap.conf")))
+
+        # 重复 remove 仍成功（幂等）
+        rem_again = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertTrue(rem_again["ok"])
+
+    def test_tune_swap_guards_conflict_disk_btrfs_zram_and_symlink(self) -> None:
+        # 1) 非法档位
+        self._seed_tune_proc()
+        bad = self.run_verb("tune.swap", {"action": "create", "sizeGb": 8})
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["code"], "E_BAD_REQUEST")
+
+        # 2) 已有外部 zram / 分区：拒绝创建与删除
+        self._seed_tune_proc(
+            swap_total_kb=512 * 1024,
+            swap_free_kb=512 * 1024,
+            swaps_rows=["/dev/zram0 partition 524284 0 100\n"],
+        )
+        dup = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertFalse(dup["ok"])
+        self.assertEqual(dup["error"]["code"], "E_CONFLICT")
+        prot = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertFalse(prot["ok"])
+        self.assertEqual(prot["error"]["code"], "E_PROTECTED")
+
+        # 3) 根分区剩余空间不足（需 sizeGb + 1 GiB）
+        self._seed_tune_proc()
+        HOST_SCRIPT.DISK_FREE_OVERRIDE = 2 * 1024 ** 3
+        low_disk = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertFalse(low_disk["ok"])
+        self.assertEqual(low_disk["error"]["code"], "E_INVALID")
+        HOST_SCRIPT.DISK_FREE_OVERRIDE = 20 * 1024 ** 3
+
+        # 4) Btrfs 走 truncate + chattr +C + dd
+        self._seed_tune_proc(root_fs="btrfs")
+        btrfs_ok = self.run_verb("tune.swap", {"action": "create", "sizeGb": 1})
+        self.assertTrue(btrfs_ok["ok"])
+        self.assertEqual(self.runner.commands("chattr")[-1], ["chattr", "+C", HOST_SCRIPT.SWAPFILE_PATH])
+        self.assertIn("count=1024", self.runner.commands("dd")[-1])
+
+        # 5) swapon 失败返回 E_UNSUPPORTED
+        self._seed_tune_proc()
+        self.runner.on("swapon", lambda argv, _: (1, "", "Operation not permitted"))
+        fail_swapon = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertFalse(fail_swapon["ok"])
+        self.assertEqual(fail_swapon["error"]["code"], "E_UNSUPPORTED")
+
+        # 6) 符号链接保护
+        target = os.path.join(self.tmp, "real-file")
+        _write(target, "keep")
+        os.symlink(target, HOST_SCRIPT.SWAPFILE_PATH)
+        sym = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertFalse(sym["ok"])
+        self.assertEqual(sym["error"]["code"], "E_PROTECTED")
+
+    def test_tune_bbr_journal_and_apt_clean(self) -> None:
+        # BBR 不支持 -> E_UNSUPPORTED
+        self._seed_tune_proc(bbr_available="reno cubic", bbr_current="cubic")
+        unsup = self.run_verb("tune.bbr", {"enabled": True})
+        self.assertFalse(unsup["ok"])
+        self.assertEqual(unsup["error"]["code"], "E_UNSUPPORTED")
+
+        # BBR 支持 -> 开启 + 关闭
+        self._seed_tune_proc(bbr_available="reno cubic bbr", bbr_current="cubic")
+        on = self.run_verb("tune.bbr", {"enabled": True})
+        self.assertTrue(on["ok"])
+        bbr_conf = os.path.join(self.etc_root, "sysctl.d", "99-khc-bbr.conf")
+        self.assertIn("tcp_congestion_control = bbr", read_text(bbr_conf))
+        off = self.run_verb("tune.bbr", {"enabled": False})
+        self.assertTrue(off["ok"])
+        self.assertFalse(os.path.exists(bbr_conf))
+        self.assertIn("net.ipv4.tcp_congestion_control=cubic", self.runner.commands("sysctl")[-1])
+
+        # journald 写 drop-in、重启并 vacuum
+        sizes = iter(["320.0M", "64.0M"])
+        self.runner.on("journalctl", lambda argv, _: (0, f"take up {next(sizes, '64.0M')}\n", ""))
+        jres = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 100})
+        self.assertTrue(jres["ok"])
+        self.assertEqual(jres["data"]["beforeBytes"], 320 * 1024 ** 2)
+        self.assertEqual(jres["data"]["afterBytes"], 64 * 1024 ** 2)
+        self.assertEqual(
+            read_text(os.path.join(self.etc_root, "systemd", "journald.conf.d", "99-khc.conf")),
+            "[Journal]\nSystemMaxUse=100M\n",
+        )
+        self.assertEqual(self.runner.commands("systemctl")[-1], ["systemctl", "restart", "systemd-journald"])
+        self.assertIn(["journalctl", "--vacuum-size=100M"], self.runner.commands("journalctl"))
+
+        # APT clean + 无 apt 时拒绝
+        deb = os.path.join(HOST_SCRIPT.APT_CACHE_DIR, "foo.deb")
+        with open(deb, "wb") as handle:
+            handle.write(b"a" * 4096)
+
+        def on_apt(argv, _):
+            if len(argv) > 1 and argv[1] == "clean" and os.path.exists(deb):
+                os.unlink(deb)
+            return 0, "", ""
+
+        self.runner.on("apt-get", on_apt)
+        ares = self.run_verb("tune.apt-clean")
+        self.assertTrue(ares["ok"])
+        self.assertEqual(ares["data"]["freedBytes"], 4096)
+
+        HOST_SCRIPT.APT_AVAILABLE = False
+        no_apt = self.run_verb("tune.apt-clean")
+        self.assertFalse(no_apt["ok"])
+        self.assertEqual(no_apt["error"]["code"], "E_UNSUPPORTED")
+
+    def test_tune_write_verbs_require_root_peer_guard_and_systemd_run(self) -> None:
+        self._seed_tune_proc()
+        # 非 root 拒绝写动词
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        try:
+            denied = self.run_verb("tune.bbr", {"enabled": True})
+        finally:
+            HOST_SCRIPT.ROOT_OVERRIDE = True
+        self.assertFalse(denied["ok"])
+        self.assertEqual(denied["error"]["code"], "E_NO_PRIV")
+
+        # 适配器侧：全部 write tune.* 均需写锁、拒绝 Peer，call_task 用 TASK_TIMEOUT
+        adapter = HostOps()
+        for verb in ("tune.swap", "tune.bbr", "tune.journal-vacuum", "tune.apt-clean"):
+            self.assertNotIn(verb, PEER_SAFE_WRITE_VERBS)
+            self.assertTrue(adapter.is_write("call_task", {"params": {"verb": verb}}, {"write": True}))
+        self.assertFalse(adapter.is_write("call", {"params": {"verb": "tune.status"}}, {"write": True}))
+
+        with tempfile.TemporaryDirectory() as tmp_ctx:
+            runner = FakeRunner()
+            paths = make_paths(tmp_ctx)
+            ctx = Ctx(paths, command_runner=runner)
+            peer_cfg = {
+                "hubWgIp": "10.8.0.1",
+                "hubId": "hub-1",
+                "peers": {
+                    "p1": {
+                        "enabled": True,
+                        "host": "10.8.0.2",
+                        "port": 22,
+                        "user": "khcops",
+                        "hostKey": PUB_A,
+                    }
+                },
+            }
+            out = adapter.action_call_task(
+                ctx,
+                {"params": {"target": "p1", "verb": "tune.swap", "params": {"action": "create"}}, "config": peer_cfg},
+            )
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["error"]["code"], "E_PEER_FORBIDDEN")
+
+        # TUNE_USE_SYSTEMD_RUN=True 时走 systemd-run 沙箱逃逸
+        HOST_SCRIPT.TUNE_USE_SYSTEMD_RUN = True
+        self._seed_tune_proc(bbr_available="reno cubic bbr", bbr_current="cubic")
+        sys_res = self.run_verb("tune.bbr", {"enabled": True})
+        self.assertTrue(sys_res["ok"])
+        systemd_cmds = self.runner.commands("systemd-run")
+        self.assertTrue(any("sysctl" in cmd for cmd in systemd_cmds))

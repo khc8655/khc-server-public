@@ -33,6 +33,7 @@ import {
 } from '../apps/host-ops/OpsSegments';
 import { useFirewallState, FirewallSegment } from '../apps/host-ops/FirewallSegment';
 import { FirewallRulesEditor } from '../apps/host-ops/FirewallRulesEditor';
+import { SwapTuneDrawerBody, TuneSegment } from '../apps/host-ops/TuneSegment';
 import {
   DiagnosticsCheckDetail,
   DiagnosticsIssueList,
@@ -55,7 +56,7 @@ import {
 import { zh, fmt } from '../i18n/zh';
 import { formatBytes, formatDuration, formatPercent } from '../i18n/format';
 
-type Segment = 'services' | 'processes' | 'firewall' | 'keys' | 'cron';
+type Segment = 'services' | 'processes' | 'firewall' | 'keys' | 'cron' | 'tune';
 
 type OpsDrawer =
   | { kind: 'process'; process: HostOpsProcess; hostUptime: number | null }
@@ -63,6 +64,7 @@ type OpsDrawer =
   | { kind: 'key-add' }
   | { kind: 'svc-logs'; unit: string; user?: string | null }
   | { kind: 'cron-edit'; entry: HostOpsCronEntry | null }
+  | { kind: 'tune-swap' }
   | { kind: 'diag' }
   | { kind: 'diag-check'; check: DiagnosticCheck };
 
@@ -114,6 +116,9 @@ export default function HubOpsPage() {
     // Ubuntu 云镜像自带 fwupd / apt-daily-upgrade / cloud-final 这类单元的失败与面板无关，
     // 全算进来就是一块永远消不掉的红色告警，用户很快学会无视它。
     const diskPercent = ops?.disks?.[0]?.percent ?? null;
+    const memTotal = ops?.mem?.total ?? 0;
+    const swapTotal = typeof ops?.swap?.total === 'number' ? ops.swap.total : 0;
+    const lowMemNoSwap = memTotal > 0 && memTotal <= 2 * 1024 * 1024 * 1024 && swapTotal <= 0;
     const list: StatusTile[] = [
       {
         key: 'agent',
@@ -146,7 +151,12 @@ export default function HubOpsPage() {
         label: zh.ops.mem,
         value: formatPercent(ops?.mem?.percent),
         tone: (ops?.mem?.percent ?? 0) >= 90 ? 'danger' : 'neutral',
+        hint: lowMemNoSwap ? zh.hostOps.tune.noSwapHint : undefined,
         onClick: () => {
+          if (lowMemNoSwap) {
+            setSegment('tune');
+            return;
+          }
           setProcessSort('mem');
           setSegment('processes');
         },
@@ -197,6 +207,7 @@ export default function HubOpsPage() {
     { value: 'firewall', label: zh.hostOps.firewall },
     { value: 'keys', label: zh.hostOps.sshKeys },
     { value: 'cron', label: zh.hostOps.cron.title },
+    { value: 'tune', label: zh.hostOps.tune.title },
   ];
 
   const drawerContext = hubName;
@@ -332,6 +343,22 @@ export default function HubOpsPage() {
             />
           </Drawer>
         );
+      case 'tune-swap':
+        return (
+          <Drawer
+            open
+            title={zh.hostOps.tune.swapDrawerTitle}
+            context={drawerContext}
+            onClose={() => setDrawer(null)}
+            footer={<Button label={zh.common.close} onClick={() => setDrawer(null)} />}
+          >
+            <SwapTuneDrawerBody
+              hubId={hubId}
+              disabled={opsDisabled}
+              onDone={() => setDrawer(null)}
+            />
+          </Drawer>
+        );
       case 'diag': {
         const ageSeconds = diagnosticsData
           ? Math.max(0, Math.floor(Date.now() / 1000 - diagnosticsData.generatedAt))
@@ -456,7 +483,8 @@ export default function HubOpsPage() {
               value === 'firewall' ||
               value === 'keys' ||
               value === 'services' ||
-              value === 'cron'
+              value === 'cron' ||
+              value === 'tune'
             ) {
               setSegment(value);
             }
@@ -500,6 +528,13 @@ export default function HubOpsPage() {
           hubId={hubId}
           disabled={opsDisabled}
           onEdit={(entry) => setDrawer({ kind: 'cron-edit', entry })}
+        />
+      ) : null}
+      {segment === 'tune' ? (
+        <TuneSegment
+          hubId={hubId}
+          disabled={opsDisabled}
+          onOpenSwapDrawer={() => setDrawer({ kind: 'tune-swap' })}
         />
       ) : null}
 
