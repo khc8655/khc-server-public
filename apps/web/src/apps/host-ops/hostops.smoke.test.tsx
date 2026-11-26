@@ -99,6 +99,36 @@ let versionNftReason: string | null = null;
 let fwShowUnsupported = false;
 let fwModeState: 'open' | 'allowlist' = 'open';
 let fwClosePublicSshState = false;
+let tuneErrorMode = false;
+let tuneSwapState = {
+  active: false,
+  managed: false,
+  external: false,
+  totalBytes: 0,
+  usedBytes: 0,
+  percent: 0,
+  memTotalBytes: 1024 * 1024 * 1024,
+  rootFreeBytes: 20 * 1024 * 1024 * 1024,
+  swappiness: 60,
+  sources: [] as string[],
+};
+let tuneBbrState = {
+  supported: true,
+  enabled: false,
+  congestionControl: 'cubic',
+  qdisc: 'fq_codel',
+};
+let tuneJournalState = {
+  available: true,
+  usedBytes: 320 * 1024 * 1024,
+  maxUse: null as string | null,
+  managed: false,
+};
+let tuneAptState = {
+  available: true,
+  cacheBytes: 180 * 1024 * 1024,
+};
+let lastCallTaskVerb = '';
 
 const logsErrorsPayload = {
   windowHours: 24,
@@ -164,6 +194,36 @@ function mockApi() {
   requests = [];
   logsErrorsMode = 'data';
   logsErrorsHold = null;
+  tuneErrorMode = false;
+  lastCallTaskVerb = '';
+  tuneSwapState = {
+    active: false,
+    managed: false,
+    external: false,
+    totalBytes: 0,
+    usedBytes: 0,
+    percent: 0,
+    memTotalBytes: 1024 * 1024 * 1024,
+    rootFreeBytes: 20 * 1024 * 1024 * 1024,
+    swappiness: 60,
+    sources: [],
+  };
+  tuneBbrState = {
+    supported: true,
+    enabled: false,
+    congestionControl: 'cubic',
+    qdisc: 'fq_codel',
+  };
+  tuneJournalState = {
+    available: true,
+    usedBytes: 320 * 1024 * 1024,
+    maxUse: null,
+    managed: false,
+  };
+  tuneAptState = {
+    available: true,
+    cacheBytes: 180 * 1024 * 1024,
+  };
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -262,9 +322,41 @@ function mockApi() {
         });
       }
       if (url.endsWith('/apps/host-ops/call_task')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          params?: { verb?: string; params?: Record<string, unknown> };
+        };
+        lastCallTaskVerb = body.params?.verb ?? '';
+        if (lastCallTaskVerb === 'tune.swap' && body.params?.params?.action === 'create') {
+          const sizeGb = Number(body.params.params.sizeGb ?? 2);
+          tuneSwapState = {
+            ...tuneSwapState,
+            active: true,
+            managed: true,
+            external: false,
+            totalBytes: sizeGb * 1024 * 1024 * 1024,
+            swappiness: 10,
+            sources: ['/swapfile'],
+          };
+        } else if (lastCallTaskVerb === 'tune.swap' && body.params?.params?.action === 'remove') {
+          tuneSwapState = {
+            ...tuneSwapState,
+            active: false,
+            managed: false,
+            external: false,
+            totalBytes: 0,
+            usedBytes: 0,
+            percent: 0,
+            swappiness: 10,
+            sources: [],
+          };
+        }
         return json({ ok: true, taskId: 'task-1' });
       }
       if (url === '/api/v1/nodes/tyo-1/tasks/task-1') {
+        const resultData =
+          lastCallTaskVerb === 'tune.swap'
+            ? { swap: tuneSwapState }
+            : { token: 'fw-token-1' };
         return json({
           ok: true,
           task: {
@@ -274,8 +366,8 @@ function mockApi() {
               taskState === 'done'
                 ? {
                     ok: true,
-                    v: '1.4.0',
-                    data: { token: 'fw-token-1' },
+                    v: '1.7.0',
+                    data: resultData,
                   }
                 : null,
             error:
@@ -290,6 +382,21 @@ function mockApi() {
           params: { target: string; verb: string; params: Record<string, unknown> };
         };
         const verb = body.params.verb;
+        if (verb === 'tune.status') {
+          if (tuneErrorMode) {
+            return json({ ok: false, error: { code: 'E_IO', message: '读取系统调优状态失败' } });
+          }
+          return json({
+            ok: true,
+            v: '1.7.0',
+            data: {
+              swap: tuneSwapState,
+              bbr: tuneBbrState,
+              journal: tuneJournalState,
+              apt: tuneAptState,
+            },
+          });
+        }
         if (verb === 'logs.errors') {
           if (logsErrorsMode === 'loading') {
             return new Promise<Response>((resolve) => {
@@ -763,7 +870,7 @@ const LOGS_SECTION_TITLE = '近 24 小时日志错误';
 
 function expectFiveSegments() {
   const group = screen.getByRole('group', { name: '主机运维' });
-  expect(within(group).getAllByRole('button')).toHaveLength(5);
+  expect(within(group).getAllByRole('button')).toHaveLength(6);
   expect(within(group).queryByRole('button', { name: '日志错误' })).toBeNull();
   expect(screen.queryByRole('button', { name: '日志错误' })).toBeNull();
 }
@@ -1005,5 +1112,87 @@ describe('防火墙 nftables 一键安装与白名单模式（批次 2/3）', ()
     expect(sent.params.verb).toBe('fw.apply');
     expect(sent.params.params.mode).toBe('allowlist');
     expect(sent.params.params.closePublicSsh).toBe(true);
+  });
+});
+
+describe('主机「优化」标准表与低内存 Swap（P2）', () => {
+  it('总内存 ≤ 2 GiB 且无 Swap 时状态带提示「未开 Swap」，点击直达优化表并支持一键开启 2G', async () => {
+    await renderRoute('/hubs/tyo-1/ops');
+    const hint = await screen.findByText('未开 Swap');
+    expect(hint).toBeTruthy();
+
+    await userEvent.click(hint);
+    expect((await screen.findAllByText('Swap 交换空间')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('TCP BBR 加速').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('系统日志（journald）').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('APT 缓存清理').length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole('button', { name: '开启 2G' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('开启 2G Swap？')).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: '开启 2G' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('已开启 · 2.0 GiB').length).toBeGreaterThan(0);
+    });
+    expect(
+      requests.some(
+        (item) =>
+          item.url.endsWith('/apps/host-ops/call_task') &&
+          String(item.init?.body ?? '').includes('"verb":"tune.swap"'),
+      ),
+    ).toBe(true);
+  });
+
+  it('点击 Swap 行可进抽屉选 4G 档位并触发 call_task', async () => {
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '优化' }));
+    await screen.findAllByText('Swap 交换空间');
+
+    await userEvent.click(screen.getAllByText('Swap 交换空间')[0]!);
+    expect(await screen.findByRole('button', { name: '4G' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '4G' }));
+    await userEvent.click(screen.getByRole('button', { name: '开启 4G Swap' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('已开启 · 4.0 GiB').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('外部自带 Swap 隐藏操作按钮；内核不支持 BBR 时展示「内核不支持」并禁用开启', async () => {
+    tuneSwapState = {
+      ...tuneSwapState,
+      active: true,
+      managed: false,
+      external: true,
+      totalBytes: 512 * 1024 * 1024,
+      sources: ['/dev/zram0'],
+    };
+    tuneBbrState = {
+      supported: false,
+      enabled: false,
+      congestionControl: 'cubic',
+      qdisc: 'pfifo_fast',
+    };
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '优化' }));
+
+    const table = screen.getByRole('table');
+    expect((await screen.findAllByText('已开启 · 512 MiB（系统自带）')).length).toBeGreaterThan(0);
+    expect(within(table).queryByRole('button', { name: '开启 2G' })).toBeNull();
+    expect(within(table).queryByRole('button', { name: '关闭' })).toBeNull();
+    expect(screen.getAllByText('内核不支持').length).toBeGreaterThan(0);
+    const bbrBtn = screen.getByRole('button', { name: '开启' }) as HTMLButtonElement;
+    expect(bbrBtn.disabled).toBe(true);
+  });
+
+  it('tune.status 失败时展示错误横幅与重试按钮', async () => {
+    tuneErrorMode = true;
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '优化' }));
+
+    expect(await screen.findByText('读取系统调优状态失败')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
   });
 });

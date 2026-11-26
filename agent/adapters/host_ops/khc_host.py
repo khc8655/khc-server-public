@@ -57,6 +57,7 @@ import json
 import os
 import pwd
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.6.0"
+SCRIPT_VERSION = "1.7.0"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -171,6 +172,11 @@ PUBLIC_VERBS = (
     "cron.list",
     "cron.set",
     "cleanup",
+    "tune.status",
+    "tune.swap",
+    "tune.bbr",
+    "tune.journal-vacuum",
+    "tune.apt-clean",
 )
 WRITE_VERBS = (
     "fw.apply",
@@ -181,6 +187,10 @@ WRITE_VERBS = (
     "svc.reset-failed",
     "cron.set",
     "cleanup",
+    "tune.swap",
+    "tune.bbr",
+    "tune.journal-vacuum",
+    "tune.apt-clean",
 )
 # 所有动词统一经控制面（Worker HMAC -> Agent）转发，不再维护浏览器直连通道分类（ADR-0021）。
 INTERNAL_VERBS = ("__fw_rollback",)
@@ -251,6 +261,16 @@ MONOTONIC = time.monotonic  # 测试注入：采样窗口的真实时长来源�
 USER_HOME_MAP: dict[str, str] = {}
 # cron.* 只管理 /etc/cron.d/khc-* 文件；测试注入改指临时目录。
 CRON_DIR = os.environ.get("KHC_HOST_CRON_DIR") or CRON_DIR_DEFAULT
+
+# tune.* 主机优化模块的可替换路径与测试钩子。
+SWAPFILE_PATH = "/swapfile"
+FSTAB_PATH: Optional[str] = None
+SYSCTL_D_DIR: Optional[str] = None
+JOURNALD_CONF_D_DIR: Optional[str] = None
+APT_CACHE_DIR = "/var/cache/apt/archives"
+APT_AVAILABLE: Optional[bool] = None
+TUNE_USE_SYSTEMD_RUN: Optional[bool] = None
+DISK_FREE_OVERRIDE: Optional[int] = None
 
 try:  # Agent 内直接复用采集模块；打包成单文件后由内联的 collect_ops 提供
     from khc import ops as _ops
@@ -3112,6 +3132,551 @@ def cleanup_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# tune.*：低内存 VM 系统优化（Swap / BBR / journald / APT 缓存）
+# ---------------------------------------------------------------------------
+
+SWAP_MARKER = "# khc-managed-swap"
+SWAP_SIZES_GB = (1, 2, 4)
+SWAP_SYSCTL_FILE = "99-khc-swap.conf"
+BBR_SYSCTL_FILE = "99-khc-bbr.conf"
+JOURNALD_DROPIN_FILE = "99-khc.conf"
+MIN_JOURNAL_MAX_MB = 50
+MAX_JOURNAL_MAX_MB = 500
+_SIZE_UNIT_FACTORS = {
+    "b": 1,
+    "k": 1024,
+    "kb": 1024,
+    "kib": 1024,
+    "m": 1024 ** 2,
+    "mb": 1024 ** 2,
+    "mib": 1024 ** 2,
+    "g": 1024 ** 3,
+    "gb": 1024 ** 3,
+    "gib": 1024 ** 3,
+    "t": 1024 ** 4,
+    "tb": 1024 ** 4,
+    "tib": 1024 ** 4,
+}
+_SYSTEM_WRITE_PY = (
+    "import os,sys,tempfile;"
+    "p=sys.argv[1];m=int(sys.argv[2],8);d=os.path.dirname(os.path.abspath(p));"
+    "assert not os.path.islink(p),'symlink';"
+    "os.makedirs(d,mode=0o755,exist_ok=True);"
+    "c=sys.stdin.read();"
+    "fd,t=tempfile.mkstemp(prefix='.khc-',dir=d);"
+    "f=os.fdopen(fd,'w',encoding='utf-8',newline='');"
+    "f.write(c);f.flush();os.fsync(f.fileno());f.close();"
+    "os.chmod(t,m);os.replace(t,p)"
+)
+_SYSTEM_REMOVE_PY = (
+    "import os,sys;"
+    "p=sys.argv[1];"
+    "assert not os.path.islink(p),'symlink';"
+    "os.path.lexists(p) and os.unlink(p)"
+)
+
+
+def _fstab_path() -> str:
+    return FSTAB_PATH or os.path.join(ETC_ROOT, "fstab")
+
+
+def _sysctl_d_dir() -> str:
+    return SYSCTL_D_DIR or os.path.join(ETC_ROOT, "sysctl.d")
+
+
+def _journald_conf_d_dir() -> str:
+    return JOURNALD_CONF_D_DIR or os.path.join(ETC_ROOT, "systemd", "journald.conf.d")
+
+
+def _use_systemd_run() -> bool:
+    if TUNE_USE_SYSTEMD_RUN is not None:
+        return bool(TUNE_USE_SYSTEMD_RUN)
+    return RUNNER is None and bool(shutil.which("systemd-run"))
+
+
+def _run_privileged(
+    argv: list[str],
+    *,
+    timeout: float = 120.0,
+    env: Optional[Mapping[str, str]] = None,
+    input_text: Optional[str] = None,
+) -> tuple[int, str, str]:
+    """在 Agent 沙箱外（systemd-run 一次性 unit）执行 root 命令，仅走 argv 列表。"""
+
+    if _use_systemd_run():
+        unit = f"khc-tune-{secrets.token_hex(4)}"
+        wrapped = [
+            "systemd-run",
+            "--quiet",
+            "--collect",
+            "--wait",
+            "--pipe",
+            f"--unit={unit}",
+            f"--property=RuntimeMaxSec={max(5, int(timeout))}",
+        ]
+        for key, value in sorted((env or {}).items()):
+            wrapped.append(f"--setenv={key}={value}")
+        wrapped.extend(str(item) for item in argv)
+        return _run(wrapped, input_text=input_text, timeout=timeout + 10.0)
+    return _run([str(item) for item in argv], input_text=input_text, timeout=timeout)
+
+
+def _write_system_file(path: str, content: str, *, mode: int = 0o644) -> None:
+    if os.path.islink(path):
+        raise HostError("E_PROTECTED", f"拒绝写入符号链接: {path}")
+    try:
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, mode=0o755, exist_ok=True)
+        _atomic_write(path, content, mode=mode)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.EROFS, errno.EPERM, errno.EACCES) or not _use_systemd_run():
+            raise HostError("E_IO", f"写入 {path} 失败: {exc}") from exc
+    rc, _out, err = _run_privileged(
+        [sys.executable, "-c", _SYSTEM_WRITE_PY, path, f"{mode:o}"],
+        timeout=20.0,
+        input_text=content,
+    )
+    if rc != 0:
+        raise HostError("E_IO", f"写入 {path} 失败: {(err or '').strip()[:200]}")
+
+
+def _remove_system_file(path: str) -> None:
+    if os.path.islink(path):
+        raise HostError("E_PROTECTED", f"拒绝删除符号链接: {path}")
+    if not os.path.lexists(path):
+        return
+    try:
+        os.unlink(path)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.EROFS, errno.EPERM, errno.EACCES) or not _use_systemd_run():
+            raise HostError("E_IO", f"删除 {path} 失败: {exc}") from exc
+    rc, _out, err = _run_privileged(
+        [sys.executable, "-c", _SYSTEM_REMOVE_PY, path],
+        timeout=20.0,
+    )
+    if rc != 0:
+        raise HostError("E_IO", f"删除 {path} 失败: {(err or '').strip()[:200]}")
+
+
+def _parse_meminfo_bytes() -> dict[str, int]:
+    values: dict[str, int] = {}
+    for line in _read_text(os.path.join(PROC_ROOT, "meminfo")).splitlines():
+        key, _, rest = line.partition(":")
+        parts = rest.strip().split()
+        if parts and parts[0].isdigit():
+            values[key.strip()] = int(parts[0]) * 1024
+    return values
+
+
+def _parse_proc_swaps() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    lines = _read_text(os.path.join(PROC_ROOT, "swaps")).splitlines()
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        size_bytes = int(parts[2]) * 1024 if parts[2].isdigit() else 0
+        used_bytes = int(parts[3]) * 1024 if parts[3].isdigit() else 0
+        entries.append(
+            {
+                "path": parts[0],
+                "type": parts[1],
+                "sizeBytes": size_bytes,
+                "usedBytes": used_bytes,
+            }
+        )
+    return entries
+
+
+def _root_free_bytes(probe_dir: str) -> Optional[int]:
+    if DISK_FREE_OVERRIDE is not None:
+        return int(DISK_FREE_OVERRIDE)
+    candidate = probe_dir
+    while candidate and not os.path.exists(candidate):
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+    try:
+        stat = os.statvfs(candidate or "/")
+        return int(stat.f_bavail * stat.f_frsize)
+    except OSError:
+        return None
+
+
+def _detect_mount_fstype(target_path: str) -> str:
+    target = os.path.abspath(target_path)
+    best_mount = ""
+    best_fs = ""
+    for line in _read_text(os.path.join(PROC_ROOT, "mounts")).splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mountpoint, fstype = parts[1], parts[2]
+        if target == mountpoint or mountpoint == "/" or target.startswith(mountpoint.rstrip("/") + "/"):
+            if len(mountpoint) >= len(best_mount):
+                best_mount = mountpoint
+                best_fs = fstype
+    return best_fs.lower()
+
+
+def _fstab_has_managed_swap() -> bool:
+    for line in _read_text(_fstab_path()).splitlines():
+        if SWAP_MARKER in line and not line.lstrip().startswith("#"):
+            return True
+    return False
+
+
+def _read_swappiness() -> Optional[int]:
+    raw = _read_text(os.path.join(PROC_ROOT, "sys", "vm", "swappiness")).strip()
+    return int(raw) if raw.isdigit() else None
+
+
+def _collect_swap_status() -> dict[str, Any]:
+    meminfo = _parse_meminfo_bytes()
+    sources = _parse_proc_swaps()
+    total_bytes = meminfo.get("SwapTotal", 0)
+    free_bytes = meminfo.get("SwapFree", 0)
+    if total_bytes == 0 and sources:
+        total_bytes = sum(item["sizeBytes"] for item in sources)
+        used_bytes = sum(item["usedBytes"] for item in sources)
+    else:
+        used_bytes = max(0, total_bytes - free_bytes) if total_bytes > 0 else 0
+    percent = round(used_bytes / total_bytes * 100, 1) if total_bytes > 0 else 0.0
+
+    source_paths = [item["path"] for item in sources]
+    has_managed_source = any(path == SWAPFILE_PATH for path in source_paths)
+    has_managed_fstab = _fstab_has_managed_swap()
+    managed = has_managed_source or (
+        has_managed_fstab and not any(path != SWAPFILE_PATH for path in source_paths)
+    )
+    active = total_bytes > 0 or bool(sources)
+    external = active and any(path != SWAPFILE_PATH for path in source_paths)
+    if active and not sources and not has_managed_fstab:
+        external = True
+
+    return {
+        "active": active,
+        "managed": bool(managed),
+        "external": bool(external),
+        "totalBytes": total_bytes,
+        "usedBytes": used_bytes,
+        "percent": percent,
+        "memTotalBytes": meminfo.get("MemTotal"),
+        "rootFreeBytes": _root_free_bytes(os.path.dirname(os.path.abspath(SWAPFILE_PATH))),
+        "swappiness": _read_swappiness(),
+        "sources": source_paths,
+    }
+
+
+def _collect_bbr_status() -> dict[str, Any]:
+    available_raw = _read_text(
+        os.path.join(PROC_ROOT, "sys", "net", "ipv4", "tcp_available_congestion_control")
+    )
+    available = [token.strip() for token in available_raw.split() if token.strip()]
+    congestion = _read_text(
+        os.path.join(PROC_ROOT, "sys", "net", "ipv4", "tcp_congestion_control")
+    ).strip() or None
+    qdisc = _read_text(os.path.join(PROC_ROOT, "sys", "core", "default_qdisc") if False else os.path.join(PROC_ROOT, "sys", "net", "core", "default_qdisc")).strip() or None
+    supported = "bbr" in available
+    enabled = congestion == "bbr"
+    return {
+        "supported": supported,
+        "enabled": enabled,
+        "congestionControl": congestion,
+        "qdisc": qdisc,
+        "available": available,
+    }
+
+
+def _parse_journal_disk_usage(text: str) -> Optional[int]:
+    match = re.search(
+        r"(?:take\s+up|共占用|占用)?\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B|[KMGT])\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    factor = _SIZE_UNIT_FACTORS.get(unit)
+    if factor is None:
+        return None
+    return int(round(value * factor))
+
+
+def _read_journald_max_use() -> tuple[Optional[str], bool]:
+    dropin = os.path.join(_journald_conf_d_dir(), JOURNALD_DROPIN_FILE)
+    if not os.path.isfile(dropin):
+        return None, False
+    max_use: Optional[str] = None
+    for line in _read_text(dropin).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        if key.strip() == "SystemMaxUse":
+            max_use = value.strip() or None
+    return max_use, max_use is not None
+
+
+def _collect_journal_status() -> dict[str, Any]:
+    rc, stdout, _stderr = _run(["journalctl", "--disk-usage"], timeout=6.0)
+    available = rc == 0
+    used_bytes = _parse_journal_disk_usage(stdout) if available else None
+    max_use, managed = _read_journald_max_use()
+    return {
+        "available": available,
+        "usedBytes": used_bytes,
+        "maxUse": max_use,
+        "managed": managed,
+    }
+
+
+def _apt_available() -> bool:
+    if APT_AVAILABLE is not None:
+        return bool(APT_AVAILABLE)
+    if RUNNER is not None:
+        return _run(["apt-get", "--version"], timeout=4.0)[0] == 0
+    return shutil.which("apt-get") is not None
+
+
+def _measure_apt_cache_bytes() -> int:
+    if not os.path.isdir(APT_CACHE_DIR) or os.path.islink(APT_CACHE_DIR):
+        return 0
+    total = 0
+    for scan_dir in (APT_CACHE_DIR, os.path.join(APT_CACHE_DIR, "partial")):
+        if not os.path.isdir(scan_dir) or os.path.islink(scan_dir):
+            continue
+        try:
+            with os.scandir(scan_dir) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        continue
+                    if entry.name == "lock":
+                        continue
+                    try:
+                        total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _collect_apt_status() -> dict[str, Any]:
+    available = _apt_available()
+    return {
+        "available": available,
+        "cacheBytes": _measure_apt_cache_bytes() if available else 0,
+    }
+
+
+def tune_status_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    return ok(
+        {
+            "swap": _collect_swap_status(),
+            "bbr": _collect_bbr_status(),
+            "journal": _collect_journal_status(),
+            "apt": _collect_apt_status(),
+        }
+    )
+
+
+def _update_fstab_swap(enable: bool) -> None:
+    fstab = _fstab_path()
+    lines = _read_text(fstab).splitlines()
+    kept = [line for line in lines if SWAP_MARKER not in line]
+    if enable:
+        kept.append(f"{SWAPFILE_PATH} none swap sw 0 0 {SWAP_MARKER}")
+    content = ("\n".join(kept) + "\n") if kept else ""
+    if enable or os.path.lexists(fstab):
+        _write_system_file(fstab, content, mode=0o644)
+
+
+def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    action = _as_text(params.get("action"))
+    if action not in ("create", "remove"):
+        raise HostError("E_BAD_REQUEST", "action 必须是 create 或 remove")
+
+    if os.path.islink(SWAPFILE_PATH):
+        raise HostError("E_PROTECTED", f"拒绝操作符号链接: {SWAPFILE_PATH}")
+
+    current = _collect_swap_status()
+    if action == "create":
+        size_gb = _int_param(params, "sizeGb", 2)
+        if size_gb not in SWAP_SIZES_GB:
+            raise HostError("E_BAD_REQUEST", "sizeGb 仅支持 1、2 或 4")
+        if current["active"]:
+            raise HostError("E_CONFLICT", "主机已开启 Swap，不重复叠加；如需调整请先关闭现有受管 Swap")
+        required_bytes = (size_gb + 1) * 1024 ** 3
+        free_bytes = current["rootFreeBytes"]
+        if free_bytes is not None and free_bytes < required_bytes:
+            free_gib = round(free_bytes / (1024 ** 3), 1)
+            raise HostError(
+                "E_INVALID",
+                f"根分区可用空间不足：需至少 {size_gb + 1} GiB（预留 1 GiB），当前可用 {free_gib} GiB",
+            )
+        if os.path.lexists(SWAPFILE_PATH):
+            _remove_system_file(SWAPFILE_PATH)
+
+        fstype = _detect_mount_fstype(SWAPFILE_PATH)
+        size_mb = size_gb * 1024
+        if fstype == "btrfs":
+            _run_privileged(["truncate", "-s", "0", SWAPFILE_PATH], timeout=15.0)
+            chattr_rc, _out, chattr_err = _run_privileged(["chattr", "+C", SWAPFILE_PATH], timeout=15.0)
+            if chattr_rc != 0:
+                _remove_system_file(SWAPFILE_PATH)
+                raise HostError("E_UNSUPPORTED", f"Btrfs 关闭 COW 失败: {(chattr_err or '').strip()[:160]}")
+            alloc_rc, _out, alloc_err = _run_privileged(
+                ["dd", "if=/dev/zero", f"of={SWAPFILE_PATH}", "bs=1M", f"count={size_mb}", "status=none"],
+                timeout=120.0,
+            )
+        else:
+            alloc_rc, _out, alloc_err = _run_privileged(
+                ["fallocate", "-l", f"{size_gb}G", SWAPFILE_PATH],
+                timeout=60.0,
+            )
+            if alloc_rc != 0:
+                _remove_system_file(SWAPFILE_PATH)
+                alloc_rc, _out, alloc_err = _run_privileged(
+                    ["dd", "if=/dev/zero", f"of={SWAPFILE_PATH}", "bs=1M", f"count={size_mb}", "status=none"],
+                    timeout=120.0,
+                )
+        if alloc_rc != 0:
+            _remove_system_file(SWAPFILE_PATH)
+            raise HostError("E_INVALID", f"创建 swapfile 失败: {(alloc_err or '').strip()[:200]}")
+
+        for step_name, argv in (
+            ("chmod", ["chmod", "0600", SWAPFILE_PATH]),
+            ("mkswap", ["mkswap", SWAPFILE_PATH]),
+            ("swapon", ["swapon", SWAPFILE_PATH]),
+        ):
+            rc, _out, err = _run_privileged(argv, timeout=60.0)
+            if rc != 0:
+                _remove_system_file(SWAPFILE_PATH)
+                raise HostError(
+                    "E_UNSUPPORTED",
+                    f"执行 {step_name} 失败（部分容器内核不支持 swapon）: {(err or '').strip()[:200]}",
+                )
+
+        _update_fstab_swap(True)
+        _write_system_file(
+            os.path.join(_sysctl_d_dir(), SWAP_SYSCTL_FILE),
+            "vm.swappiness = 10\n",
+            mode=0o644,
+        )
+        _run_privileged(["sysctl", "-w", "vm.swappiness=10"], timeout=10.0)
+        return ok({"action": "create", "sizeGb": size_gb, "swap": _collect_swap_status()})
+
+    # action == "remove"
+    if current["external"] and not current["managed"]:
+        raise HostError("E_PROTECTED", "当前 Swap 为系统自带或外部配置（分区/zram），面板不予删除")
+    if current["active"] or SWAPFILE_PATH in current["sources"]:
+        rc, _out, err = _run_privileged(["swapoff", SWAPFILE_PATH], timeout=60.0)
+        if rc != 0:
+            raise HostError("E_BAD_REQUEST", f"swapoff 失败: {(err or '').strip()[:200]}")
+    _remove_system_file(SWAPFILE_PATH)
+    _update_fstab_swap(False)
+    _remove_system_file(os.path.join(_sysctl_d_dir(), SWAP_SYSCTL_FILE))
+    return ok({"action": "remove", "swap": _collect_swap_status()})
+
+
+def tune_bbr_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    enabled = _bool_param(params, "enabled")
+    bbr = _collect_bbr_status()
+    conf_path = os.path.join(_sysctl_d_dir(), BBR_SYSCTL_FILE)
+
+    if enabled:
+        if not bbr["supported"]:
+            raise HostError("E_UNSUPPORTED", "当前内核不支持 TCP BBR（常见于 OpenVZ/LXC 等受限环境）")
+        _write_system_file(
+            conf_path,
+            "net.core.default_qdisc = fq\nnet.ipv4.tcp_congestion_control = bbr\n",
+            mode=0o644,
+        )
+        q_rc, _out, q_err = _run_privileged(["sysctl", "-w", "net.core.default_qdisc=fq"], timeout=10.0)
+        b_rc, _out, b_err = _run_privileged(
+            ["sysctl", "-w", "net.ipv4.tcp_congestion_control=bbr"], timeout=10.0
+        )
+        if q_rc != 0 or b_rc != 0:
+            _remove_system_file(conf_path)
+            detail = (b_err or q_err or "").strip()[:200]
+            raise HostError("E_UNSUPPORTED", f"启用 TCP BBR 失败: {detail}")
+        return ok({"enabled": True, "bbr": _collect_bbr_status()})
+
+    _remove_system_file(conf_path)
+    fallback = "cubic" if "cubic" in bbr["available"] else next(
+        (item for item in bbr["available"] if item != "bbr"), "cubic"
+    )
+    rc, _out, err = _run_privileged(
+        ["sysctl", "-w", f"net.ipv4.tcp_congestion_control={fallback}"], timeout=10.0
+    )
+    if rc != 0:
+        raise HostError("E_BAD_REQUEST", f"恢复拥塞控制算法 {fallback} 失败: {(err or '').strip()[:200]}")
+    return ok({"enabled": False, "bbr": _collect_bbr_status()})
+
+
+def tune_journal_vacuum_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    max_mb = _int_param(params, "maxSizeMb", 100)
+    if max_mb < MIN_JOURNAL_MAX_MB or max_mb > MAX_JOURNAL_MAX_MB:
+        raise HostError(
+            "E_BAD_REQUEST",
+            f"maxSizeMb 必须在 {MIN_JOURNAL_MAX_MB}..{MAX_JOURNAL_MAX_MB} 之间",
+        )
+    before = _collect_journal_status()
+    if not before["available"]:
+        raise HostError("E_UNSUPPORTED", "journalctl 不可用")
+    dropin = os.path.join(_journald_conf_d_dir(), JOURNALD_DROPIN_FILE)
+    _write_system_file(dropin, f"[Journal]\nSystemMaxUse={max_mb}M\n", mode=0o644)
+    _run_privileged(["systemctl", "restart", "systemd-journald"], timeout=30.0)
+    rc, _out, err = _run_privileged(["journalctl", f"--vacuum-size={max_mb}M"], timeout=60.0)
+    if rc != 0:
+        raise HostError("E_BAD_REQUEST", f"清理 journald 日志失败: {(err or '').strip()[:200]}")
+    after = _collect_journal_status()
+    before_bytes = before["usedBytes"]
+    after_bytes = after["usedBytes"]
+    freed_bytes = (
+        max(0, before_bytes - after_bytes)
+        if before_bytes is not None and after_bytes is not None
+        else None
+    )
+    return ok(
+        {
+            "maxSizeMb": max_mb,
+            "beforeBytes": before_bytes,
+            "afterBytes": after_bytes,
+            "freedBytes": freed_bytes,
+            "journal": after,
+        }
+    )
+
+
+def tune_apt_clean_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    if not _apt_available():
+        raise HostError("E_UNSUPPORTED", "未检测到 apt-get，当前系统不适用此项")
+    before_bytes = _measure_apt_cache_bytes()
+    rc, _out, err = _run_privileged(
+        ["apt-get", "clean"],
+        timeout=60.0,
+        env={"DEBIAN_FRONTEND": "noninteractive"},
+    )
+    if rc != 0:
+        raise HostError("E_BAD_REQUEST", f"apt-get clean 执行失败: {(err or '').strip()[:200]}")
+    after_bytes = _measure_apt_cache_bytes()
+    return ok(
+        {
+            "beforeBytes": before_bytes,
+            "afterBytes": after_bytes,
+            "freedBytes": max(0, before_bytes - after_bytes),
+            "apt": _collect_apt_status(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # 动词分发 / 入口
 # ---------------------------------------------------------------------------
 
@@ -3135,6 +3700,11 @@ _VERB_HANDLERS = {
     "cron.list": cron_list_verb,
     "cron.set": cron_set_verb,
     "cleanup": cleanup_verb,
+    "tune.status": tune_status_verb,
+    "tune.swap": tune_swap_verb,
+    "tune.bbr": tune_bbr_verb,
+    "tune.journal-vacuum": tune_journal_vacuum_verb,
+    "tune.apt-clean": tune_apt_clean_verb,
     "__fw_rollback": fw_rollback_verb,
 }
 

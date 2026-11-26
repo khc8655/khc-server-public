@@ -9,6 +9,7 @@ export interface StatusTile {
   label: string;
   value: string;
   tone: 'ok' | 'warn' | 'danger' | 'neutral';
+  hint?: string;
   onClick?: () => void;
 }
 
@@ -32,11 +33,13 @@ export function StatusBar({
           >
             <span className="ui-statusbar-label">{tile.label}</span>
             <span className="ui-statusbar-value">{tile.value}</span>
+            {tile.hint ? <span className="ui-statusbar-hint">{tile.hint}</span> : null}
           </button>
         ) : (
           <div key={tile.key} className="ui-statusbar-tile" data-tone={tile.tone}>
             <span className="ui-statusbar-label">{tile.label}</span>
             <span className="ui-statusbar-value">{tile.value}</span>
+            {tile.hint ? <span className="ui-statusbar-hint">{tile.hint}</span> : null}
           </div>
         ),
       )}

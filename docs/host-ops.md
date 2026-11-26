@@ -1,6 +1,6 @@
 # 主机运维（Hub 本机 + Peer 按需 SSH）设计
 
-> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
+> 状态：现行 ｜ 最后核验：2026-11-26 ｜ 关联：ADR-0007、docs/host-ops-async.md、docs/host-ops-e2e.md
 > 范围：主机运维写操作与 Peer 按需 SSH
 > 本文是“主机运维写操作 + Peer 运维”的**唯一权威来源**。只读的 Hub VM 运维卡片（`agent/khc/ops.py`、UI 变更单 #007）已实现，不在此重复。
 
@@ -104,6 +104,11 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `keys.remove` | 写 | `{ user?, fingerprint }` | 只删标记块内的条目 |
 | `cron.list` | 读 | — | 只列 `/etc/cron.d` 下 `khc-*` 受管条目与面板外文件（只读展示） |
 | `cron.set` | 写 | `{ name, content?, enabled?, remove? }` | 只写 `/etc/cron.d/khc-<name>`；内容严格校验（见 §4.2） |
+| `tune.status` | 读 | — | 聚合返回本机 Swap 现状、BBR 内核支持与状态、journald 占用/限额、APT 缓存占用（只读） |
+| `tune.swap` | 写 | `{ action: "create"\|"remove", sizeGb?: 1\|2\|4 }` | 经 `call_task` + `systemd-run` 创建/关闭 `/swapfile`（校验不与已有 swap 叠加、可用空间 `>= sizeGb+1G`、Btrfs `chattr +C`、`0600`、fstab `# khc-managed-swap` 与 `vm.swappiness=10`） |
+| `tune.bbr` | 写 | `{ enabled: bool }` | 写/删 `/etc/sysctl.d/99-khc-bbr.conf` 并即时切换 `fq + bbr`（内核不支持返回 `E_UNSUPPORTED`） |
+| `tune.journal-vacuum` | 写 | `{ maxSizeMb?: 50..500 }` | 写 `/etc/systemd/journald.conf.d/99-khc.conf`（`SystemMaxUse`）、重启 journald 并按阈值清理日志 |
+| `tune.apt-clean` | 写 | — | 仅 Debian/Ubuntu 执行 `apt-get clean` 释放缓存并返回释放字节数 |
 
 `user` 默认 `root`；仅允许 `/etc/passwd` 中存在且有家目录的用户。
 

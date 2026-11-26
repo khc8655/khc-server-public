@@ -39,7 +39,12 @@ export type HostOpsVerb =
   | 'logs.errors'
   | 'cron.list'
   | 'cron.set'
-  | 'cleanup';
+  | 'cleanup'
+  | 'tune.status'
+  | 'tune.swap'
+  | 'tune.bbr'
+  | 'tune.journal-vacuum'
+  | 'tune.apt-clean';
 
 export interface HostOpsPeerConfig {
   enabled: boolean;
@@ -1308,6 +1313,88 @@ export function cachedHostOpsStatus(
         : collected > 10_000_000_000
           ? Math.floor(collected / 1000)
           : collected * 1000,
+  };
+}
+
+export interface HostOpsTuneSwap {
+  active: boolean;
+  managed: boolean;
+  external: boolean;
+  totalBytes: number;
+  usedBytes: number;
+  percent: number;
+  memTotalBytes: number | null;
+  rootFreeBytes: number | null;
+  swappiness: number | null;
+  sources: string[];
+}
+
+export interface HostOpsTuneBbr {
+  supported: boolean;
+  enabled: boolean;
+  congestionControl: string | null;
+  qdisc: string | null;
+}
+
+export interface HostOpsTuneJournal {
+  available: boolean;
+  usedBytes: number | null;
+  maxUse: string | null;
+  managed: boolean;
+}
+
+export interface HostOpsTuneApt {
+  available: boolean;
+  cacheBytes: number;
+}
+
+export interface HostOpsTuneStatus {
+  swap: HostOpsTuneSwap;
+  bbr: HostOpsTuneBbr;
+  journal: HostOpsTuneJournal;
+  apt: HostOpsTuneApt;
+}
+
+export function normalizeTuneStatus(data: unknown): HostOpsTuneStatus {
+  const root = asRecord(data);
+  const swapRec = asRecord(root.swap);
+  const bbrRec = asRecord(root.bbr);
+  const journalRec = asRecord(root.journal);
+  const aptRec = asRecord(root.apt);
+
+  const sources = Array.isArray(swapRec.sources)
+    ? swapRec.sources.map((item) => asString(item)).filter(Boolean)
+    : [];
+
+  return {
+    swap: {
+      active: asBoolean(swapRec.active) === true,
+      managed: asBoolean(swapRec.managed) === true,
+      external: asBoolean(swapRec.external) === true,
+      totalBytes: asNumber(swapRec.totalBytes) ?? 0,
+      usedBytes: asNumber(swapRec.usedBytes) ?? 0,
+      percent: asNumber(swapRec.percent) ?? 0,
+      memTotalBytes: asNumber(swapRec.memTotalBytes),
+      rootFreeBytes: asNumber(swapRec.rootFreeBytes),
+      swappiness: asNumber(swapRec.swappiness),
+      sources,
+    },
+    bbr: {
+      supported: asBoolean(bbrRec.supported) === true,
+      enabled: asBoolean(bbrRec.enabled) === true,
+      congestionControl: asString(bbrRec.congestionControl) || null,
+      qdisc: asString(bbrRec.qdisc) || null,
+    },
+    journal: {
+      available: asBoolean(journalRec.available) === true,
+      usedBytes: asNumber(journalRec.usedBytes),
+      maxUse: asString(journalRec.maxUse) || null,
+      managed: asBoolean(journalRec.managed) === true,
+    },
+    apt: {
+      available: asBoolean(aptRec.available) === true,
+      cacheBytes: asNumber(aptRec.cacheBytes) ?? 0,
+    },
   };
 }
 

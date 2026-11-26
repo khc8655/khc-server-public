@@ -59,7 +59,7 @@ from khc.util import (
 )
 
 APP_NAME = "host-ops"
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 DATA_DIRNAME = "host-ops"
 KEY_FILENAME = "id_ed25519"
 SCRIPT_FILENAME = "khc-host"
@@ -70,6 +70,8 @@ _CALL_ACTIONS = ("call", "call_task")
 DEFAULT_PORT = 22
 DEFAULT_USER = "khcops"
 SSH_TIMEOUT = 6.0
+TASK_TIMEOUT = 180.0
+_LONG_TASK_VERBS = frozenset({"fw.apply", "tune.swap", "tune.journal-vacuum", "tune.apt-clean"})
 PROBE_TIMEOUT = 8.0
 SECURITY_CACHE_TTL = 120.0
 MAX_SSH_STDIN = 64 * 1024
@@ -1316,7 +1318,7 @@ class HostOps(Adapter):
     def action_call_task(self, ctx: Ctx, body: Mapping[str, Any]) -> dict[str, Any]:
         """任务模式调用（``actions.call_task``）：参数/返回值与 ``action_call`` 完全一致。
 
-        #17：``fw.apply`` 可能超过 6 秒同步窗口，改由后台任务执行；
+        #17：``fw.apply`` / ``tune.*`` 可能超过 6 秒同步窗口，改由后台任务执行；
         Worker/UI 轮询 ``GET /tasks/<taskId>``，``done`` 时 ``task.result`` 就是这里的返回。
         写锁由内核在提交任务时获取、任务结束时释放，适配器**不要**重复加锁。
         """
@@ -1422,7 +1424,7 @@ class HostOps(Adapter):
             result = ctx.run(
                 [sys.executable, self.script_path(ctx), verb],
                 input=payload,
-                timeout=SSH_TIMEOUT,
+                timeout=TASK_TIMEOUT if verb in _LONG_TASK_VERBS else SSH_TIMEOUT,
                 check=False,
                 env={
                     "KHC_HOST_STATE_DIR": self.self_state_dir(ctx),
