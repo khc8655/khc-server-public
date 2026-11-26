@@ -63,6 +63,7 @@ export interface KeyValueItem {
   mono?: boolean;
   mode?: TruncateMode;
   copyValue?: string;
+  wrap?: boolean;
 }
 
 export interface KeyValueProps {
@@ -73,12 +74,16 @@ export function KeyValue({ items }: KeyValueProps) {
   return (
     <dl className="ui-kv">
       {items.map((item) => (
-        <div className="ui-kv-row" key={item.key}>
+        <div className={`ui-kv-row${item.wrap ? ' is-wrap' : ''}`} key={item.key}>
           <dt className="ui-kv-key">
             <Truncate text={item.key} />
           </dt>
-          <dd className={`ui-kv-value${item.mono ? ' mono' : ''}`}>
-            <Truncate text={item.value} mode={item.mode ?? 'end'} />
+          <dd className={`ui-kv-value${item.mono ? ' mono' : ''}${item.wrap ? ' is-wrap' : ''}`}>
+            {item.wrap ? (
+              <span className="ui-kv-text">{item.value}</span>
+            ) : (
+              <Truncate text={item.value} mode={item.mode ?? 'end'} />
+            )}
             {item.copyValue !== undefined ? (
               <CopyIcon value={item.copyValue} />
             ) : null}

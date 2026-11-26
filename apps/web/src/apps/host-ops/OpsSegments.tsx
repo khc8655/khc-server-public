@@ -4,7 +4,7 @@ import type { SshKey } from '@khc/contracts';
 import { AdvancedSection, ConfirmAction } from '../../patterns';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
 import { fetchSshKeys } from '../../data/sshKeys';
-import { action, type ActionRef } from '../../registry/actions';
+import { action, actionLabel, type ActionRef } from '../../registry/actions';
 import {
   HOST_OPS_TARGET_SELF,
   HostOpsQueryError,
@@ -16,6 +16,7 @@ import {
   normalizeLogErrors,
   normalizeProcesses,
   normalizeServices,
+  normalizeSlimServices,
   normalizeSvcLogs,
   normalizeStatus,
   normalizeVersion,
@@ -27,6 +28,7 @@ import {
   type HostOpsLogEntry,
   type HostOpsProcess,
   type HostOpsService,
+  type HostOpsSlimService,
 } from '../../data/hostOps';
 import {
   Banner,
@@ -41,12 +43,14 @@ import {
   Table,
   Textarea,
   TextInput,
+  Truncate,
   useToast,
   type ColumnDef,
 } from '../../ui';
 import { zh, fmt } from '../../i18n/zh';
 import { formatAbsoluteTime, formatBytes, formatPercent } from '../../i18n/format';
 import { businessProcesses, countSystemProcesses } from './processFilter';
+import { lookupProcessGuide, lookupSlimServiceGuide } from './serviceGuide';
 import { HostOpsErrorBanner, hostOpsErrorTitle } from './Common';
 import { refreshAfterServiceWrite } from './refreshAfterWrite';
 import { isManagedUnit } from '../../data/managedUnits';
@@ -80,16 +84,26 @@ function serviceVerbParams(service: HostOpsService): { unit: string; user?: stri
 export function ServicesSegment({
   hubId,
   disabled,
+  view,
+  onViewChange,
   onOpenLogs,
 }: {
   hubId: string;
   disabled: boolean;
+  view?: 'managed' | 'slim';
+  onViewChange?: (view: 'managed' | 'slim') => void;
   onOpenLogs: (unit: string, user?: string | null) => void;
 }) {
+  const [internalView, setInternalView] = useState<'managed' | 'slim'>('managed');
+  const activeView = view ?? internalView;
+  const setActiveView = onViewChange ?? setInternalView;
+
   const [actionError, setActionError] = useState<HostOpsError | null>(null);
   const [restartTarget, setRestartTarget] = useState<HostOpsService | null>(null);
   // 清除失败状态的目标（U2）。与重启分开：两个确认框文案和后果完全不同。
   const [resetTarget, setResetTarget] = useState<HostOpsService | null>(null);
+  const [disableTarget, setDisableTarget] = useState<HostOpsSlimService | null>(null);
+  const [busySlimUnit, setBusySlimUnit] = useState<string | null>(null);
   const toast = useToast();
   const queryClient = useQueryClient();
   const { live } = useHubChannelsContext();
@@ -98,19 +112,62 @@ export function ServicesSegment({
     ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.list', {}),
     enabled: !disabled,
   });
+  const slimQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.slim-list', {}),
+    enabled: !disabled,
+  });
 
   const services = useMemo(
     () => (svcQuery.data ? normalizeServices(svcQuery.data.data) : undefined),
     [svcQuery.data],
   );
-  const error = actionError ?? queryHostOpsError(svcQuery.error);
-  const loading = svcQuery.isFetching;
-  const showSkeleton = svcQuery.isPending && svcQuery.isFetching && services === undefined;
+  const slimServices = useMemo(
+    () => (slimQuery.data ? normalizeSlimServices(slimQuery.data.data) : undefined),
+    [slimQuery.data],
+  );
+  const hasSlimServices = (slimServices?.length ?? 0) > 0 || activeView === 'slim';
+  const error =
+    actionError ??
+    queryHostOpsError(activeView === 'slim' ? slimQuery.error : svcQuery.error);
+  const loading = activeView === 'slim' ? slimQuery.isFetching : svcQuery.isFetching;
+  const showSkeleton =
+    activeView === 'slim'
+      ? slimQuery.isPending && slimQuery.isFetching && slimServices === undefined
+      : svcQuery.isPending && svcQuery.isFetching && services === undefined;
 
   const reload = async () => {
     if (disabled) return;
     setActionError(null);
-    await svcQuery.refetch();
+    await (activeView === 'slim' ? slimQuery.refetch() : svcQuery.refetch());
+  };
+
+  const toggleSlim = async (service: HostOpsSlimService, enable: boolean) => {
+    setBusySlimUnit(service.unit);
+    try {
+      const result = await callHostOps(
+        hubId,
+        HOST_OPS_TARGET_SELF,
+        enable ? 'svc.enable' : 'svc.disable',
+        { unit: service.unit },
+      );
+      if (!result.ok) {
+        if (result.error) setActionError(result.error);
+        throw new Error(result.error?.message || hostOpsErrorTitle(result.error));
+      }
+      setActionError(null);
+      if (!enable) setDisableTarget(null);
+      toast.show({
+        message: fmt(enable ? zh.hostOps.svc.enabled : zh.hostOps.svc.disabled, {
+          unit: service.unit,
+        }),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: hostOpsQueryKey(hubId, HOST_OPS_TARGET_SELF, 'svc.slim-list', {}),
+      });
+      await refreshAfterServiceWrite(queryClient, hubId, live);
+    } finally {
+      setBusySlimUnit(null);
+    }
   };
 
   const restart = async (service: HostOpsService) => {
@@ -175,8 +232,114 @@ export function ServicesSegment({
     { key: 'actions', type: 'actions', header: '' },
   ];
 
+  const slimColumns: ColumnDef<HostOpsSlimService>[] = [
+    {
+      key: 'unit',
+      type: 'name',
+      header: zh.hostOps.svc.unit,
+      value: (service) => service.unit,
+      dot: (service) => (service.running ? 'ok' : 'neutral'),
+      render: (service) => {
+        const guide = lookupSlimServiceGuide(service.id) ?? lookupSlimServiceGuide(service.unit);
+        return (
+          <span className="ui-cell-stack">
+            <span className="ui-cell-main">
+              <span
+                className={`ui-dot ui-dot-${service.running ? 'ok' : 'neutral'}`}
+                aria-hidden="true"
+              />
+              <span className="ui-cell-name">
+                <Truncate text={service.unit} />
+              </span>
+            </span>
+            {guide ? <span className="ui-cell-sub">{guide.shortLabel}</span> : null}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'memory',
+      type: 'mono',
+      header: zh.hostOps.svc.colMemory,
+      value: (service) =>
+        service.running && service.memoryBytes !== null ? formatBytes(service.memoryBytes) : '—',
+    },
+    {
+      key: 'status',
+      type: 'status',
+      header: zh.fields.status,
+      status: (service) => ({
+        tone: service.running ? 'ok' : 'neutral',
+        label: service.running ? zh.hostOps.svc.stateRunning : zh.hostOps.svc.stateStopped,
+      }),
+    },
+    {
+      key: 'actions',
+      type: 'actions',
+      header: '',
+      width: '164px',
+      render: (service) => (
+        <span className="ui-cell-actions" onClick={(event) => event.stopPropagation()}>
+          <Row gap={1}>
+            {service.running ? (
+              <Button
+                label={zh.hostOps.svc.disable}
+                size="sm"
+                variant="danger"
+                loading={busySlimUnit === service.unit}
+                disabled={disabled || service.blocked || (busySlimUnit !== null && busySlimUnit !== service.unit)}
+                disabledReason={
+                  disabled
+                    ? zh.channels.controlFailed
+                    : service.blockedReason ?? undefined
+                }
+                onClick={() => setDisableTarget(service)}
+              />
+            ) : (
+              <Button
+                label={zh.hostOps.svc.enable}
+                size="sm"
+                variant="default"
+                loading={busySlimUnit === service.unit}
+                disabled={disabled || (busySlimUnit !== null && busySlimUnit !== service.unit)}
+                disabledReason={disabled ? zh.channels.controlFailed : undefined}
+                onClick={() => void toggleSlim(service, true)}
+              />
+            )}
+            {service.canLogs ? (
+              <Button
+                label={actionLabel(action('hostOps.svcLogs'))}
+                size="sm"
+                variant="ghost"
+                onClick={() => onOpenLogs(service.unit)}
+              />
+            ) : null}
+          </Row>
+        </span>
+      ),
+    },
+  ];
+
   return (
     <Stack gap={3}>
+      {hasSlimServices ? (
+        <Row gap={2}>
+          <Segmented
+            value={activeView}
+            ariaLabel={zh.hostOps.services}
+            options={[
+              { value: 'managed', label: zh.hostOps.svc.tabManaged },
+              { value: 'slim', label: zh.hostOps.svc.tabSlim },
+            ]}
+            onChange={(next) => {
+              if (next === 'managed' || next === 'slim') {
+                setActionError(null);
+                setActiveView(next);
+              }
+            }}
+          />
+        </Row>
+      ) : null}
       {error ? <HostOpsErrorBanner error={error} onRetry={() => void reload()} /> : null}
       {showSkeleton ? (
         <Stack gap={2}>
@@ -185,39 +348,71 @@ export function ServicesSegment({
           <Skeleton height={10} width="70%" />
         </Stack>
       ) : null}
-      {/* 系统单元失败单独解释一次：行还在（透明），但不假装是面板该处理的事。 */}
-      {systemFailedCount > 0 ? (
-        <p className="ui-field-help">{fmt(zh.hostOps.svc.systemUnitsHint, { count: String(systemFailedCount) })}</p>
-      ) : null}
-      <Table
-        rows={services}
-        columns={columns}
-        rowKey={(service) => (service.user ? `${service.user}:${service.unit}` : service.unit)}
-        objectLabel={zh.hostOps.services}
-        rowActions={() => [
-          action('hostOps.svcLogs'),
-          action('hostOps.svcRestart'),
-          action('hostOps.svcResetFailed'),
-        ]}
-        rowActionDisabled={(ref, service) => {
-          if (disabled) return zh.channels.controlFailed;
-          if (validateServiceUnit(service.unit) === 'protected') return zh.hostOps.svc.protectedUnit;
-          // 清除失败状态只对「当前确实 failed」的单元有意义；对 active 单元点了什么也不会发生。
-          if (ref.id === 'hostOps.svcResetFailed' && service.active !== 'failed') {
-            return zh.hostOps.svc.resetFailedNotFailed;
-          }
-          return undefined;
-        }}
-        onRowAction={(ref, service) => {
-          if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit, service.user);
-          else if (ref.id === 'hostOps.svcResetFailed') setResetTarget(service);
-          else setRestartTarget(service);
-        }}
-        empty={{
-          icon: 'shield',
-          title: zh.ops.noData,
-        }}
-      />
+      {activeView === 'slim' ? (
+        <Table
+          rows={slimServices}
+          columns={slimColumns}
+          rowKey={(service) => service.id}
+          objectLabel={zh.hostOps.svc.tabSlim}
+          rowActions={(service) => [
+            ...(service.canLogs ? [action('hostOps.svcLogs')] : []),
+            service.running ? action('hostOps.svcDisable') : action('hostOps.svcEnable'),
+          ]}
+          rowActionDisabled={(ref, service) => {
+            if (ref.id === 'hostOps.svcLogs') return undefined;
+            if (disabled) return zh.channels.controlFailed;
+            if (ref.id === 'hostOps.svcDisable' && service.blocked) {
+              return service.blockedReason ?? zh.hostOps.svc.protectedUnit;
+            }
+            return undefined;
+          }}
+          onRowAction={(ref, service) => {
+            if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit);
+            else if (ref.id === 'hostOps.svcDisable') setDisableTarget(service);
+            else void toggleSlim(service, true);
+          }}
+          empty={{
+            icon: 'shield',
+            title: zh.ops.noData,
+          }}
+        />
+      ) : (
+        <>
+          {/* 系统单元失败单独解释一次：行还在（透明），但不假装是面板该处理的事。 */}
+          {systemFailedCount > 0 ? (
+            <p className="ui-field-help">{fmt(zh.hostOps.svc.systemUnitsHint, { count: String(systemFailedCount) })}</p>
+          ) : null}
+          <Table
+            rows={services}
+            columns={columns}
+            rowKey={(service) => (service.user ? `${service.user}:${service.unit}` : service.unit)}
+            objectLabel={zh.hostOps.services}
+            rowActions={() => [
+              action('hostOps.svcLogs'),
+              action('hostOps.svcRestart'),
+              action('hostOps.svcResetFailed'),
+            ]}
+            rowActionDisabled={(ref, service) => {
+              if (disabled) return zh.channels.controlFailed;
+              if (validateServiceUnit(service.unit) === 'protected') return zh.hostOps.svc.protectedUnit;
+              // 清除失败状态只对「当前确实 failed」的单元有意义；对 active 单元点了什么也不会发生。
+              if (ref.id === 'hostOps.svcResetFailed' && service.active !== 'failed') {
+                return zh.hostOps.svc.resetFailedNotFailed;
+              }
+              return undefined;
+            }}
+            onRowAction={(ref, service) => {
+              if (ref.id === 'hostOps.svcLogs') onOpenLogs(service.unit, service.user);
+              else if (ref.id === 'hostOps.svcResetFailed') setResetTarget(service);
+              else setRestartTarget(service);
+            }}
+            empty={{
+              icon: 'shield',
+              title: zh.ops.noData,
+            }}
+          />
+        </>
+      )}
       <Row gap={2}>
         <Button
           label={zh.common.refresh}
@@ -230,10 +425,12 @@ export function ServicesSegment({
         />
       </Row>
 
-      <AdvancedSection title={zh.hostOps.logsErrors.sectionTitle}>
-        <p className="ui-field-help">{zh.hostOps.logsErrors.sectionHint}</p>
-        <SystemErrorsSegment hubId={hubId} disabled={disabled} />
-      </AdvancedSection>
+      {activeView === 'managed' ? (
+        <AdvancedSection title={zh.hostOps.logsErrors.sectionTitle}>
+          <p className="ui-field-help">{zh.hostOps.logsErrors.sectionHint}</p>
+          <SystemErrorsSegment hubId={hubId} disabled={disabled} />
+        </AdvancedSection>
+      ) : null}
 
       {restartTarget ? (
         <ConfirmAction
@@ -258,6 +455,19 @@ export function ServicesSegment({
           targetName={resetTarget.unit}
           onCancel={() => setResetTarget(null)}
           onConfirm={() => resetFailed(resetTarget)}
+        />
+      ) : null}
+
+      {disableTarget ? (
+        <ConfirmAction
+          open
+          action={action('hostOps.svcDisable')}
+          title={fmt(zh.hostOps.svc.disableTitle, { unit: disableTarget.unit })}
+          body={fmt(zh.hostOps.svc.disableBody, { units: disableTarget.units.join('、') })}
+          confirmLabel={zh.hostOps.svc.disable}
+          targetName={disableTarget.unit}
+          onCancel={() => setDisableTarget(null)}
+          onConfirm={() => toggleSlim(disableTarget, false)}
         />
       ) : null}
     </Stack>
@@ -684,6 +894,19 @@ export function ProcessesSegment({
       type: 'name',
       header: zh.hostOps.process.name,
       value: (process) => process.name,
+      render: (process) => {
+        const guide = lookupProcessGuide(process);
+        return (
+          <span className="ui-cell-stack">
+            <span className="ui-cell-main">
+              <span className="ui-cell-name">
+                <Truncate text={process.name} />
+              </span>
+            </span>
+            {guide ? <span className="ui-cell-sub">{guide.shortLabel}</span> : null}
+          </span>
+        );
+      },
     },
     {
       key: 'pid',

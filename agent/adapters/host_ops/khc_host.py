@@ -66,7 +66,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.7.0"
+SCRIPT_VERSION = "1.8.0"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -164,9 +164,12 @@ PUBLIC_VERBS = (
     "keys.add",
     "keys.remove",
     "svc.list",
+    "svc.slim-list",
     "svc.logs",
     "svc.restart",
     "svc.reset-failed",
+    "svc.disable",
+    "svc.enable",
     "logs.errors",
     "logs.security",
     "cron.list",
@@ -185,6 +188,8 @@ WRITE_VERBS = (
     "keys.remove",
     "svc.restart",
     "svc.reset-failed",
+    "svc.disable",
+    "svc.enable",
     "cron.set",
     "cleanup",
     "tune.swap",
@@ -2398,6 +2403,219 @@ def svc_reset_failed_verb(params: Mapping[str, Any], args: list[str]) -> dict[st
 
 
 # ---------------------------------------------------------------------------
+# svc.slim-list / svc.disable / svc.enable：保守白名单服务精简（只停用不卸载）
+# ---------------------------------------------------------------------------
+
+SLIM_SERVICE_WHITELIST: tuple[dict[str, Any], ...] = (
+    {"id": "ModemManager", "primary": "ModemManager.service", "units": ("ModemManager.service",)},
+    {"id": "udisks2", "primary": "udisks2.service", "units": ("udisks2.service",)},
+    {"id": "packagekit", "primary": "packagekit.service", "units": ("packagekit.service",)},
+    {"id": "fwupd", "primary": "fwupd.service", "units": ("fwupd.service", "fwupd-refresh.timer")},
+    {"id": "apport", "primary": "apport.service", "units": ("apport.service",)},
+    {"id": "whoopsie", "primary": "whoopsie.service", "units": ("whoopsie.service",)},
+    {"id": "motd-news", "primary": "motd-news.timer", "units": ("motd-news.timer",)},
+    {"id": "accounts-daemon", "primary": "accounts-daemon.service", "units": ("accounts-daemon.service",)},
+    {"id": "avahi", "primary": "avahi-daemon.service", "units": ("avahi-daemon.service", "avahi-daemon.socket")},
+    {"id": "cups", "primary": "cups.service", "units": ("cups.service", "cups.socket", "cups.path")},
+    {"id": "bluetooth", "primary": "bluetooth.service", "units": ("bluetooth.service",)},
+    {
+        "id": "snapd",
+        "primary": "snapd.service",
+        "units": ("snapd.service", "snapd.socket", "snapd.seeded.service"),
+        "require_empty_snap": True,
+    },
+)
+_SYSTEMD_MEM_SENTINEL = 1 << 62
+
+
+def _parse_memory_current(raw: str) -> Optional[int]:
+    text = (raw or "").strip()
+    if not text.isdigit():
+        return None
+    val = int(text)
+    if val < 0 or val >= _SYSTEMD_MEM_SENTINEL:
+        return None
+    return val
+
+
+def _query_systemd_units(units: Iterable[str]) -> dict[str, dict[str, str]]:
+    unit_list = [str(u) for u in units if str(u).strip()]
+    if not unit_list:
+        return {}
+    rc, stdout, stderr = _run(
+        [
+            "systemctl",
+            "show",
+            *unit_list,
+            "--property=Id,LoadState,ActiveState,SubState,UnitFileState,MemoryCurrent,Description",
+        ],
+        timeout=10.0,
+    )
+    if rc != 0:
+        raise HostError("E_UNSUPPORTED", f"systemctl show 不可用: {(stderr or stdout).strip()[:200]}")
+    result: dict[str, dict[str, str]] = {}
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", stdout.strip()) if block.strip()]
+    for index, block in enumerate(blocks):
+        props: dict[str, str] = {}
+        for line in block.splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                props[key.strip()] = value.strip()
+        unit_id = props.get("Id") or (unit_list[index] if index < len(unit_list) else "")
+        if unit_id:
+            result[unit_id] = props
+    return result
+
+
+def _snap_installed_packages() -> Optional[list[str]]:
+    """返回已安装 snap 包名列表；未装 snap 返回 []；无法确认返回 None（保守拦截）。"""
+
+    rc, stdout, stderr = _run(["snap", "list"], timeout=8.0)
+    combined = f"{stdout}\n{stderr}".lower()
+    if rc == 127 or "no snaps are installed" in combined:
+        return []
+    if rc != 0:
+        return None
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return []
+    return [line.split()[0] for line in lines[1:] if line.split()]
+
+
+def _resolve_slim_entry(unit_or_id: str) -> dict[str, Any]:
+    key = _as_text(unit_or_id)
+    if not key:
+        raise HostError("E_BAD_REQUEST", "缺少参数 unit")
+    for entry in SLIM_SERVICE_WHITELIST:
+        if key == entry["id"] or key == entry["primary"] or key in entry["units"]:
+            return entry
+    raise HostError("E_PROTECTED", f"服务不在可精简白名单内，拒绝操作: {key}")
+
+
+def _build_slim_item(
+    entry: Mapping[str, Any],
+    unit_props: Mapping[str, Mapping[str, str]],
+    snaps: Optional[list[str]],
+) -> Optional[dict[str, Any]]:
+    present_units: list[str] = []
+    for unit_name in entry["units"]:
+        props = unit_props.get(unit_name)
+        if not props:
+            continue
+        load_state = props.get("LoadState", "")
+        if load_state in ("", "not-found"):
+            continue
+        present_units.append(unit_name)
+    if not present_units:
+        return None
+
+    primary = entry["primary"] if entry["primary"] in present_units else present_units[0]
+    p_props = unit_props[primary]
+    active = p_props.get("ActiveState") or "inactive"
+    sub = p_props.get("SubState") or "dead"
+    enabled = p_props.get("UnitFileState") or "disabled"
+    running = any(unit_props[u].get("ActiveState") == "active" for u in present_units)
+    mem_values = [
+        mem
+        for u in present_units
+        for mem in (_parse_memory_current(unit_props[u].get("MemoryCurrent", "")),)
+        if mem is not None
+    ]
+    memory_bytes = max(mem_values) if mem_values else None
+
+    blocked = False
+    blocked_reason: Optional[str] = None
+    if entry.get("require_empty_snap"):
+        if snaps is None:
+            blocked = True
+            blocked_reason = "无法确认是否安装 snap 应用，已拒绝停用 snapd"
+        elif len(snaps) > 0:
+            preview = "、".join(snaps[:3]) + (" 等" if len(snaps) > 3 else "")
+            blocked = True
+            blocked_reason = f"当前已安装 snap 应用（{preview}），停用会连带停止这些应用"
+
+    return {
+        "id": entry["id"],
+        "unit": primary,
+        "units": present_units,
+        "active": active,
+        "sub": sub,
+        "enabled": enabled,
+        "running": running,
+        "memoryBytes": memory_bytes,
+        "description": p_props.get("Description", ""),
+        "blocked": blocked,
+        "blockedReason": blocked_reason,
+        "canLogs": primary.endswith(".service"),
+    }
+
+
+def svc_slim_list_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    all_units = [unit for entry in SLIM_SERVICE_WHITELIST for unit in entry["units"]]
+    unit_props = _query_systemd_units(all_units)
+
+    snap_entry = next(item for item in SLIM_SERVICE_WHITELIST if item.get("require_empty_snap"))
+    snap_present = any(
+        unit_props.get(u, {}).get("LoadState", "") not in ("", "not-found")
+        for u in snap_entry["units"]
+    )
+    snaps = _snap_installed_packages() if snap_present else []
+
+    services: list[dict[str, Any]] = []
+    for entry in SLIM_SERVICE_WHITELIST:
+        item = _build_slim_item(entry, unit_props, snaps)
+        if item is not None:
+            services.append(item)
+    services.sort(key=lambda item: (not item["running"], -(item["memoryBytes"] or 0), item["unit"]))
+    return ok({"services": services, "count": len(services)})
+
+
+def _toggle_slim_service(params: Mapping[str, Any], *, enable: bool) -> dict[str, Any]:
+    entry = _resolve_slim_entry(_as_text(params.get("unit")))
+    snaps: Optional[list[str]] = []
+    if entry.get("require_empty_snap") and not enable:
+        snaps = _snap_installed_packages()
+        if snaps is None:
+            raise HostError("E_PROTECTED", "无法确认是否安装 snap 应用，已拒绝停用 snapd")
+        if len(snaps) > 0:
+            raise HostError("E_PROTECTED", f"检测到已安装 snap 应用（{', '.join(snaps[:3])}），拒绝停用 snapd")
+
+    before_props = _query_systemd_units(entry["units"])
+    present_units = [
+        u for u in entry["units"] if before_props.get(u, {}).get("LoadState", "") not in ("", "not-found")
+    ]
+    if not present_units:
+        raise HostError("E_INVALID", f"本机不存在可操作单元: {entry['primary']}")
+
+    op = "enable" if enable else "disable"
+    rc, stdout, stderr = _run_privileged(["systemctl", op, "--now", *present_units], timeout=30.0)
+    if rc != 0:
+        detail = (stderr or stdout).strip()[:300]
+        raise HostError("E_INVALID", f"systemctl {op} --now 失败: {detail}")
+
+    after_props = _query_systemd_units(present_units)
+    item = _build_slim_item(entry, after_props, snaps)
+    return ok(
+        {
+            "id": entry["id"],
+            "unit": item["unit"] if item else entry["primary"],
+            "units": present_units,
+            "enabled": enable,
+            "running": item["running"] if item else False,
+            "service": item,
+        }
+    )
+
+
+def svc_disable_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    return _toggle_slim_service(params, enable=False)
+
+
+def svc_enable_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
+    return _toggle_slim_service(params, enable=True)
+
+
+# ---------------------------------------------------------------------------
 # logs.errors：近 24 小时错误日志 + 内核 OOM 记录（只读，按需调用）
 # ---------------------------------------------------------------------------
 
@@ -3692,9 +3910,12 @@ _VERB_HANDLERS = {
     "keys.add": keys_add_verb,
     "keys.remove": keys_remove_verb,
     "svc.list": svc_list_verb,
+    "svc.slim-list": svc_slim_list_verb,
     "svc.logs": svc_logs_verb,
     "svc.restart": svc_restart_verb,
     "svc.reset-failed": svc_reset_failed_verb,
+    "svc.disable": svc_disable_verb,
+    "svc.enable": svc_enable_verb,
     "logs.errors": logs_errors_verb,
     "logs.security": logs_security_verb,
     "cron.list": cron_list_verb,
