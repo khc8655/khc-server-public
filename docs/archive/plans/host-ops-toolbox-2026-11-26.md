@@ -1,6 +1,6 @@
 # 主机运维轻量化优化：服务精简、一键 Swap/调优表与组件更新检查（提案）
 
-> 状态：已拍板 ｜ 最后核验：2026-11-26 ｜ 关联：docs/host-ops.md、docs/ui-redesign/page-specs.md、docs/ui-redesign/ui-guidelines.md
+> 状态：已实施 ｜ 最后核验：2026-11-27 ｜ 关联：docs/host-ops.md、docs/ui-redesign/page-specs.md、docs/ui-redesign/ui-guidelines.md
 
 ## 1. 背景与设计原则
 
@@ -117,3 +117,4 @@
 
 - 2026-11-26：服务精简由黑名单改为 Agent 端白名单（§4.1），只停用不卸载，成组处理 socket/timer，不标「建议关闭」；顺序改为 P2 → P1 → P3；P3 不动 `agent/khc/` 只读部分并推荐移入 backlog；补 Swap/BBR/journald 细节、新动词与审计、状态带「未开 Swap」提示、6 分段 390px 校验。
 - 2026-11-26：主人拍板合入（P2 首批 4 项全保留、按 P2 → P1 顺序开工、认可 §4.1 保守白名单、P3 移入 backlog）。
+- 2026-11-27：P2（#186）与 P1（#187）已合入发布，提案归档，P3 记入 docs/plans/backlog.md。
