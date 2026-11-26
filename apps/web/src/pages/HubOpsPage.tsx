@@ -14,9 +14,12 @@ import {
 import {
   HOST_OPS_TARGET_SELF,
   hostOpsQueryKey,
+  hostOpsQueryOptions,
+  normalizeSlimServices,
   type HostOpsCronEntry,
   type HostOpsProcess,
 } from '../data/hostOps';
+import { lookupProcessGuide } from '../apps/host-ops/serviceGuide';
 import { useHubChannelsContext } from '../app/HubChannelsProvider';
 import { StatusBar, type StatusTile } from '../apps/host-ops/StatusBar';
 import { pickFailedUnits } from '../data/failedUnits';
@@ -87,9 +90,24 @@ export default function HubOpsPage() {
   const snapshotMissing = live.status === 'fallback' && channels.control.reachable !== false;
 
   const [segment, setSegment] = useState<Segment>('services');
+  const [serviceView, setServiceView] = useState<'managed' | 'slim'>('managed');
   const [processSort, setProcessSort] = useState<'cpu' | 'mem'>('cpu');
   const [drawer, setDrawer] = useState<OpsDrawer | null>(null);
   const fw = useFirewallState(hubId, opsDisabled, segment === 'firewall');
+
+  const activeProcessGuide = drawer?.kind === 'process' ? lookupProcessGuide(drawer.process) : null;
+  const slimForProcessQuery = useQuery({
+    ...hostOpsQueryOptions(hubId, HOST_OPS_TARGET_SELF, 'svc.slim-list', {}),
+    enabled: Boolean(activeProcessGuide?.slimUnit) && !opsDisabled,
+  });
+  const matchedSlimService = useMemo(() => {
+    const targetUnit = activeProcessGuide?.slimUnit;
+    if (!targetUnit || !slimForProcessQuery.data) return null;
+    const list = normalizeSlimServices(slimForProcessQuery.data.data);
+    return (
+      list.find((item) => item.unit === targetUnit || item.units.includes(targetUnit)) ?? null
+    );
+  }, [activeProcessGuide?.slimUnit, slimForProcessQuery.data]);
 
   // 诊断是控制面动作：只在用户打开诊断抽屉时请求一次，打开运维页不自动拉取。
   const diagOpen = drawer?.kind === 'diag' || drawer?.kind === 'diag-check';
@@ -220,6 +238,9 @@ export default function HubOpsPage() {
     switch (drawer.kind) {
       case 'process': {
         const proc = drawer.process;
+        const canGoSlim = Boolean(
+          matchedSlimService && matchedSlimService.running && !matchedSlimService.blocked,
+        );
         return (
           <Drawer
             open
@@ -229,7 +250,22 @@ export default function HubOpsPage() {
             })}
             context={drawerContext}
             onClose={() => setDrawer(null)}
-            footer={<Button label={zh.common.close} onClick={() => setDrawer(null)} />}
+            footer={
+              <Row gap={2} wrap>
+                <Button label={zh.common.close} onClick={() => setDrawer(null)} />
+                {canGoSlim ? (
+                  <Button
+                    label={zh.hostOps.process.goSlimService}
+                    variant="default"
+                    onClick={() => {
+                      setDrawer(null);
+                      setServiceView('slim');
+                      setSegment('services');
+                    }}
+                  />
+                ) : null}
+              </Row>
+            }
           >
             <Stack gap={3}>
               <KeyValue
@@ -246,6 +282,20 @@ export default function HubOpsPage() {
                     key: zh.hostOps.process.start,
                     value: processStartTime(proc.startTime, drawer.hostUptime),
                   },
+                  ...(activeProcessGuide
+                    ? [
+                        {
+                          key: zh.hostOps.process.purpose,
+                          value: activeProcessGuide.purpose,
+                          wrap: true,
+                        },
+                        {
+                          key: zh.hostOps.process.advice,
+                          value: activeProcessGuide.advice,
+                          wrap: true,
+                        },
+                      ]
+                    : []),
                 ]}
               />
               <CodeBlock code={proc.cmdline} label={zh.hostOps.process.cmd} />
@@ -496,6 +546,8 @@ export default function HubOpsPage() {
         <ServicesSegment
           hubId={hubId}
           disabled={opsDisabled}
+          view={serviceView}
+          onViewChange={setServiceView}
           onOpenLogs={(unit, user) => setDrawer({ kind: 'svc-logs', unit, user })}
         />
       ) : null}

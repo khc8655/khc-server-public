@@ -100,6 +100,30 @@ let fwShowUnsupported = false;
 let fwModeState: 'open' | 'allowlist' = 'open';
 let fwClosePublicSshState = false;
 let tuneErrorMode = false;
+let slimServicesMock: Array<{
+  id: string;
+  unit: string;
+  units: string[];
+  active: string;
+  sub: string;
+  enabled: string;
+  running: boolean;
+  memoryBytes: number | null;
+  description: string;
+  blocked: boolean;
+  blockedReason: string | null;
+  canLogs: boolean;
+}> = [];
+let extraProcessesMock: Array<{
+  pid: number;
+  ppid: number;
+  name: string;
+  user: string;
+  cpu: number;
+  mem: number;
+  startTime: number;
+  cmdline: string;
+}> = [];
 let tuneSwapState = {
   active: false,
   managed: false,
@@ -195,6 +219,8 @@ function mockApi() {
   logsErrorsMode = 'data';
   logsErrorsHold = null;
   tuneErrorMode = false;
+  slimServicesMock = [];
+  extraProcessesMock = [];
   lastCallTaskVerb = '';
   tuneSwapState = {
     active: false,
@@ -452,6 +478,7 @@ function mockApi() {
                     { pid: 3, ppid: 2, name: 'kworker/0:1', user: 'root', cpu: 0, mem: 0, startTime: NOW - 100, cmdline: '[kworker/0:1]' },
                     { pid: 42, ppid: 1, name: 'nginx', user: 'root', cpu: 1.5, mem: 2, startTime: NOW - 60, cmdline: 'nginx' },
                     { pid: 43, ppid: 1, name: 'php-fpm', user: 'www', cpu: 0.5, mem: 1, startTime: NOW - 30, cmdline: 'php-fpm' },
+                    ...extraProcessesMock,
                   ]
                 : [],
             },
@@ -561,6 +588,34 @@ function mockApi() {
           return json({
             ok: true,
             data: { unit: String(body.params.params.unit), reset: true, stillFailed: false },
+          });
+        }
+        if (verb === 'svc.slim-list') {
+          return json({
+            ok: true,
+            v: '1.8.0',
+            data: { services: slimServicesMock, count: slimServicesMock.length },
+          });
+        }
+        if (verb === 'svc.disable' || verb === 'svc.enable') {
+          const unit = String(body.params.params.unit);
+          const enable = verb === 'svc.enable';
+          slimServicesMock = slimServicesMock.map((item) =>
+            item.unit === unit || item.id === unit
+              ? {
+                  ...item,
+                  active: enable ? 'active' : 'inactive',
+                  sub: enable ? 'running' : 'dead',
+                  enabled: enable ? 'enabled' : 'disabled',
+                  running: enable,
+                }
+              : item,
+          );
+          const matched = slimServicesMock.find((item) => item.unit === unit || item.id === unit);
+          return json({
+            ok: true,
+            v: '1.8.0',
+            data: { id: matched?.id ?? unit, unit, enabled: enable, running: enable, service: matched ?? null },
           });
         }
         return json({ ok: false, error: { code: 'E_BAD_REQUEST', message: 'unknown verb' } });
@@ -1194,5 +1249,120 @@ describe('主机「优化」标准表与低内存 Swap（P2）', () => {
 
     expect(await screen.findByText('读取系统调优状态失败')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+});
+
+describe('保守白名单服务精简与进程中文说明（P1）', () => {
+  it('精简镜像无白名单单元时隐藏「可精简系统服务」切换按钮', async () => {
+    slimServicesMock = [];
+    await renderRoute('/hubs/tyo-1/ops');
+    await screen.findByText('Agent 连接');
+    expect(screen.queryByRole('button', { name: '可精简系统服务' })).toBeNull();
+  });
+
+  it('可精简服务展示内存、不标「建议关闭」、snapd 被锁禁用、支持 L2 停用与一键启用恢复', async () => {
+    slimServicesMock = [
+      {
+        id: 'ModemManager',
+        unit: 'ModemManager.service',
+        units: ['ModemManager.service'],
+        active: 'active',
+        sub: 'running',
+        enabled: 'enabled',
+        running: true,
+        memoryBytes: 18 * 1024 * 1024,
+        description: 'Modem Manager',
+        blocked: false,
+        blockedReason: null,
+        canLogs: true,
+      },
+      {
+        id: 'snapd',
+        unit: 'snapd.service',
+        units: ['snapd.service', 'snapd.socket', 'snapd.seeded.service'],
+        active: 'active',
+        sub: 'running',
+        enabled: 'enabled',
+        running: true,
+        memoryBytes: 96 * 1024 * 1024,
+        description: 'Snap Daemon',
+        blocked: true,
+        blockedReason: '当前已安装 snap 应用（oracle-cloud-agent），停用会连带停止这些应用',
+        canLogs: true,
+      },
+    ];
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '可精简系统服务' }));
+
+    expect(await screen.findByRole('table')).toBeTruthy();
+    expect(screen.getAllByText('ModemManager.service').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('拨号与蜂窝猫管理').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('18.0 MiB').length).toBeGreaterThan(0);
+    expect(screen.queryByText('建议关闭')).toBeNull();
+
+    const disableButtons = screen.getAllByRole('button', { name: '停用' }) as HTMLButtonElement[];
+    // 第一行 ModemManager 可点，第二行 snapd 因已装 snap 被禁用
+    expect(disableButtons[0]!.disabled).toBe(false);
+    expect(disableButtons[1]!.disabled).toBe(true);
+
+    await userEvent.click(disableButtons[0]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('停用服务 ModemManager.service？')).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: '停用' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('已停用').length).toBeGreaterThan(0);
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: '启用' }));
+    await waitFor(() => {
+      expect(screen.queryAllByText('已停用')).toHaveLength(0);
+    });
+  });
+
+  it('进程列表展示中文短标，详情抽屉展示用途与建议并可跳往「可精简系统服务」', async () => {
+    slimServicesMock = [
+      {
+        id: 'ModemManager',
+        unit: 'ModemManager.service',
+        units: ['ModemManager.service'],
+        active: 'active',
+        sub: 'running',
+        enabled: 'enabled',
+        running: true,
+        memoryBytes: 18 * 1024 * 1024,
+        description: 'Modem Manager',
+        blocked: false,
+        blockedReason: null,
+        canLogs: true,
+      },
+    ];
+    extraProcessesMock = [
+      {
+        pid: 888,
+        ppid: 1,
+        name: 'ModemManager',
+        user: 'root',
+        cpu: 0.2,
+        mem: 18,
+        startTime: NOW - 600,
+        cmdline: '/usr/sbin/ModemManager',
+      },
+    ];
+
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '进程' }));
+    await userEvent.click(await screen.findByRole('button', { name: '显示全部' }));
+
+    expect((await screen.findAllByText('拨号与蜂窝猫管理')).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getAllByText('ModemManager')[0]!);
+
+    expect(await screen.findByText('用途')).toBeTruthy();
+    expect(screen.getByText('建议')).toBeTruthy();
+    const goBtn = await screen.findByRole('button', { name: '前往停用该服务' });
+    await userEvent.click(goBtn);
+
+    expect(await screen.findByRole('button', { name: '停用' })).toBeTruthy();
   });
 });

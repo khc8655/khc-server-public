@@ -91,9 +91,11 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `status` | 读 | — | 与 `/state.ops` 同构（`agentOpsSchema`），前端直接复用 #007 卡片 |
 | `processes` | 读 | `{ sort: "cpu"\|"mem", limit≤200 }` | pid、ppid、user、startTime、cpu、mem、cmdline（截断 512 字符）；CPU% 为同请求内两次采样（间隔 0.5 秒）求差，先对全部进程采样、排序后再截 Top N；面板默认只取 Top 20 |
 | `svc.list` | 读 | — | 只返回系统级 failed + 面板受管单元（`caddy` / `khc-*` / `wg-quick@*`），以及 `khc-app-*` 应用用户的 `systemd --user` 受管/失败单元（附 `scope="user"` 与 `user`） |
+| `svc.slim-list` | 读 | — | 只返回 12 项保守白名单（`docs/plans/host-ops-toolbox-2026-11-26.md` §4.1）中本机存在的单元组、内存（`MemoryCurrent`）与运行状态；存在 snap 应用或无法核实时对 `snapd` 标 `blocked=true` |
 | `svc.logs` | 读 | `{ unit, user?, lines≤200 }` | `journalctl` 尾读（带 `user` 时按 `_UID` + `_SYSTEMD_USER_UNIT` 读应用用户日志），默认 100、上限 200 行 |
 | `svc.restart` | 写 | `{ unit, user? }` | 受保护单元拒绝；带 `user`（仅限 `khc-app-*`）时通过 `runuser` 调 `systemctl --user restart`；重启后回读 `is-active` |
 | `svc.reset-failed` | 写 | `{ unit, user? }` | `systemctl [--user] reset-failed`：只清失败标记，不启动也不改配置；受保护单元与 `user` 白名单规则同 `svc.restart`；回读 `stillFailed`。**仅 Hub 自身可用**，不在 `PEER_SAFE_WRITE_VERBS` |
+| `svc.disable` / `svc.enable` | 写 | `{ unit }` | 仅限 12 项保守白名单且仅 Hub `self` + `root`（白名单外返回 `E_PROTECTED`）；`snapd` 停用前再检 `snap list`；成组执行 `systemctl disable/enable --now`（service + socket/timer）并回读状态，只停用不卸载 |
 | `logs.errors` | 读 | — | 最近 24 小时 `journalctl -p 0..3` ≤ 50 条（每条 ≤ 300 字、统一脱敏）+ 内核 OOM 记录；一次 OOM 只算一条（附 ≤ 5 行上下文），返回时间、级别、脱敏后文本与条数；Peer 可读 |
 | `logs.security` | 读 | — | 按需只读统计近 24 小时 `sshd` 爆破/握手失败/限流次数（扫描上限 2000 行、超时 2s）与 Top 5 合法源 IP（不回显用户名/原始日志），达到 ≥50 / ≥500 次由 `/state` 120s 缓存上报诊断问题，不落 D1 |
 | `fw.show` | 读 | — | 返回 `table inet khc_fw` 规则、当前模式（`open` / `allowlist`）、`closePublicSsh`、面板受管应用端口与 WireGuard 内网接口信息 |

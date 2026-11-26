@@ -33,9 +33,12 @@ export type HostOpsVerb =
   | 'keys.add'
   | 'keys.remove'
   | 'svc.list'
+  | 'svc.slim-list'
   | 'svc.logs'
   | 'svc.restart'
   | 'svc.reset-failed'
+  | 'svc.disable'
+  | 'svc.enable'
   | 'logs.errors'
   | 'cron.list'
   | 'cron.set'
@@ -1019,6 +1022,21 @@ export interface HostOpsService {
   user?: string | null;
 }
 
+export interface HostOpsSlimService {
+  id: string;
+  unit: string;
+  units: string[];
+  active: string;
+  sub: string;
+  enabled: string;
+  running: boolean;
+  memoryBytes: number | null;
+  description: string;
+  blocked: boolean;
+  blockedReason: string | null;
+  canLogs: boolean;
+}
+
 export interface HostOpsSvcLogs {
   unit: string;
   lines: string[];
@@ -1060,6 +1078,36 @@ export function normalizeServices(data: unknown): HostOpsService[] {
         description: asString(item.description) || '',
         ...(scope ? { scope } : {}),
         ...(user ? { user } : {}),
+      },
+    ];
+  });
+}
+
+export function normalizeSlimServices(data: unknown): HostOpsSlimService[] {
+  const record = asRecord(data);
+  const rawList = Array.isArray(record.services) ? record.services : [];
+  return rawList.flatMap((value) => {
+    const item = asRecord(value);
+    const id = asString(item.id);
+    const unit = asString(item.unit);
+    if (!id || !unit) return [];
+    const units = Array.isArray(item.units)
+      ? item.units.map((u) => asString(u)).filter(Boolean)
+      : [unit];
+    return [
+      {
+        id,
+        unit,
+        units: units.length > 0 ? units : [unit],
+        active: asString(item.active) || 'inactive',
+        sub: asString(item.sub) || 'dead',
+        enabled: asString(item.enabled) || 'disabled',
+        running: asBoolean(item.running) === true,
+        memoryBytes: asNumber(item.memoryBytes),
+        description: asString(item.description) || '',
+        blocked: asBoolean(item.blocked) === true,
+        blockedReason: asString(item.blockedReason) || null,
+        canLogs: asBoolean(item.canLogs) !== false && unit.endsWith('.service'),
       },
     ];
   });

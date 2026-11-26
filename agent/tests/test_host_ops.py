@@ -1578,7 +1578,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.1.0")
+        self.assertEqual(self.adapter.version, "1.2.0")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -4510,3 +4510,204 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         self.assertTrue(sys_res["ok"])
         systemd_cmds = self.runner.commands("systemd-run")
         self.assertTrue(any("sysctl" in cmd for cmd in systemd_cmds))
+
+    # -- svc.slim-list / svc.disable / svc.enable ----------------------------
+    @staticmethod
+    def _systemctl_show_output(records: list[dict[str, str]]) -> str:
+        blocks = []
+        for rec in records:
+            lines = [f"{k}={v}" for k, v in rec.items()]
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks) + "\n"
+
+    def test_svc_slim_list_only_returns_present_whitelist_sorted_and_checks_snapd(self) -> None:
+        self.assertIn("svc.slim-list", HOST_SCRIPT.PUBLIC_VERBS)
+        self.assertNotIn("svc.slim-list", HOST_SCRIPT.WRITE_VERBS)
+        self.assertIn("svc.slim-list", ADAPTER_MODULE.peer_allowed_verbs(HOST_SCRIPT))
+
+        show_out = self._systemctl_show_output(
+            [
+                {
+                    "Id": "ModemManager.service",
+                    "LoadState": "loaded",
+                    "ActiveState": "active",
+                    "SubState": "running",
+                    "UnitFileState": "enabled",
+                    "MemoryCurrent": str(18 * 1024 * 1024),
+                    "Description": "Modem Manager",
+                },
+                {
+                    "Id": "udisks2.service",
+                    "LoadState": "not-found",
+                    "ActiveState": "inactive",
+                    "SubState": "dead",
+                    "UnitFileState": "",
+                    "MemoryCurrent": "[not set]",
+                    "Description": "",
+                },
+                {
+                    "Id": "avahi-daemon.service",
+                    "LoadState": "loaded",
+                    "ActiveState": "inactive",
+                    "SubState": "dead",
+                    "UnitFileState": "disabled",
+                    "MemoryCurrent": str((1 << 64) - 1),
+                    "Description": "Avahi mDNS",
+                },
+                {
+                    "Id": "avahi-daemon.socket",
+                    "LoadState": "loaded",
+                    "ActiveState": "inactive",
+                    "SubState": "dead",
+                    "UnitFileState": "disabled",
+                    "MemoryCurrent": "[not set]",
+                    "Description": "Avahi mDNS Socket",
+                },
+                {
+                    "Id": "snapd.service",
+                    "LoadState": "loaded",
+                    "ActiveState": "active",
+                    "SubState": "running",
+                    "UnitFileState": "enabled",
+                    "MemoryCurrent": str(96 * 1024 * 1024),
+                    "Description": "Snap Daemon",
+                },
+            ]
+        )
+        self.runner.on("systemctl show", lambda argv, _: (0, show_out, ""))
+        self.runner.on("snap list", lambda argv, _: (0, "Name Version Rev\noracle-cloud-agent 1.0 10\n", ""))
+
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        try:
+            res = self.run_verb("svc.slim-list")
+        finally:
+            HOST_SCRIPT.ROOT_OVERRIDE = True
+        self.assertTrue(res["ok"])
+        services = res["data"]["services"]
+        # 仅返回本机存在的三项，按 running -> memory 降序排列
+        self.assertEqual([s["id"] for s in services], ["snapd", "ModemManager", "avahi"])
+        self.assertTrue(services[0]["blocked"])
+        self.assertIn("oracle-cloud-agent", services[0]["blockedReason"])
+        self.assertEqual(services[1]["memoryBytes"], 18 * 1024 * 1024)
+        self.assertFalse(services[1]["blocked"])
+        # avahi 已停用且 Sentinel (UINT64_MAX) 被忽略为 None
+        self.assertIsNone(services[2]["memoryBytes"])
+        self.assertFalse(services[2]["running"])
+        self.assertEqual(services[2]["units"], ["avahi-daemon.service", "avahi-daemon.socket"])
+
+        # snap list 失败时保守拦截 snapd
+        self.runner.on("snap list", lambda argv, _: (1, "", "dbus error"))
+        res_err = self.run_verb("svc.slim-list")
+        self.assertTrue(res_err["ok"])
+        snap_entry = next(item for item in res_err["data"]["services"] if item["id"] == "snapd")
+        self.assertTrue(snap_entry["blocked"])
+
+    def test_svc_disable_enable_whitelist_group_snapd_and_guards(self) -> None:
+        # 1) 非白名单关键系统/应用服务一律 E_PROTECTED
+        for protected in (
+            "sshd.service",
+            "multipathd.service",
+            "unattended-upgrades.service",
+            "caddy.service",
+            "systemd-journald.service",
+        ):
+            r1 = self.run_verb("svc.disable", {"unit": protected})
+            r2 = self.run_verb("svc.enable", {"unit": protected})
+            self.assertFalse(r1["ok"])
+            self.assertEqual(r1["error"]["code"], "E_PROTECTED", protected)
+            self.assertFalse(r2["ok"])
+            self.assertEqual(r2["error"]["code"], "E_PROTECTED", protected)
+
+        # 2) snapd 有 snap 应用时拒绝停用
+        self.runner.on("snap list", lambda argv, _: (0, "Name Version\ncore22 1\n", ""))
+        snap_deny = self.run_verb("svc.disable", {"unit": "snapd.service"})
+        self.assertFalse(snap_deny["ok"])
+        self.assertEqual(snap_deny["error"]["code"], "E_PROTECTED")
+
+        # 3) 成组单元 disable --now / enable --now（avahi-daemon.service + socket），支持 systemd-run
+        state = {"active": "active", "sub": "running", "enabled": "enabled"}
+
+        def on_systemctl(argv, _):
+            if len(argv) > 1 and argv[1] == "show":
+                out = self._systemctl_show_output(
+                    [
+                        {
+                            "Id": "avahi-daemon.service",
+                            "LoadState": "loaded",
+                            "ActiveState": state["active"],
+                            "SubState": state["sub"],
+                            "UnitFileState": state["enabled"],
+                            "MemoryCurrent": "1048576",
+                            "Description": "Avahi",
+                        },
+                        {
+                            "Id": "avahi-daemon.socket",
+                            "LoadState": "loaded",
+                            "ActiveState": state["active"],
+                            "SubState": "listening" if state["active"] == "active" else "dead",
+                            "UnitFileState": state["enabled"],
+                            "MemoryCurrent": "[not set]",
+                            "Description": "Avahi Socket",
+                        },
+                    ]
+                )
+                return 0, out, ""
+            if len(argv) > 1 and argv[1] == "disable":
+                state.update({"active": "inactive", "sub": "dead", "enabled": "disabled"})
+                return 0, "", ""
+            if len(argv) > 1 and argv[1] == "enable":
+                state.update({"active": "active", "sub": "running", "enabled": "enabled"})
+                return 0, "", ""
+            return 0, "", ""
+
+        self.runner.on("systemctl", on_systemctl)
+        dis = self.run_verb("svc.disable", {"unit": "avahi-daemon.service"})
+        self.assertTrue(dis["ok"])
+        self.assertFalse(dis["data"]["running"])
+        self.assertEqual(
+            self.runner.commands("systemctl")[-2],
+            ["systemctl", "disable", "--now", "avahi-daemon.service", "avahi-daemon.socket"],
+        )
+
+        # 走 systemd-run enable --now 恢复
+        self.runner.on(
+            "systemd-run",
+            lambda argv, inp: on_systemctl(argv[argv.index("systemctl") :], inp) if "systemctl" in argv else (0, "", ""),
+        )
+        HOST_SCRIPT.TUNE_USE_SYSTEMD_RUN = True
+        en = self.run_verb("svc.enable", {"unit": "avahi"})
+        self.assertTrue(en["ok"])
+        self.assertTrue(en["data"]["running"])
+        self.assertTrue(
+            any("enable" in cmd and "avahi-daemon.socket" in cmd for cmd in self.runner.commands("systemd-run"))
+        )
+
+        # 4) non-root 拒绝写操作；Peer 拒绝 svc.disable / svc.enable，放行 svc.slim-list
+        HOST_SCRIPT.ROOT_OVERRIDE = False
+        try:
+            non_root = self.run_verb("svc.disable", {"unit": "ModemManager.service"})
+        finally:
+            HOST_SCRIPT.ROOT_OVERRIDE = True
+        self.assertFalse(non_root["ok"])
+        self.assertEqual(non_root["error"]["code"], "E_NO_PRIV")
+
+        adapter = HostOps()
+        self.assertNotIn("svc.disable", PEER_SAFE_WRITE_VERBS)
+        self.assertNotIn("svc.enable", PEER_SAFE_WRITE_VERBS)
+        self.assertTrue(adapter.is_write("call", {"params": {"verb": "svc.disable"}}, {"write": True}))
+        self.assertTrue(adapter.is_write("call", {"params": {"verb": "svc.enable"}}, {"write": True}))
+        self.assertFalse(adapter.is_write("call", {"params": {"verb": "svc.slim-list"}}, {"write": True}))
+
+        with tempfile.TemporaryDirectory() as tmp_ctx:
+            paths = make_paths(tmp_ctx)
+            ctx = Ctx(paths, command_runner=FakeRunner())
+            peer_cfg = {
+                "hubWgIp": "10.8.0.1",
+                "hubId": "hub-1",
+                "peers": {"p1": {"enabled": True, "host": "10.8.0.2", "port": 22, "user": "khcops", "hostKey": PUB_A}},
+            }
+            peer_deny = adapter.action_call(
+                ctx, {"params": {"target": "p1", "verb": "svc.disable", "params": {"unit": "avahi"}}, "config": peer_cfg}
+            )
+            self.assertFalse(peer_deny["ok"])
+            self.assertEqual(peer_deny["error"]["code"], "E_PEER_FORBIDDEN")
