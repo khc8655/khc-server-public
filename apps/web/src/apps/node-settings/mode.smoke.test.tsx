@@ -291,6 +291,8 @@ describe('节点模式 UI', () => {
     await userEvent.click(screen.getByRole('button', { name: '确认切换 · Caddy 网关' }));
 
     expect(await screen.findByText('已切换到Caddy 网关')).toBeTruthy();
+    expect(await screen.findByText(/已停用 WireGuard 网卡并释放 UDP 端口/)).toBeTruthy();
+    expect(await screen.findByText('需要彻底清理 WireGuard 配置与密钥？')).toBeTruthy();
     const put = requests.find(
       (item) => item.url === '/api/v1/nodes/tyo-1/apps/wireguard' && item.init?.method === 'PUT',
     );
@@ -301,8 +303,9 @@ describe('节点模式 UI', () => {
     expect(requests.some((item) => item.url.endsWith('/apps/wireguard/apply'))).toBe(true);
     expect(requests.some((item) => item.url === '/api/v1/nodes/tyo-1/state')).toBe(true);
 
-    const closeButtons = screen.getAllByRole('button', { name: '关闭' });
-    await userEvent.click(closeButtons[closeButtons.length - 1] as HTMLElement);
+    await userEvent.click(screen.getByRole('button', { name: '前往组件清理' }));
+    expect(await screen.findByText('内置组件')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: 'Agent 与接入' }));
     expect((await screen.findAllByText('Caddy 网关')).length).toBeGreaterThan(0);
   });
 

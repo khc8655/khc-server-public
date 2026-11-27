@@ -126,6 +126,11 @@ function mockApi(options: {
   /** 接口公网地址；空串用于验证「没填公网地址时导出只给引导，不打 Agent」。 */
   publicEndpoint?: string;
   mode?: 'wg' | 'caddy';
+  nodeOverrides?: {
+    endpoint?: string;
+    accessMode?: 'domain' | 'tunnel' | 'ip';
+    domain?: string | null;
+  };
 }) {
   const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
   // 有状态配置：PUT 保存后，后续 GET 返回最新 rev/peers（模拟 D1 写后读）
@@ -133,6 +138,20 @@ function mockApi(options: {
     peers: [...options.peers],
     rev: options.rev,
     appliedRev: options.appliedRev,
+  };
+  const tyoNode = {
+    id: 'tyo-1',
+    name: 'tyo-1',
+    endpoint: options.nodeOverrides?.endpoint ?? 'https://203.0.113.10:8880',
+    accessMode: options.nodeOverrides?.accessMode,
+    domain: options.nodeOverrides?.domain ?? null,
+    tunnelEndpoint: null,
+    liveEndpoint: 'https://hub.example.com',
+    preferredRoute: 'direct',
+    status: 'online',
+    lastSeenAt: NOW,
+    createdAt: 1,
+    updatedAt: 2,
   };
   vi.stubGlobal(
     'fetch',
@@ -191,38 +210,10 @@ function mockApi(options: {
         });
       }
       if (url === '/api/v1/nodes') {
-        return json({
-          nodes: [
-            {
-              id: 'tyo-1',
-              name: 'tyo-1',
-              endpoint: 'https://203.0.113.10:8880',
-              tunnelEndpoint: null,
-              liveEndpoint: 'https://hub.example.com',
-              preferredRoute: 'direct',
-              status: 'online',
-              lastSeenAt: NOW,
-              createdAt: 1,
-              updatedAt: 2,
-            },
-          ],
-        });
+        return json({ nodes: [tyoNode] });
       }
       if (url === '/api/v1/nodes/tyo-1') {
-        return json({
-          node: {
-            id: 'tyo-1',
-            name: 'tyo-1',
-            endpoint: 'https://203.0.113.10:8880',
-            tunnelEndpoint: null,
-              liveEndpoint: 'https://hub.example.com',
-            preferredRoute: 'direct',
-            status: 'online',
-            lastSeenAt: NOW,
-            createdAt: 1,
-            updatedAt: 2,
-          },
-        });
+        return json({ node: tyoNode });
       }
       if (url.endsWith('/apps/wireguard/client_config')) {
         return json({
@@ -293,18 +284,7 @@ function mockApi(options: {
       if (url === '/api/v1/nodes/tyo-1/overview') {
         const statePayload = (options.state ? options.state() : wireGuardState(options.peers.length > 0)) as Record<string, unknown>;
         return json({
-          node: {
-            id: 'tyo-1',
-            name: 'tyo-1',
-            endpoint: 'https://203.0.113.10:8880',
-            tunnelEndpoint: null,
-            liveEndpoint: 'https://hub.example.com',
-            preferredRoute: 'direct',
-            status: 'online',
-            lastSeenAt: NOW,
-            createdAt: 1,
-            updatedAt: 2,
-          },
+          node: tyoNode,
           ...statePayload,
           overview: {
             apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
@@ -632,15 +612,76 @@ describe('WireGuard 页', () => {
     expect(screen.getByText(/节点上已有运行中的 WireGuard 接口/)).toBeTruthy();
   });
 
-  it('0-Peer 且公网地址为空时不再误报「公网地址未配置」，改为引导切换 Caddy 网关（P3）', async () => {
+  it('0-Peer 且公网地址为空时不再展示劝切 Caddy 网关横幅，也不误报公网地址未配置', async () => {
     mockApi({ peers: [], rev: 1, appliedRev: 1, publicEndpoint: '', mode: 'wg' });
     await renderWireGuard();
 
-    expect(await screen.findByText('当前尚未接入任何 Peer')).toBeTruthy();
-    expect(screen.getByRole('link', { name: '切换为 Caddy 网关' }).getAttribute('href')).toBe(
-      '/hubs/tyo-1/settings',
-    );
+    expect(await screen.findByText('还没有 Peer')).toBeTruthy();
+    expect(screen.queryByText('当前尚未接入任何 Peer')).toBeNull();
+    expect(screen.queryByRole('link', { name: '切换为 Caddy 网关' })).toBeNull();
     expect(screen.queryByText('公网地址未配置')).toBeNull();
+  });
+
+  it('接口设置公网地址留空时自动带入节点 IP 并随监听端口联动，关闭不误报未保存', async () => {
+    const calls = mockApi({
+      peers: [],
+      rev: 1,
+      appliedRev: 1,
+      publicEndpoint: '',
+      nodeOverrides: { accessMode: 'ip', endpoint: 'http://203.0.113.10:8880' },
+    });
+    await renderWireGuard();
+
+    await userEvent.click(await screen.findByRole('button', { name: '接口设置' }));
+    const drawer = await screen.findByRole('dialog');
+    const endpointInput = within(drawer).getByLabelText('公网地址') as HTMLInputElement;
+    const portInput = within(drawer).getByLabelText('监听端口') as HTMLInputElement;
+    expect(endpointInput.value).toBe('203.0.113.10:51820');
+    expect(within(drawer).getByText(/已按节点 IP 与监听端口自动填入/)).toBeTruthy();
+
+    await userEvent.clear(portInput);
+    await userEvent.type(portInput, '5000');
+    expect((within(drawer).getByLabelText('公网地址') as HTMLInputElement).value).toBe(
+      '203.0.113.10:5000',
+    );
+
+    const saveBtn = within(drawer).getByRole('button', { name: '保存' }) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(false);
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      const put = calls.find((call) => call.url.endsWith('/apps/wireguard') && call.method === 'PUT');
+      expect(put).toBeTruthy();
+      const body = put?.body as { config?: { interface?: { listenPort?: number; publicEndpoint?: string } } };
+      expect(body.config?.interface?.listenPort).toBe(5000);
+      expect(body.config?.interface?.publicEndpoint).toBe('203.0.113.10:5000');
+    });
+  });
+
+  it('接口设置域名节点预填带 Cloudflare 提示，未手改直接点取消无未保存警告', async () => {
+    mockApi({
+      peers: [],
+      rev: 1,
+      appliedRev: 1,
+      publicEndpoint: '',
+      nodeOverrides: {
+        accessMode: 'domain',
+        domain: 'wg.example.com',
+        endpoint: 'https://wg.example.com:8443',
+      },
+    });
+    await renderWireGuard();
+
+    await userEvent.click(await screen.findByRole('button', { name: '接口设置' }));
+    const drawer = await screen.findByRole('dialog');
+    expect((within(drawer).getByLabelText('公网地址') as HTMLInputElement).value).toBe(
+      'wg.example.com:51820',
+    );
+    expect(within(drawer).getByText(/Cloudflare 代理/)).toBeTruthy();
+
+    await userEvent.click(within(drawer).getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByText(/未保存/)).toBeNull();
   });
 
   it('编辑 Peer 可达范围并保存后重新打开，回显仍保持已保存策略（不回退「Hub + 所有 Peer」）', async () => {

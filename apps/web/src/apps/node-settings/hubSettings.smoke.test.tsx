@@ -71,6 +71,7 @@ let cleanupRemaining: { item: string; reason: string }[] = [];
 let cfDnsDeleteResult: unknown = null;
 /** 批次 Q：host-ops 适配器是否安装在节点上（决定删除节点清理项的默认值/可用性）。 */
 let hostOpsAdapterInstalled = true;
+let wgStatusMock: Record<string, unknown> = { installed: false, running: false };
 
 const emptyOverview = {
   apps: { online: 0, total: 0, issues: [], staticCount: 0, redirectCount: 0, items: [] },
@@ -177,7 +178,7 @@ function mockApi() {
             host: { hostname: 'tyo-1' },
             adapters: [
               { name: 'caddy-site', version: '1.0.0', status: { installed: true, running: true } },
-              { name: 'wireguard', version: '1.0.0', status: { installed: false, running: false } },
+              { name: 'wireguard', version: '1.0.0', status: wgStatusMock },
               {
                 name: 'port-forward',
                 version: '1.0.0',
@@ -206,6 +207,24 @@ function mockApi() {
           adaptersError: null,
         });
       }
+      if (url === '/api/v1/nodes/tyo-1/apps/wireguard/uninstall' && init?.method === 'POST') {
+        return json({ ok: true, taskId: 't-wg-uninst' });
+      }
+      if (url === '/api/v1/nodes/tyo-1/tasks/t-wg-uninst') {
+        return json({
+          task: {
+            id: 't-wg-uninst',
+            action: 'wireguard.uninstall',
+            state: 'done',
+            progress: 100,
+            logs: [],
+            result: { cards: [] },
+            error: null,
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+        });
+      }
       if (url === '/api/v1/nodes/tyo-1/export') return json(backup);
       if (url === '/api/v1/nodes/tyo-1/import') {
         return json({
@@ -229,6 +248,7 @@ beforeEach(() => {
   cfDnsDeleteResult = null;
   certsMock = [];
   hostOpsAdapterInstalled = true;
+  wgStatusMock = { installed: false, running: false };
   URL.createObjectURL = vi.fn(() => 'blob:backup');
   URL.revokeObjectURL = vi.fn();
   HTMLAnchorElement.prototype.click = vi.fn();
@@ -516,5 +536,34 @@ describe('设置四分区（ui-redesign T4 + U3）', () => {
     expect(await within(offlineDialog).findByText(/接入参数或证书已变更/)).toBeTruthy();
     expect(await within(offlineDialog).findByRole('button', { name: '我已完成安装' })).toBeTruthy();
     expect(requests.some((item) => item.url.includes('/bind'))).toBe(false);
+  });
+
+  it('内置组件：WireGuard 已存在接口配置时支持 L3 二次确认清理配置', async () => {
+    wgStatusMock = { installed: true, running: false, interface: 'khc0' };
+    await renderRoute('/hubs/tyo-1/settings?tab=components');
+    expect(await screen.findByText('内置组件')).toBeTruthy();
+    const builtinTable = (await screen.findAllByRole('table'))[0]!;
+    await userEvent.click(within(builtinTable).getByRole('button', { name: '清理配置' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('清理 WireGuard 配置与密钥？')).toBeTruthy();
+    const confirmBtn = within(dialog).getByRole('button', {
+      name: '清理 WireGuard 配置',
+    }) as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+
+    const input = within(dialog).getByRole('textbox');
+    await userEvent.type(input, 'wireguard');
+    expect(confirmBtn.disabled).toBe(false);
+    await userEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      const req = requests.find(
+        (item) =>
+          item.url === '/api/v1/nodes/tyo-1/apps/wireguard/uninstall' && item.init?.method === 'POST',
+      );
+      expect(req).toBeTruthy();
+      expect(JSON.parse(String(req?.init?.body))).toEqual({ params: { purge: true } });
+    });
   });
 });

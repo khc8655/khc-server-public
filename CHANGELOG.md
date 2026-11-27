@@ -2,6 +2,11 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.48.4] - 2026-11-27
+### Changed
+- WireGuard「接口设置」在公网地址留空时自动带入节点 IP/域名与当前监听端口，修改监听端口同步联动且允许用户手动覆盖；移除网络页 0-Peer 时的顶部切换横幅。
+- 节点切换为「Caddy 网关」后明确提示已停用网卡释放端口并保留配置，提供前往「设置 → 组件」的清理引导；组件页为已配置的 WireGuard 提供 L3 二次确认「清理配置」入口。
+
 ## [0.48.3] - 2026-11-27
 ### Fixed
 - Agent `0.12.3`：修复 Linux `/proc/sys/*` 4 MiB 单次读取 `ENOMEM` 导致 `swappiness` 与 BBR 检测失效，并放宽小内存机在 Swap 未用/少用时的 `swapoff` 余量检查。

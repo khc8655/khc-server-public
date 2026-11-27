@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WG_INTERFACE,
+  deriveDefaultPublicEndpoint,
   isValidCidr,
   migrationPeer,
   normalizeWgConfig,
+  syncPublicEndpointPort,
   uniquePeerName,
   type WgConfig,
   type WgPeer,
@@ -120,5 +122,52 @@ describe('wireguard 数据层', () => {
     expect(legacy.reach).toBeUndefined();
     expect(legacy.reachPeers).toBeUndefined();
     expect(legacy.egress).toBeUndefined();
+  });
+
+  it('deriveDefaultPublicEndpoint 按接入方式与端口推导默认值', () => {
+    expect(
+      deriveDefaultPublicEndpoint({ accessMode: 'ip', endpoint: 'http://203.0.113.10:8880', domain: null }, 51820),
+    ).toEqual({ value: '203.0.113.10:51820', host: '203.0.113.10', source: 'ip' });
+
+    expect(
+      deriveDefaultPublicEndpoint({ accessMode: 'ip', endpoint: 'http://[2001:db8::1]:8880', domain: null }, 5000),
+    ).toEqual({ value: '[2001:db8::1]:5000', host: '[2001:db8::1]', source: 'ip' });
+
+    expect(
+      deriveDefaultPublicEndpoint(
+        { accessMode: 'domain', endpoint: 'https://hub.example.com:8443', domain: 'hub.example.com' },
+        51820,
+      ),
+    ).toEqual({ value: 'hub.example.com:51820', host: 'hub.example.com', source: 'domain' });
+
+    expect(
+      deriveDefaultPublicEndpoint(
+        { accessMode: 'tunnel', endpoint: 'https://tun.example.com', domain: 'tun.example.com' },
+        51820,
+      ),
+    ).toEqual({ value: '', host: '', source: null });
+
+    expect(
+      deriveDefaultPublicEndpoint({ accessMode: 'ip', endpoint: 'http://127.0.0.1:8880', domain: null }, 51820),
+    ).toEqual({ value: '', host: '', source: null });
+
+    expect(
+      deriveDefaultPublicEndpoint({ accessMode: 'ip', endpoint: 'http://203.0.113.10:8880', domain: null }, null),
+    ).toEqual({ value: '', host: '', source: null });
+  });
+
+  it('syncPublicEndpointPort 自动联动与手工端口保留', () => {
+    expect(syncPublicEndpointPort('203.0.113.10:51820', 51820, 5000, '203.0.113.10', true)).toBe(
+      '203.0.113.10:5000',
+    );
+    expect(syncPublicEndpointPort('wg.example.com:51820', 51820, 5000, '', false)).toBe(
+      'wg.example.com:5000',
+    );
+    expect(syncPublicEndpointPort('nat.example.com:40000', 51820, 5000, '203.0.113.10', false)).toBe(
+      'nat.example.com:40000',
+    );
+    expect(syncPublicEndpointPort('203.0.113.10:51820', 51820, null, '203.0.113.10', true)).toBe(
+      '203.0.113.10:51820',
+    );
   });
 });

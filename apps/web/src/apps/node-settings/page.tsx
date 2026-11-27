@@ -263,7 +263,12 @@ export default function HubSettingsPage() {
             offline={offline}
             initialDrawerKind={search.action === 'install' ? 'install' : null}
           />
-          <ModeCard hubId={hubId} hubName={hubName} offline={offline} />
+          <ModeCard
+            hubId={hubId}
+            hubName={hubName}
+            offline={offline}
+            onOpenComponents={() => setSegment('components')}
+          />
         </>
       ) : null}
 

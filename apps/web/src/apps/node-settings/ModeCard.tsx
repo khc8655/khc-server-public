@@ -12,7 +12,17 @@ import { zh } from '../../i18n/zh';
 import { ModeBadge } from './ModeBadge';
 import { ModeSwitchDrawer } from './ModeSwitchDrawer';
 
-export function ModeCard({ hubId, hubName, offline }: { hubId: string; hubName: string; offline: boolean }) {
+export function ModeCard({
+  hubId,
+  hubName,
+  offline,
+  onOpenComponents,
+}: {
+  hubId: string;
+  hubName: string;
+  offline: boolean;
+  onOpenComponents?: () => void;
+}) {
   const modeQuery = useQuery(nodeModeQueryOptions(hubId));
   const [open, setOpen] = useState(false);
   const mode = modeQuery.data;
@@ -90,6 +100,7 @@ export function ModeCard({ hubId, hubName, offline }: { hubId: string; hubName: 
           onRefreshMode={async () => {
             await modeQuery.refetch();
           }}
+          onOpenComponents={onOpenComponents}
         />
       ) : null}
     </>

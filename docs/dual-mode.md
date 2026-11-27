@@ -1,6 +1,6 @@
 # Hub 双模式设计：纯 Caddy 网关 ↔ WireGuard 组网（C4）
 
-> 状态：现行 ｜ 最后核验：2026-11-22 ｜ 关联：docs/design-v3.md §2.1、docs/backup.md
+> 状态：现行 ｜ 最后核验：2026-11-27 ｜ 关联：docs/design-v3.md §2.1、docs/backup.md
 > 范围：节点双模式（wg/caddy/unknown）机制
 
 > **一句话**：**模式只由一个字段决定——`wireguard.config.enabled`**；切换 = "先把目标服务验到健康，再对 WireGuard 做一次可回退的启停"；Caddy 站点与证书在两种模式下配置完全不动，因此**站点零中断**，而 WireGuard 客户端按模式定义会断开（这不是故障，是模式语义）。
@@ -77,7 +77,7 @@ D1: app_configs(node_id, app='wireguard').config.enabled : boolean（默认 true
 
 - **不再有 `switching_*`**：切换就是一次 apply，进行中由切换按钮 loading 表达。
 - **不再有 `degraded_*`**：apply 失败本来就自动回滚并返回错误；运行健康问题归诊断（`docs/diagnostics.md`）。
-- 阻断/影响与模式正交；旧版过渡态判断（`rev > appliedRev` 显示"下发中"）已删除。对于仍处于 `wg` 模式但 `peers === 0` 的节点，`/hubs/:id/wireguard` 不再误报「公网地址未配置」，改为展示引导切换为「Caddy 网关」的低干扰提示（见 `docs/ui-redesign/page-specs.md` §2.4）。
+- 阻断/影响与模式正交；旧版过渡态判断（`rev > appliedRev` 显示"下发中"）已删除。0 Peer 的 `/hubs/:id/wireguard` 不再误报「公网地址未配置」，也不在网络页顶部放劝切横幅（避免打断首次加 Peer 流程）；模式切换统一留在「设置 → 节点模式」，切换到 `caddy` 后在完成态展示已停用网卡/释放端口说明，并引导可按需前往「设置 → 组件」L3 清理 `/etc/wireguard/*.conf` 与密钥缓存。
 
 ### 2.3 数据表达示例
 

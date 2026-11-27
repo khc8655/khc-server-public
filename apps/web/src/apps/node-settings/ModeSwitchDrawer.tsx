@@ -62,6 +62,7 @@ export function ModeSwitchDrawer({
   offline,
   onClose,
   onRefreshMode,
+  onOpenComponents,
 }: {
   open: boolean;
   hubId: string;
@@ -70,6 +71,7 @@ export function ModeSwitchDrawer({
   offline: boolean;
   onClose: () => void;
   onRefreshMode: () => Promise<void>;
+  onOpenComponents?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [accepted, setAccepted] = useState(false);
@@ -188,10 +190,40 @@ export function ModeSwitchDrawer({
         ) : null}
 
         {success ? (
-          <Banner
-            tone="ok"
-            title={fmt(zh.mode.switchSuccess, { label: modeLabel(success) })}
-          />
+          <Stack gap={2}>
+            <Banner
+              tone="ok"
+              title={fmt(zh.mode.switchSuccess, { label: modeLabel(success) })}
+              description={
+                success === 'caddy' ? zh.mode.switchToCaddySuccessDesc : zh.mode.switchToWgSuccessDesc
+              }
+            />
+            {success === 'caddy' ? (
+              <Banner
+                tone="info"
+                title={zh.mode.caddyCleanupTitle}
+                description={zh.mode.caddyCleanupDesc}
+                action={
+                  onOpenComponents ? (
+                    <Button
+                      label={zh.mode.goComponentsCleanup}
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        onClose();
+                        onOpenComponents();
+                      }}
+                    />
+                  ) : (
+                    <Link
+                      to={`${paths.hubSection(hubId, 'settings')}?tab=components`}
+                      label={zh.mode.goComponentsCleanup}
+                    />
+                  )
+                }
+              />
+            ) : null}
+          </Stack>
         ) : null}
 
         <Banner

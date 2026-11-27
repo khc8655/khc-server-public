@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AgentState, TaskResponse } from '@khc/contracts';
+import type { AgentState, Node, TaskResponse } from '@khc/contracts';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { ApiError } from '../../data/client';
 import { fetchAppConfig, fetchTask, hostFwMessages } from '../../data/apps';
@@ -21,6 +21,7 @@ import {
   WIREGUARD_APP,
   clientConfigText,
   clientPrivateKey,
+  deriveDefaultPublicEndpoint,
   isValidCidr,
   migrationPeer,
   nextPeerAddress,
@@ -31,6 +32,7 @@ import {
   parseWireGuardStatus,
   setPeerEnabled,
   splitAllowedIps,
+  syncPublicEndpointPort,
   upsertPeer,
   wireGuardConfigQueryOptions,
   type WgConfig,
@@ -141,7 +143,11 @@ interface IfaceFormState {
   mtu: number | null;
   extIface: string;
   publicEndpoint: string;
-  initial: string;
+  savedSignature: string;
+  openedSignature: string;
+  endpointAuto: boolean;
+  endpointAutoSource: 'ip' | 'domain' | null;
+  endpointAutoHost: string;
 }
 
 interface PeerRow {
@@ -228,17 +234,50 @@ function editPeerForm(peer: WgPeer): PeerFormState {
   return { ...form, initial: peerSignature(form) };
 }
 
-function interfaceForm(config: WgConfig): IfaceFormState {
-  const form: IfaceFormState = {
+function interfaceForm(
+  config: WgConfig,
+  hub?: Pick<Node, 'accessMode' | 'endpoint' | 'domain'> | null,
+): IfaceFormState {
+  const savedEndpoint = config.interface.publicEndpoint;
+  const saved: IfaceFormState = {
     name: config.interface.name,
     address: config.interface.address,
     listenPort: config.interface.listenPort,
     mtu: config.interface.mtu,
     extIface: config.interface.extIface,
-    publicEndpoint: config.interface.publicEndpoint,
-    initial: '',
+    publicEndpoint: savedEndpoint,
+    savedSignature: '',
+    openedSignature: '',
+    endpointAuto: false,
+    endpointAutoSource: null,
+    endpointAutoHost: '',
   };
-  return { ...form, initial: JSON.stringify([form.name, form.address, form.listenPort, form.mtu, form.extIface, form.publicEndpoint]) };
+  const savedSignature = interfaceSignature(saved);
+
+  let publicEndpoint = savedEndpoint;
+  let endpointAuto = false;
+  let endpointAutoSource: 'ip' | 'domain' | null = null;
+  let endpointAutoHost = '';
+  if (!savedEndpoint.trim()) {
+    const derived = deriveDefaultPublicEndpoint(hub, config.interface.listenPort);
+    if (derived.value) {
+      publicEndpoint = derived.value;
+      endpointAuto = true;
+      endpointAutoSource = derived.source;
+      endpointAutoHost = derived.host;
+    }
+  }
+
+  const form: IfaceFormState = {
+    ...saved,
+    publicEndpoint,
+    savedSignature,
+    openedSignature: '',
+    endpointAuto,
+    endpointAutoSource,
+    endpointAutoHost,
+  };
+  return { ...form, openedSignature: interfaceSignature(form) };
 }
 
 function interfaceSignature(form: IfaceFormState): string {
@@ -295,7 +334,7 @@ export default function WireGuardPage() {
   const toast = useToast();
   const search = useSearch({ strict: false }) as { drawer?: string };
 
-  const hubQuery = useQuery({ ...hubQueryOptions(hubId), enabled: false });
+  const hubQuery = useQuery(hubQueryOptions(hubId));
   const appsQuery = useQuery(hubAppsQueryOptions(hubId));
   const configQuery = useQuery(wireGuardConfigQueryOptions(hubId));
   const modeQuery = useQuery(nodeModeQueryOptions(hubId));
@@ -492,7 +531,7 @@ export default function WireGuardPage() {
     if (caddyMode) return;
     setPeerForm(null);
     setExportState(null);
-    setIfaceForm(interfaceForm(config));
+    setIfaceForm(interfaceForm(config, hubQuery.data));
     setIfaceErrors({});
     setIfaceError(null);
   };
@@ -1374,18 +1413,6 @@ export default function WireGuardPage() {
         priority: 7,
       });
     }
-    if (!caddyMode && !configQuery.isLoading && config.peers.length === 0) {
-      banners.push({
-        key: 'unused-wg',
-        tone: 'info',
-        title: zh.wireguard.unusedWgTitle,
-        description: zh.wireguard.unusedWgDesc,
-        action: (
-          <Link to={paths.hubSection(hubId, 'settings')} label={zh.wireguard.goSwitchCaddyMode} />
-        ),
-        priority: 8,
-      });
-    }
   }
   const visibleBanners = banners.sort((a, b) => a.priority - b.priority).slice(0, 2);
 
@@ -2218,13 +2245,21 @@ function InterfaceDrawer({
   onClose: () => void;
   onSave: (apply: boolean) => void;
 }) {
-  const dirty = interfaceSignature(form) !== form.initial;
+  const currentSignature = interfaceSignature(form);
+  const hasChanges = currentSignature !== form.savedSignature;
+  const userEdited = currentSignature !== form.openedSignature;
+  const endpointHelp =
+    form.endpointAuto && form.endpointAutoSource === 'ip'
+      ? zh.wireguard.publicEndpointAutoIpHelp
+      : form.endpointAuto && form.endpointAutoSource === 'domain'
+        ? zh.wireguard.publicEndpointAutoDomainHelp
+        : zh.wireguard.publicEndpointHelp;
   return (
     <Drawer
       open
       title={zh.wireguard.interfaceTitle}
       context={fmt(zh.wireguard.interfaceContext, { hub: hubName })}
-      dirty={dirty}
+      dirty={userEdited}
       onClose={onClose}
       footer={
         <Row gap={2}>
@@ -2232,7 +2267,7 @@ function InterfaceDrawer({
           <Button
             label={zh.common.save}
             loading={saving}
-            disabled={!dirty || saving}
+            disabled={!hasChanges || saving}
             disabledReason={zh.common.noChanges}
             onClick={() => onSave(false)}
           />
@@ -2240,7 +2275,7 @@ function InterfaceDrawer({
             label={zh.common.saveAndApply}
             variant="primary"
             loading={saving}
-            disabled={!dirty || saving || Boolean(offlineReason)}
+            disabled={!hasChanges || saving || Boolean(offlineReason)}
             disabledReason={offlineReason ?? zh.common.noChanges}
             onClick={() => onSave(true)}
           />
@@ -2276,7 +2311,16 @@ function InterfaceDrawer({
             value={form.listenPort}
             min={1}
             max={65535}
-            onChange={(value) => onChange({ listenPort: value })}
+            onChange={(value) => {
+              const nextEndpoint = syncPublicEndpointPort(
+                form.publicEndpoint,
+                form.listenPort,
+                value,
+                form.endpointAutoHost,
+                form.endpointAuto,
+              );
+              onChange({ listenPort: value, publicEndpoint: nextEndpoint });
+            }}
           />
         </Field>
         <Field id="iface-mtu" label={zh.wireguard.mtu} error={errors.mtu}>
@@ -2299,14 +2343,20 @@ function InterfaceDrawer({
         <Field
           id="iface-endpoint"
           label={zh.wireguard.publicEndpoint}
-          help={zh.wireguard.publicEndpointHelp}
+          help={endpointHelp}
           error={errors.publicEndpoint}
         >
           <TextInput
             id="iface-endpoint"
             value={form.publicEndpoint}
             mono
-            onChange={(value) => onChange({ publicEndpoint: value })}
+            onChange={(value) =>
+              onChange({
+                publicEndpoint: value,
+                endpointAuto: false,
+                endpointAutoSource: null,
+              })
+            }
           />
         </Field>
         <SecretField

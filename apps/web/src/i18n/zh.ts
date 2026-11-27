@@ -2314,6 +2314,13 @@ export const zh = {
     componentInstall: '安装',
     componentInstallTitle: '安装 {name}？',
     componentInstallConfirm: '安装 {name}',
+    componentUninstall: '清理配置',
+    componentWgUninstallTitle: '清理 WireGuard 配置与密钥？',
+    componentWgUninstallBody:
+      '将停用并禁用节点上的 wg-quick 服务，永久删除 /etc/wireguard/*.conf 与密钥缓存（不可恢复）；wireguard-tools 命令行包本身无常驻进程，停用后不占内存与端口，默认保留。',
+    componentWgUninstallConfirm: '清理 WireGuard 配置',
+    componentUninstallSubmitted: '已提交清理任务',
+    componentUninstallFailed: '清理 WireGuard 配置失败',
     componentOpenSites: '进入应用',
     componentOpenNetwork: '进入网络',
     componentCaddyName: 'Caddy',
@@ -2526,6 +2533,13 @@ export const zh = {
     confirmSwitch: '确认切换',
     switchBusy: '切换中…',
     switchSuccess: '已切换到{label}',
+    switchToCaddySuccessDesc:
+      '已停用 WireGuard 网卡并释放 UDP 端口（无常驻进程占用）；原有配置与密钥默认保留，随时可切回组网节点。',
+    switchToWgSuccessDesc: '已重新启用 WireGuard 网卡与组网配置，原有 Peer 凭原配置即可自动重连。',
+    caddyCleanupTitle: '需要彻底清理 WireGuard 配置与密钥？',
+    caddyCleanupDesc:
+      '若确认该节点不再组网，可前往「设置 → 组件」清理节点上的 /etc/wireguard/*.conf 与密钥缓存（wireguard-tools 命令行包无常驻进程，停用后不占内存与端口）。',
+    goComponentsCleanup: '前往组件清理',
     switchFailed: '切换失败',
     failedCode: '错误码 {code}',
     retry: '重试',
@@ -2708,6 +2722,9 @@ export const zh = {
     publicEndpoint: '公网地址',
     ifaceAddressHelp: 'CIDR 格式，如 10.99.0.1/24',
     publicEndpointHelp: '填写 IP:端口 或 域名:端口；Peer 连接与导出客户端配置都需要它，留空时这两件事都做不了',
+    publicEndpointAutoIpHelp: '已按节点 IP 与监听端口自动填入，可按需修改；Peer 连接与导出客户端配置都需要它',
+    publicEndpointAutoDomainHelp:
+      '已按节点域名与监听端口自动填入；若域名开启了 Cloudflare 代理（小黄云），请改为直连公网 IP:端口（UDP 无法经代理）',
     invalidIfaceName: '接口名称格式不正确',
     invalidIfaceAddress: '接口地址需要 CIDR 格式',
     invalidPort: '端口需要 1–65535',
@@ -2847,10 +2864,6 @@ export const zh = {
     publicEndpointMissingDesc: 'Peer 需要可连的公网地址，请在接口设置中填写。',
     invalidExtIface: '出口网卡名称格式不正确',
     forwardsCard: '端口转发',
-    unusedWgTitle: '当前尚未接入任何 Peer',
-    unusedWgDesc:
-      '若这台节点只做 Caddy 反代、不需要内网穿透，可前往设置切换为「Caddy 网关」模式以简化导航。',
-    goSwitchCaddyMode: '切换为 Caddy 网关',
   },
 
   apps: {
