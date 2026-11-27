@@ -273,7 +273,7 @@ ssh -i <data>/host-ops/id_ed25519 -p <port>
 - Peer 脚本：`agent/adapters/host_ops/khc_host.py`（与 `agent/khc/ops.py` 打包成单文件 `khc-host`）
 - 测试：`agent/tests/test_host_ops.py`（132 项）；全量 Agent **572 项**、前端/Worker **93 项**
 - UI：`apps/web/src/pages/hostops/`（不新增路由；VM 卡片 + WireGuard Peer 抽屉「运维」）
-- 动作：`hub_pubkey` / `probe` / `onboard` / `call`；`call` 的**读写按 verb 判定**（适配器 `is_write` 钩子，只读动词不抢节点级写锁，也不要求幂等键），写动词之间仍串行
+- 动作：`hub_pubkey` / `probe` / `onboard` / `call`；`call` 的**读写按 verb 判定**（适配器 `is_write` 钩子，只读动词不抢节点级写锁，也不要求幂等键），写动词之间仍串行；Hub self 进程内执行只在赋值运行期全局时短暂加锁，不包住动词本身，慢写动词进行中只读调用照常并发
 - 长耗时动作：`call_task`（mode=task）供 `fw.apply` 使用；UI 轮询任务结果（见 `docs/host-ops-async.md`）
 - 写动作审计：适配器在动作信封返回 `audit{write,target,verb}`；Worker 通用记录 `host-ops.call`（只记 target/verb/ok/error，不记参数内容）
 

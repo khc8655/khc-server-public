@@ -2,6 +2,13 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.48.2] - 2026-11-27
+### Fixed
+- Agent `0.12.2`：host-ops 进程内执行不再用进程级锁包住整个动词，慢写动词（如 `svc.disable` 最长 30s）进行中，只读轮询不再排队；写动词互斥沿用内核节点级写锁。
+- Agent `0.12.2`：`tune.swap` 的 `dd` 超时按磁盘速度下限估算（4G 约 341s），子进程回退上限放宽到 900s，避免在 `swapon` 后、写 fstab 前被杀。
+- Agent `0.12.2`：journald 限额配置未变时不再重启 `systemd-journald`。
+- Agent `0.12.2`：「可精简系统服务」列表在 snapd 未运行时改读 `/var/lib/snapd/snaps`，不再调用 `snap list` 经 socket 唤醒 snapd。
+
 ## [0.48.1] - 2026-11-27
 ### Fixed
 - Agent `0.12.1`：一键 Swap 严格读取 `/etc/fstab`，读失败、非 UTF-8 或为空即中止，不再覆盖成只剩 swap 一行；预演在分配与 `swapoff` 前完成。

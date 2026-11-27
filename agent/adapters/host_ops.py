@@ -59,7 +59,7 @@ from khc.util import (
 )
 
 APP_NAME = "host-ops"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 DATA_DIRNAME = "host-ops"
 KEY_FILENAME = "id_ed25519"
 SCRIPT_FILENAME = "khc-host"
@@ -72,6 +72,8 @@ DEFAULT_USER = "khcops"
 SSH_TIMEOUT = 6.0
 TASK_TIMEOUT = 180.0
 _LONG_TASK_VERBS = frozenset({"fw.apply", "tune.swap", "tune.journal-vacuum", "tune.apt-clean"})
+#: 单独放宽的长任务：tune.swap 在慢盘上 dd 4G 可能需要数分钟，步骤超时之和需落在此上限内。
+_VERB_TASK_TIMEOUTS = {"tune.swap": 900.0}
 PROBE_TIMEOUT = 8.0
 SECURITY_CACHE_TTL = 120.0
 MAX_SSH_STDIN = 64 * 1024
@@ -152,21 +154,24 @@ def _call_host_script_in_process(
     if _INPROC_EXECUTOR is not None:
         return _INPROC_EXECUTOR(verb, payload, state_dir)
     module = _khc_host_module()
+    # 对齐运行期全局：这三个值对一个 Agent 进程是常量，重复赋同值是幂等的，
+    # 锁只护赋值本身，不再包住 main()（2026-11-27）：否则一个 30s 的写动词会让
+    # 10s 一次的只读轮询全部排队。写动词之间的互斥由内核节点级写锁负责
+    # （kernel._acquire_write，sync 与 task 模式都持有到动作结束，冲突直接 409 busy）。
     with _INPROC_LOCK:
-        # 每次调用前对齐运行期全局：模块是长驻的，不能假设它的状态还是上次的样子。
         module.STATE_DIR = state_dir
         module.PROC_ROOT = "/proc"
         module.DATA_DIR = ctx.data
-        try:
-            payload_obj = module.main([verb], payload)
-        except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
-            return RunResult(
-                cmd=["khc-host", verb],
-                rc=1,
-                stdout="",
-                stderr=f"{type(exc).__name__}: {exc}",
-            )
-        text = module.serialize(payload_obj)
+    try:
+        payload_obj = module.main([verb], payload)
+    except Exception as exc:  # noqa: BLE001 - 任何异常都转成子进程同款的失败信封
+        return RunResult(
+            cmd=["khc-host", verb],
+            rc=1,
+            stdout="",
+            stderr=f"{type(exc).__name__}: {exc}",
+        )
+    text = module.serialize(payload_obj)
     return RunResult(cmd=["khc-host", verb], rc=0, stdout=text + "\n", stderr="")
 
 
@@ -1424,7 +1429,7 @@ class HostOps(Adapter):
             result = ctx.run(
                 [sys.executable, self.script_path(ctx), verb],
                 input=payload,
-                timeout=TASK_TIMEOUT if verb in _LONG_TASK_VERBS else SSH_TIMEOUT,
+                timeout=_VERB_TASK_TIMEOUTS.get(verb, TASK_TIMEOUT) if verb in _LONG_TASK_VERBS else SSH_TIMEOUT,
                 check=False,
                 env={
                     "KHC_HOST_STATE_DIR": self.self_state_dir(ctx),
