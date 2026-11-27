@@ -66,7 +66,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.8.1"
+SCRIPT_VERSION = "1.8.2"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -2482,6 +2482,26 @@ def _snap_installed_packages() -> Optional[list[str]]:
     return [line.split()[0] for line in lines[1:] if line.split()]
 
 
+SNAPD_SNAPS_DIR = "/var/lib/snapd/snaps"
+
+
+def _snap_names_from_disk() -> Optional[list[str]]:
+    """snapd 未运行时的只读判定：看 ``/var/lib/snapd/snaps/*.snap``，不唤醒 snapd。
+
+    只作列表展示用；真正停用前 ``_toggle_slim_service`` 仍以 ``snap list`` 为准。
+    目录读不了返回 None（保守拦截）。
+    """
+
+    try:
+        names = os.listdir(SNAPD_SNAPS_DIR)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+    found = sorted({name.split("_", 1)[0] for name in names if name.endswith(".snap")})
+    return found
+
+
 def _resolve_slim_entry(unit_or_id: str) -> dict[str, Any]:
     key = _as_text(unit_or_id)
     if not key:
@@ -2559,7 +2579,15 @@ def svc_slim_list_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, 
         unit_props.get(u, {}).get("LoadState", "") not in ("", "not-found")
         for u in snap_entry["units"]
     )
-    snaps = _snap_installed_packages() if snap_present else []
+    # 只在 snapd 正在运行时调用 `snap list`：snap CLI 走 /run/snapd.socket，
+    # snapd 未运行时调用会经 socket 激活把它拉起来，刷新列表本身就违背了「精简」。
+    snap_running = unit_props.get("snapd.service", {}).get("ActiveState") == "active"
+    if not snap_present:
+        snaps: Optional[list[str]] = []
+    elif snap_running:
+        snaps = _snap_installed_packages()
+    else:
+        snaps = _snap_names_from_disk()
 
     services: list[dict[str, Any]] = []
     for entry in SLIM_SERVICE_WHITELIST:
@@ -3786,6 +3814,16 @@ def _apply_fstab_plan(plan: Optional[tuple[str, str]]) -> None:
         raise HostError("E_IO", "fstab 写入后校验失败，已恢复原文件")
 
 
+def _swap_dd_timeout(size_mb: int) -> float:
+    """dd 写零超时：按最慢约 12 MB/s 的 VPS 磁盘估算，下限 120s（4G ≈ 341s）。
+
+    各步骤超时之和须落在适配器 ``_VERB_TASK_TIMEOUTS['tune.swap']``（900s）之内，
+    否则子进程回退路径可能在 swapon 之后、写 fstab 之前被杀，留下半成品状态。
+    """
+
+    return max(120.0, size_mb / 12.0)
+
+
 def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     action = _as_text(params.get("action"))
     if action not in ("create", "remove"):
@@ -3824,7 +3862,7 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
                 raise HostError("E_UNSUPPORTED", f"Btrfs 关闭 COW 失败: {(chattr_err or '').strip()[:160]}")
             alloc_rc, _out, alloc_err = _run_privileged(
                 ["dd", "if=/dev/zero", f"of={SWAPFILE_PATH}", "bs=1M", f"count={size_mb}", "status=none"],
-                timeout=120.0,
+                timeout=_swap_dd_timeout(size_mb),
             )
         else:
             alloc_rc, _out, alloc_err = _run_privileged(
@@ -3835,18 +3873,18 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
                 _remove_system_file(SWAPFILE_PATH)
                 alloc_rc, _out, alloc_err = _run_privileged(
                     ["dd", "if=/dev/zero", f"of={SWAPFILE_PATH}", "bs=1M", f"count={size_mb}", "status=none"],
-                    timeout=120.0,
+                    timeout=_swap_dd_timeout(size_mb),
                 )
         if alloc_rc != 0:
             _remove_system_file(SWAPFILE_PATH)
             raise HostError("E_INVALID", f"创建 swapfile 失败: {(alloc_err or '').strip()[:200]}")
 
-        for step_name, argv in (
-            ("chmod", ["chmod", "0600", SWAPFILE_PATH]),
-            ("mkswap", ["mkswap", SWAPFILE_PATH]),
-            ("swapon", ["swapon", SWAPFILE_PATH]),
+        for step_name, argv, step_timeout in (
+            ("chmod", ["chmod", "0600", SWAPFILE_PATH], 15.0),
+            ("mkswap", ["mkswap", SWAPFILE_PATH], 30.0),
+            ("swapon", ["swapon", SWAPFILE_PATH], 60.0),
         ):
-            rc, _out, err = _run_privileged(argv, timeout=60.0)
+            rc, _out, err = _run_privileged(argv, timeout=step_timeout)
             if rc != 0:
                 _remove_system_file(SWAPFILE_PATH)
                 raise HostError(
@@ -3942,8 +3980,11 @@ def tune_journal_vacuum_verb(params: Mapping[str, Any], args: list[str]) -> dict
     if not before["available"]:
         raise HostError("E_UNSUPPORTED", "journalctl 不可用")
     dropin = os.path.join(_journald_conf_d_dir(), JOURNALD_DROPIN_FILE)
-    _write_system_file(dropin, f"[Journal]\nSystemMaxUse={max_mb}M\n", mode=0o644)
-    _run_privileged(["systemctl", "restart", "systemd-journald"], timeout=30.0)
+    dropin_content = f"[Journal]\nSystemMaxUse={max_mb}M\n"
+    # 配置未变时不重启 journald：重启会短暂中断日志采集，重复点击不应每次都付这个代价。
+    if _read_text(dropin) != dropin_content:
+        _write_system_file(dropin, dropin_content, mode=0o644)
+        _run_privileged(["systemctl", "restart", "systemd-journald"], timeout=30.0)
     rc, _out, err = _run_privileged(["journalctl", f"--vacuum-size={max_mb}M"], timeout=60.0)
     if rc != 0:
         raise HostError("E_BAD_REQUEST", f"清理 journald 日志失败: {(err or '').strip()[:200]}")

@@ -1578,7 +1578,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.2.1")
+        self.assertEqual(self.adapter.version, "1.2.2")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -2272,6 +2272,50 @@ class AdapterCallTests(AdapterTestBase):
         self.assertEqual(result["data"], {"via": "subprocess"})
         self.assertEqual(calls, ["status"])  # 进程内试过一次
         self.assertTrue(self.runner.commands(os.path.basename(sys.executable)))  # 然后回退到子进程
+
+    def test_inproc_read_is_not_blocked_by_running_write(self) -> None:
+        """进程内执行不再用大锁包住 main()：慢写动词进行中，只读动词照常返回。"""
+
+        import threading
+        import types
+
+        module = ADAPTER_MODULE._khc_host_module()
+        real_main = module.main
+        gate = threading.Event()
+        entered = threading.Event()
+
+        def fake_main(argv, payload):
+            if argv[0] == "svc.disable":
+                entered.set()
+                gate.wait(5)
+            return {"ok": True, "v": module.SCRIPT_VERSION, "data": {"verb": argv[0]}}
+
+        ADAPTER_MODULE._INPROC_EXECUTOR = None
+        module.main = fake_main
+        ctx = types.SimpleNamespace(data=self.tmp)
+        saved = (module.STATE_DIR, module.PROC_ROOT, getattr(module, "DATA_DIR", None))
+        try:
+            writer = threading.Thread(
+                target=ADAPTER_MODULE._call_host_script_in_process,
+                args=(ctx, "svc.disable", "{}", self.tmp),
+            )
+            writer.start()
+            self.assertTrue(entered.wait(2))
+            result: dict = {}
+
+            def read() -> None:
+                result["r"] = ADAPTER_MODULE._call_host_script_in_process(ctx, "status", "{}", self.tmp)
+
+            reader = threading.Thread(target=read)
+            reader.start()
+            reader.join(1.0)
+            self.assertFalse(reader.is_alive(), "只读动词被写动词阻塞")
+            self.assertIn('"verb":"status"', result["r"].stdout.replace(" ", ""))
+        finally:
+            gate.set()
+            writer.join(2)
+            module.main = real_main
+            module.STATE_DIR, module.PROC_ROOT, module.DATA_DIR = saved
 
     def test_call_self_does_not_fall_back_on_business_error(self) -> None:
         """业务错误不回退：子进程会给一样的答案，重跑只是白费时间。"""
@@ -4517,6 +4561,22 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         self.assertNotIn("# khc-managed-swap", read_text(fstab))
         self.assertIn("UUID=abc / ext4 defaults 0 1", read_text(fstab))
 
+    def test_tune_journal_skips_restart_when_dropin_unchanged(self) -> None:
+        self._seed_tune_proc()
+        self.runner.on("journalctl", lambda argv, _: (0, "Archived and active journals take up 64.0M in the file system.\n", ""))
+        first = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 100})
+        self.assertTrue(first["ok"])
+        restarts = [c for c in self.runner.commands("systemctl") if "restart" in c]
+        self.assertEqual(len(restarts), 1)
+        second = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 100})
+        self.assertTrue(second["ok"])
+        restarts = [c for c in self.runner.commands("systemctl") if "restart" in c]
+        self.assertEqual(len(restarts), 1)
+        third = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 200})
+        self.assertTrue(third["ok"])
+        restarts = [c for c in self.runner.commands("systemctl") if "restart" in c]
+        self.assertEqual(len(restarts), 2)
+
     def test_tune_bbr_journal_and_apt_clean(self) -> None:
         # BBR 不支持 -> E_UNSUPPORTED
         self._seed_tune_proc(bbr_available="reno cubic", bbr_current="cubic")
@@ -4709,6 +4769,41 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         self.assertTrue(res_err["ok"])
         snap_entry = next(item for item in res_err["data"]["services"] if item["id"] == "snapd")
         self.assertTrue(snap_entry["blocked"])
+
+
+    def test_svc_slim_list_does_not_wake_inactive_snapd(self) -> None:
+        show_out = self._systemctl_show_output(
+            [
+                {
+                    "Id": "snapd.service",
+                    "LoadState": "loaded",
+                    "ActiveState": "inactive",
+                    "SubState": "dead",
+                    "UnitFileState": "disabled",
+                    "MemoryCurrent": "[not set]",
+                    "Description": "Snap Daemon",
+                },
+            ]
+        )
+        self.runner.on("systemctl show", lambda argv, _: (0, show_out, ""))
+        snaps_dir = os.path.join(self.tmp, "snapd-snaps")
+        os.makedirs(snaps_dir)
+        saved = HOST_SCRIPT.SNAPD_SNAPS_DIR
+        HOST_SCRIPT.SNAPD_SNAPS_DIR = snaps_dir
+        try:
+            HOST_SCRIPT.ROOT_OVERRIDE = False
+            try:
+                empty = self.run_verb("svc.slim-list")
+                _write(os.path.join(snaps_dir, "lxd_123.snap"), "x")
+                withsnap = self.run_verb("svc.slim-list")
+            finally:
+                HOST_SCRIPT.ROOT_OVERRIDE = True
+        finally:
+            HOST_SCRIPT.SNAPD_SNAPS_DIR = saved
+        self.assertEqual(self.runner.commands("snap"), [])
+        self.assertFalse(empty["data"]["services"][0]["blocked"])
+        self.assertTrue(withsnap["data"]["services"][0]["blocked"])
+        self.assertIn("lxd", withsnap["data"]["services"][0]["blockedReason"])
 
     def test_svc_disable_enable_whitelist_group_snapd_and_guards(self) -> None:
         # 1) 非白名单关键系统/应用服务一律 E_PROTECTED
