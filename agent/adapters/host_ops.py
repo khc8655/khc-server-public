@@ -59,7 +59,7 @@ from khc.util import (
 )
 
 APP_NAME = "host-ops"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 DATA_DIRNAME = "host-ops"
 KEY_FILENAME = "id_ed25519"
 SCRIPT_FILENAME = "khc-host"

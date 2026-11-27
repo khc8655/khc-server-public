@@ -2,6 +2,12 @@
 
 格式基于 Keep a Changelog，版本遵循 SemVer；条目写法见 `CONTRIBUTING.md`。
 
+## [0.48.1] - 2026-11-27
+### Fixed
+- Agent `0.12.1`：一键 Swap 严格读取 `/etc/fstab`，读失败、非 UTF-8 或为空即中止，不再覆盖成只剩 swap 一行；预演在分配与 `swapoff` 前完成。
+- Agent `0.12.1`：改写 fstab 前备份 `fstab.khc-bak`，写后 `findmnt --verify` 校验失败即恢复原文并回滚本次 `swapon`。
+- Agent `0.12.1`：关闭受管 Swap 前检查「可用内存 − Swap 已用 ≥ 256 MB」，不足时返回 `E_CONFLICT`，避免 `swapoff` 触发 OOM 杀掉 Caddy/Agent。
+
 ## [0.48.0] - 2026-11-26
 ### Added
 - Agent `0.12.0`：主机运维新增保守白名单 `svc.slim-list`、`svc.disable` 与 `svc.enable`，成组停用/启用非核心系统单元并在 `snap list` 非空时锁定 `snapd`。
