@@ -148,6 +148,7 @@ let tuneJournalState = {
   maxUse: null as string | null,
   managed: false,
 };
+let tuneJournalFreedBytes = 0;
 let tuneAptState = {
   available: true,
   cacheBytes: 180 * 1024 * 1024,
@@ -246,6 +247,7 @@ function mockApi() {
     maxUse: null,
     managed: false,
   };
+  tuneJournalFreedBytes = 0;
   tuneAptState = {
     available: true,
     cacheBytes: 180 * 1024 * 1024,
@@ -375,6 +377,16 @@ function mockApi() {
             swappiness: 10,
             sources: [],
           };
+        } else if (lastCallTaskVerb === 'tune.journal-vacuum') {
+          const days = Number(body.params?.params?.vacuumDays ?? 0);
+          const targetBytes = days >= 2 ? 28 * 1024 * 1024 : 90 * 1024 * 1024;
+          tuneJournalFreedBytes = Math.max(0, tuneJournalState.usedBytes - targetBytes);
+          tuneJournalState = {
+            available: true,
+            usedBytes: tuneJournalState.usedBytes - tuneJournalFreedBytes,
+            maxUse: '100M',
+            managed: true,
+          };
         }
         return json({ ok: true, taskId: 'task-1' });
       }
@@ -382,7 +394,9 @@ function mockApi() {
         const resultData =
           lastCallTaskVerb === 'tune.swap'
             ? { swap: tuneSwapState }
-            : { token: 'fw-token-1' };
+            : lastCallTaskVerb === 'tune.journal-vacuum'
+              ? { freedBytes: tuneJournalFreedBytes, journal: tuneJournalState }
+              : { token: 'fw-token-1' };
         return json({
           ok: true,
           task: {
@@ -1249,6 +1263,37 @@ describe('主机「优化」标准表与低内存 Swap（P2）', () => {
 
     expect(await screen.findByText('读取系统调优状态失败')).toBeTruthy();
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+
+  it('journald 已设 100M 上限时按钮切为「清理归档」，支持 2 天归档轮转清理与释放反馈', async () => {
+    tuneJournalState = {
+      available: true,
+      usedBytes: 90 * 1024 * 1024,
+      maxUse: '100M',
+      managed: true,
+    };
+    await renderRoute('/hubs/tyo-1/ops');
+    await userEvent.click(await screen.findByRole('button', { name: '优化' }));
+
+    expect((await screen.findAllByText('上限 100M')).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole('button', { name: '清理归档' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('清理 2 天前的历史日志归档？')).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: '清理归档' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('已清理系统日志（释放 62.0 MiB）').length).toBeGreaterThan(0);
+    });
+    const journalCall = requests.find(
+      (item) =>
+        item.url.endsWith('/apps/host-ops/call_task') &&
+        String(item.init?.body ?? '').includes('"verb":"tune.journal-vacuum"'),
+    );
+    expect(journalCall).toBeTruthy();
+    const sent = JSON.parse(String(journalCall?.init?.body)) as {
+      params: { params: { maxSizeMb: number; vacuumDays: number } };
+    };
+    expect(sent.params.params).toEqual({ maxSizeMb: 100, vacuumDays: 2 });
   });
 });
 

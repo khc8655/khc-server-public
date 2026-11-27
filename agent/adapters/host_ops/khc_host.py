@@ -66,7 +66,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.8.2"
+SCRIPT_VERSION = "1.8.3"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -320,20 +320,37 @@ def serialize(envelope: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_text(path: str, limit: int = 4 * 1024 * 1024) -> str:
+_READ_CHUNK_BYTES = 65536
+
+
+def _read_file_chunked(path: str, limit: int, *, binary: bool) -> Any:
+    """按 64 KiB 分块读取至上限，避免 Linux /proc/sys/* 对 4 MiB 单次 read() 报 ENOMEM。"""
+
+    empty: Any = b"" if binary else ""
+    if limit <= 0:
+        return empty
+    kwargs: dict[str, Any] = {"mode": "rb"} if binary else {"mode": "r", "encoding": "utf-8", "errors": "replace"}
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            return handle.read(limit)
+        with open(path, **kwargs) as handle:
+            chunks: list[Any] = []
+            remaining = limit
+            while remaining > 0:
+                piece = handle.read(min(_READ_CHUNK_BYTES, remaining))
+                if not piece:
+                    break
+                chunks.append(piece)
+                remaining -= len(piece)
+            return empty.join(chunks)
     except OSError:
-        return ""
+        return empty
+
+
+def _read_text(path: str, limit: int = 4 * 1024 * 1024) -> str:
+    return str(_read_file_chunked(path, limit, binary=False))
 
 
 def _read_bytes(path: str, limit: int = 4 * 1024 * 1024) -> bytes:
-    try:
-        with open(path, "rb") as handle:
-            return handle.read(limit)
-    except OSError:
-        return b""
+    return bytes(_read_file_chunked(path, limit, binary=True))
 
 
 def _run(argv: list[str], input_text: Optional[str] = None, timeout: float = 8.0) -> tuple[int, str, str]:
@@ -3388,6 +3405,8 @@ BBR_SYSCTL_FILE = "99-khc-bbr.conf"
 JOURNALD_DROPIN_FILE = "99-khc.conf"
 MIN_JOURNAL_MAX_MB = 50
 MAX_JOURNAL_MAX_MB = 500
+MIN_JOURNAL_VACUUM_DAYS = 2
+MAX_JOURNAL_VACUUM_DAYS = 30
 _SIZE_UNIT_FACTORS = {
     "b": 1,
     "k": 1024,
@@ -3824,6 +3843,14 @@ def _swap_dd_timeout(size_mb: int) -> float:
     return max(120.0, size_mb / 12.0)
 
 
+def _swap_off_headroom_bytes(mem_total: Optional[int]) -> int:
+    """关闭受管 Swap 所需可用内存余量：>=1 GiB 保留 256 MiB；小内存机按 max(64 MiB, MemTotal/5) 封顶。"""
+
+    if mem_total is not None and mem_total > 0 and mem_total < 1024 * 1024 * 1024:
+        return min(SWAP_OFF_HEADROOM_BYTES, max(64 * 1024 * 1024, mem_total // 5))
+    return SWAP_OFF_HEADROOM_BYTES
+
+
 def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
     action = _as_text(params.get("action"))
     if action not in ("create", "remove"):
@@ -3915,16 +3942,19 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
         managed_used = sum(
             item["usedBytes"] for item in _parse_proc_swaps() if item["path"] == SWAPFILE_PATH
         )
-        mem_available = _parse_meminfo_bytes().get("MemAvailable")
-        if mem_available is None:
-            raise HostError("E_UNSUPPORTED", "无法读取可用内存（MemAvailable），为避免 OOM 拒绝关闭 Swap")
-        if mem_available - managed_used < SWAP_OFF_HEADROOM_BYTES:
-            raise HostError(
-                "E_CONFLICT",
-                "可用内存不足以收回 Swap：Swap 已用 "
-                f"{managed_used // (1024 * 1024)} MB，可用内存 {mem_available // (1024 * 1024)} MB，"
-                f"需至少多出 {SWAP_OFF_HEADROOM_BYTES // (1024 * 1024)} MB；请先降低内存占用后再关闭",
-            )
+        if managed_used > 0:
+            meminfo = _parse_meminfo_bytes()
+            mem_available = meminfo.get("MemAvailable")
+            if mem_available is None:
+                raise HostError("E_UNSUPPORTED", "无法读取可用内存（MemAvailable），为避免 OOM 拒绝关闭 Swap")
+            headroom = _swap_off_headroom_bytes(meminfo.get("MemTotal"))
+            if mem_available - managed_used < headroom:
+                raise HostError(
+                    "E_CONFLICT",
+                    "可用内存不足以收回 Swap：Swap 已用 "
+                    f"{managed_used // (1024 * 1024)} MB，可用内存 {mem_available // (1024 * 1024)} MB，"
+                    f"需至少多出 {headroom // (1024 * 1024)} MB；请先降低内存占用后再关闭",
+                )
         rc, _out, err = _run_privileged(["swapoff", SWAPFILE_PATH], timeout=60.0)
         if rc != 0:
             raise HostError("E_BAD_REQUEST", f"swapoff 失败: {(err or '').strip()[:200]}")
@@ -3976,6 +4006,15 @@ def tune_journal_vacuum_verb(params: Mapping[str, Any], args: list[str]) -> dict
             "E_BAD_REQUEST",
             f"maxSizeMb 必须在 {MIN_JOURNAL_MAX_MB}..{MAX_JOURNAL_MAX_MB} 之间",
         )
+    raw_days = params.get("vacuumDays")
+    vacuum_days: Optional[int] = None
+    if raw_days is not None:
+        vacuum_days = _int_param(params, "vacuumDays")
+        if vacuum_days < MIN_JOURNAL_VACUUM_DAYS or vacuum_days > MAX_JOURNAL_VACUUM_DAYS:
+            raise HostError(
+                "E_BAD_REQUEST",
+                f"vacuumDays 必须在 {MIN_JOURNAL_VACUUM_DAYS}..{MAX_JOURNAL_VACUUM_DAYS} 之间",
+            )
     before = _collect_journal_status()
     if not before["available"]:
         raise HostError("E_UNSUPPORTED", "journalctl 不可用")
@@ -3985,6 +4024,11 @@ def tune_journal_vacuum_verb(params: Mapping[str, Any], args: list[str]) -> dict
     if _read_text(dropin) != dropin_content:
         _write_system_file(dropin, dropin_content, mode=0o644)
         _run_privileged(["systemctl", "restart", "systemd-journald"], timeout=30.0)
+    if vacuum_days is not None:
+        _run_privileged(["journalctl", "--rotate"], timeout=30.0)
+        t_rc, _t_out, t_err = _run_privileged(["journalctl", f"--vacuum-time={vacuum_days}d"], timeout=60.0)
+        if t_rc != 0:
+            raise HostError("E_BAD_REQUEST", f"清理历史日志归档失败: {(t_err or '').strip()[:200]}")
     rc, _out, err = _run_privileged(["journalctl", f"--vacuum-size={max_mb}M"], timeout=60.0)
     if rc != 0:
         raise HostError("E_BAD_REQUEST", f"清理 journald 日志失败: {(err or '').strip()[:200]}")
@@ -3999,6 +4043,7 @@ def tune_journal_vacuum_verb(params: Mapping[str, Any], args: list[str]) -> dict
     return ok(
         {
             "maxSizeMb": max_mb,
+            "vacuumDays": vacuum_days,
             "beforeBytes": before_bytes,
             "afterBytes": after_bytes,
             "freedBytes": freed_bytes,

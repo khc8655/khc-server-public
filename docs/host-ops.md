@@ -107,9 +107,9 @@ sudoers：`<ssh-user> ALL=(root) NOPASSWD: /usr/local/sbin/khc-host`。
 | `cron.list` | 读 | — | 只列 `/etc/cron.d` 下 `khc-*` 受管条目与面板外文件（只读展示） |
 | `cron.set` | 写 | `{ name, content?, enabled?, remove? }` | 只写 `/etc/cron.d/khc-<name>`；内容严格校验（见 §4.2） |
 | `tune.status` | 读 | — | 聚合返回本机 Swap 现状、BBR 内核支持与状态、journald 占用/限额、APT 缓存占用（只读） |
-| `tune.swap` | 写 | `{ action: "create"\|"remove", sizeGb?: 1\|2\|4 }` | 经 `call_task` + `systemd-run` 创建/关闭 `/swapfile`（校验不与已有 swap 叠加、可用空间 `>= sizeGb+1G`、Btrfs `chattr +C`、`0600`、fstab `# khc-managed-swap` 与 `vm.swappiness=10`；fstab 严格读取，读失败/非 UTF-8/为空即中止，改写前备份 `fstab.khc-bak`、写后 `findmnt --verify` 校验失败即恢复；关闭前要求可用内存 − Swap 已用 ≥ 256 MB，否则 `E_CONFLICT`） |
+| `tune.swap` | 写 | `{ action: "create"\|"remove", sizeGb?: 1\|2\|4 }` | 经 `call_task` + `systemd-run` 创建/关闭 `/swapfile`（校验不与已有 swap 叠加、可用空间 `>= sizeGb+1G`、Btrfs `chattr +C`、`0600`、fstab `# khc-managed-swap` 与 `vm.swappiness=10`；fstab 严格读取，读失败/非 UTF-8/为空即中止，改写前备份 `fstab.khc-bak`、写后 `findmnt --verify` 校验失败即恢复；关闭时若受管 Swap 已用 `> 0`，要求可用内存 − Swap 已用 ≥ `256 MB`（1 GiB 以下按 `max(64 MiB, MemTotal/5)` 封顶），否则 `E_CONFLICT`） |
 | `tune.bbr` | 写 | `{ enabled: bool }` | 写/删 `/etc/sysctl.d/99-khc-bbr.conf` 并即时切换 `fq + bbr`（内核不支持返回 `E_UNSUPPORTED`） |
-| `tune.journal-vacuum` | 写 | `{ maxSizeMb?: 50..500 }` | 写 `/etc/systemd/journald.conf.d/99-khc.conf`（`SystemMaxUse`）、重启 journald 并按阈值清理日志 |
+| `tune.journal-vacuum` | 写 | `{ maxSizeMb?: 50..500, vacuumDays?: 2..30 }` | 写 `/etc/systemd/journald.conf.d/99-khc.conf`（`SystemMaxUse`）、配置变更时重启 journald，并按 `--vacuum-time=<vacuumDays>d`（先 `--rotate`）与 `--vacuum-size` 清理日志 |
 | `tune.apt-clean` | 写 | — | 仅 Debian/Ubuntu 执行 `apt-get clean` 释放缓存并返回释放字节数 |
 
 `user` 默认 `root`；仅允许 `/etc/passwd` 中存在且有家目录的用户。
