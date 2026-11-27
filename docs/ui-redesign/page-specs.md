@@ -1,6 +1,6 @@
 # 全站页面规范（page-specs）
 
-> 状态：现行 ｜ 最后核验：2026-11-25 ｜ 关联：[ui-guidelines.md](ui-guidelines.md)、AGENTS.md §3、ADR-0018
+> 状态：现行 ｜ 最后核验：2026-11-27 ｜ 关联：[ui-guidelines.md](ui-guidelines.md)、AGENTS.md §3、ADR-0018
 > 范围：路由总表与区块映射，新增页面必须同步登记
 > 页面类型代号见 [ui-guidelines.md](ui-guidelines.md)：A 分诊概览 / B 列表对象 / C 单对象详情 / D 配置表单 / E 运维动作 / L 登录。
 > 本文只负责**路由与区块映射**；布局、字阶、组件形态、四态、响应式与文案细则见 `ui-guidelines.md` §8.9–§8.14。
@@ -166,7 +166,7 @@
 ### 2.4 `/hubs/:id/wireguard` 网络（类型 B + 抽屉表单 + E 抽屉）
 
 - **目的**：管理 Peer（WireGuard 客户端）与端口转发。装了 WireGuard（`mode=wg`）或存在转发规则（`forwards > 0`）时顶部导航才出现「网络」Tab。
-- **独立运行与零 Peer 文案**：当节点处于纯网关模式且尚无任何 Peer（`caddyMode && peers === 0`）时，隐藏 Peer 表格、按钮、横幅与计数，页面不出现「Peer / WireGuard」字样；当仍为 `mode=wg` 且 0 Peer 时不再误报「公网地址未配置」，改为温和引导切换「Caddy 网关」；`ForwardsCard`（端口转发）不受 WireGuard 模式锁死限制，若存在指向 WG 网段内已删除/未接入 Peer IP 的启用转发规则，展示警告横幅与 [停用失效转发]。
+- **独立运行与零 Peer 文案**：当节点处于纯网关模式且尚无任何 Peer（`caddyMode && peers === 0`）时，隐藏 Peer 表格、按钮、横幅与计数，页面不出现「Peer / WireGuard」字样；`mode=wg` 且 0 Peer 时不再误报「公网地址未配置」，也不再顶部展示劝切「Caddy 网关」横幅（模式切换统一收口在设置页）；「接口设置」中公网地址留空时自动带入节点接入 IP/域名与当前监听端口（隧道接入不预填），修改监听端口时自动联动并支持手动修改；`ForwardsCard`（端口转发）不受 WireGuard 模式锁死限制，若存在指向 WG 网段内已删除/未接入 Peer IP 的启用转发规则，展示警告横幅与 [停用失效转发]。
 - **谁/场景**：加手机/电脑进内网、开端口转发，中频。
 - **首屏**：
   1. Peer 表：名称 | 隧道地址 | 状态（在线/空闲/已停用）| 最近握手 | 操作（导出配置 · 运维）。页头右侧：[接口设置]（次操作抽屉：接口名固定 khc0、监听端口/MTU/地址段）+ [＋ 添加 Peer]（主操作）。
@@ -196,8 +196,8 @@
 ### 2.6 `/hubs/:id/settings` 设置（类型 D）
 
 - **目的**：Agent 接入与生命周期、节点模式切换、内置与扩展组件管理、备份恢复。
-- **首屏**：顶部 Segmented：[Agent 与接入 | 组件 | 备份与恢复]，支持 `?tab=components` / `?tab=backup` / `?action=install` 直达（`?tab=mode` 向后兼容落入 `Agent 与接入`）。`hubQuery` 支持刷新直达按需拉取。`AccessCard` 展示并支持更换控制通道面板证书：**在线仅更换证书**时直接调 `POST /certs/:id/bind` 热重载并关闭抽屉（失败降级显示重装命令）；**改接入参数或离线改证**时留在抽屉切换到 `NodeInstallPanel` 重新生成安装命令并验活。`AgentCard`「安装 Agent」抽屉同样复用 `NodeInstallPanel`。`AgentCard` 对比 `/agent/releases` 最新版并在落后时展示「可升级到 v...」与 [远程升级]。`ModeCard` 收紧为单行紧凑条（模式徽标 + 一句说明 + 右侧切换按钮；`unknown` 模式隐藏禁用按钮）。
-- **组件分段**：内置组件（Caddy / WireGuard / 端口转发 socat）与下方「扩展组件」（原 `/apps` 迁入，排除内部 `app-catalog` 适配器，条目 ≤5 时隐藏搜索框）统一使用标准化 `Table`（贴边卡片承载，支持行点击与统一操作按钮）。
+- **首屏**：顶部 Segmented：[Agent 与接入 | 组件 | 备份与恢复]，支持 `?tab=components` / `?tab=backup` / `?action=install` 直达（`?tab=mode` 向后兼容落入 `Agent 与接入`）。`hubQuery` 支持刷新直达按需拉取。`AccessCard` 展示并支持更换控制通道面板证书：**在线仅更换证书**时直接调 `POST /certs/:id/bind` 热重载并关闭抽屉（失败降级显示重装命令）；**改接入参数或离线改证**时留在抽屉切换到 `NodeInstallPanel` 重新生成安装命令并验活。`AgentCard`「安装 Agent」抽屉同样复用 `NodeInstallPanel`。`AgentCard` 对比 `/agent/releases` 最新版并在落后时展示「可升级到 v...」与 [远程升级]。`ModeCard` 收紧为单行紧凑条（模式徽标 + 一句说明 + 右侧切换按钮；`unknown` 模式隐藏禁用按钮）；切换为「Caddy 网关」完成后提示已停用网卡并可按需跳转「组件」清理配置。
+- **组件分段**：内置组件（Caddy / WireGuard / 端口转发 socat）与下方「扩展组件」（原 `/apps` 迁入，排除内部 `app-catalog` 适配器，条目 ≤5 时隐藏搜索框）统一使用标准化 `Table`（贴边卡片承载，支持行点击与统一操作按钮；存在已配置 WireGuard 接口时提供 L3 二次确认的 [清理配置] 动作）。
 - **命名**：页面标题「设置」（Tab 与页头一致）。
 
 ### 2.7 已合并/删除的节点层页面

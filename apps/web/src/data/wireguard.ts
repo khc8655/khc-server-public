@@ -7,6 +7,7 @@ import {
   agentEnvelopeSchema,
   type AgentEnvelope,
   type AppConfig,
+  type Node,
   type ResultCard,
 } from '@khc/contracts';
 import { apiRequest } from './client';
@@ -131,7 +132,8 @@ export type WgActionName =
   | 'rotate_peer'
   | 'confirm_rotation'
   | 'cancel_rotation'
-  | 'install';
+  | 'install'
+  | 'uninstall';
 
 export interface WgEnvelope extends AgentEnvelope {
   /** 兼容 Agent 顶层 cards；生产环境 Worker 已归一化到 result.cards */
@@ -475,4 +477,91 @@ export function isValidCidr(value: string): boolean {
   if (prefix === undefined) return true;
   if (!/^\d{1,3}$/.test(prefix)) return false;
   return Number(prefix) <= (isV6 ? 128 : 32);
+}
+
+export interface DerivedPublicEndpoint {
+  value: string;
+  host: string;
+  source: 'ip' | 'domain' | null;
+}
+
+const IPV4_LITERAL_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+const ENDPOINT_HOST_PORT_RE = /^(\[[^\]]+\]|[^:\s]+):(\d+)$/;
+
+/**
+ * 推导默认的 WireGuard 公网地址（`<host>:<listenPort>`）：
+ * - 隧道接入（accessMode === 'tunnel'）不暴露公网 UDP，返回空由用户手填。
+ * - 从节点接入 `endpoint` 解析主机名（仅 `accessMode === 'domain'` 且 URL 解析失败时回退 `node.domain`）。
+ * - 过滤环回地址（localhost / 127.0.0.1 / ::1）；IPv6 自动加方括号。
+ */
+export function deriveDefaultPublicEndpoint(
+  node: Pick<Node, 'accessMode' | 'endpoint' | 'domain'> | null | undefined,
+  listenPort: number | null,
+): DerivedPublicEndpoint {
+  const empty: DerivedPublicEndpoint = { value: '', host: '', source: null };
+  if (
+    !node ||
+    listenPort === null ||
+    !Number.isInteger(listenPort) ||
+    listenPort < 1 ||
+    listenPort > 65535 ||
+    node.accessMode === 'tunnel'
+  ) {
+    return empty;
+  }
+
+  let parsedHost = '';
+  try {
+    parsedHost = new URL(node.endpoint).hostname.trim();
+  } catch {
+    if (node.accessMode === 'domain') {
+      parsedHost = (node.domain ?? '').trim();
+    }
+  }
+  const rawHost = parsedHost.replace(/^\[|\]$/g, '');
+  if (!rawHost) return empty;
+  const lower = rawHost.toLowerCase();
+  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '::1') {
+    return empty;
+  }
+
+  const host = rawHost.includes(':') ? `[${rawHost}]` : rawHost;
+  const isLiteralIp = rawHost.includes(':') || IPV4_LITERAL_RE.test(rawHost);
+  const source: 'ip' | 'domain' = node.accessMode === 'ip' || isLiteralIp ? 'ip' : 'domain';
+  return {
+    value: `${host}:${listenPort}`,
+    host,
+    source,
+  };
+}
+
+/**
+ * 监听端口变更时联动更新公网地址端口：
+ * - 自动填入状态（`endpointAuto`）且存在 `autoHost`：直接生成 `${autoHost}:${nextPort}`。
+ * - 手动填入值若仍形如 `host:${prevPort}`，同步把尾部端口替换为 `nextPort`；其他自定义端口保持不动。
+ */
+export function syncPublicEndpointPort(
+  currentEndpoint: string,
+  prevPort: number | null,
+  nextPort: number | null,
+  autoHost: string,
+  endpointAuto: boolean,
+): string {
+  if (
+    nextPort === null ||
+    !Number.isInteger(nextPort) ||
+    nextPort < 1 ||
+    nextPort > 65535
+  ) {
+    return currentEndpoint;
+  }
+  if (endpointAuto && autoHost) {
+    return `${autoHost}:${nextPort}`;
+  }
+  if (prevPort === null) return currentEndpoint;
+  const match = currentEndpoint.trim().match(ENDPOINT_HOST_PORT_RE);
+  if (match && Number(match[2]) === prevPort) {
+    return `${match[1]}:${nextPort}`;
+  }
+  return currentEndpoint;
 }

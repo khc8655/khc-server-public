@@ -9,7 +9,7 @@ import { WIREGUARD_APP, parseWireGuardStatus, runWireGuardAction } from '../../d
 import { PORT_FORWARD_APP, normalizeForwardStatus, runForwardAction } from '../../data/forwards';
 import { hubAppsQueryOptions, refreshHubRuntime } from '../../data/queries';
 import { useHubChannelsContext } from '../../app/HubChannelsProvider';
-import { action } from '../../registry/actions';
+import { action, type ActionRef } from '../../registry/actions';
 import { paths } from '../../registry/routes';
 import { ConfirmAction } from '../../patterns';
 import {
@@ -36,6 +36,7 @@ interface BuiltinRow {
   installed: boolean | null;
   running: boolean | null;
   canInstall: boolean;
+  canUninstall: boolean;
   to: string;
   toLabel: string;
 }
@@ -72,6 +73,8 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
       )?.pkgInstall,
     );
 
+  const hasWgConfig = (appsQuery.data?.apps ?? []).some((item) => item.app === WIREGUARD_APP);
+
   const rows: BuiltinRow[] = [
     {
       key: CADDY_SITE_APP,
@@ -80,6 +83,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
       installed: caddyStatus ? caddyStatus.installed : null,
       running: caddyStatus ? caddyStatus.running : null,
       canInstall: hasPkgInstall(CADDY_SITE_APP),
+      canUninstall: false,
       to: paths.hubSection(hubId, 'sites'),
       toLabel: zh.nodeSettings.componentOpenSites,
     },
@@ -90,6 +94,7 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
       installed: wgStatus ? wgStatus.installed : null,
       running: wgStatus ? wgStatus.running : null,
       canInstall: hasPkgInstall(WIREGUARD_APP),
+      canUninstall: hasWgConfig && Boolean(wgStatus?.interface),
       to: paths.hubSection(hubId, 'wireguard'),
       toLabel: zh.nodeSettings.componentOpenNetwork,
     },
@@ -104,38 +109,56 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
         : null,
       running: pfStatus ? pfStatus.running : null,
       canInstall: hasPkgInstall(PORT_FORWARD_APP),
+      canUninstall: false,
       to: paths.hubSection(hubId, 'wireguard'),
       toLabel: zh.nodeSettings.componentOpenNetwork,
     },
   ];
 
   const [installTarget, setInstallTarget] = useState<BuiltinRow | null>(null);
-  const [installBusy, setInstallBusy] = useState(false);
-  const [installTask, setInstallTask] = useState<{ name: string; task: TaskResponse } | null>(null);
+  const [uninstallTarget, setUninstallTarget] = useState<BuiltinRow | null>(null);
+  const [componentBusy, setComponentBusy] = useState(false);
+  const [componentTask, setComponentTask] = useState<{
+    name: string;
+    kind: 'install' | 'uninstall';
+    task: TaskResponse;
+  } | null>(null);
+
+  const refreshComponentState = async () => {
+    await Promise.all([
+      refreshHubRuntime(queryClient, hubId),
+      queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
+      queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'mode'] }),
+      queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps', WIREGUARD_APP] }),
+    ]);
+  };
 
   const refreshTask = async () => {
-    if (!installTask) return;
-    setInstallBusy(true);
+    if (!componentTask) return;
+    setComponentBusy(true);
     try {
-      const next = await fetchTask(hubId, installTask.task.task.id);
-      setInstallTask({ name: installTask.name, task: next });
+      const next = await fetchTask(hubId, componentTask.task.task.id);
+      setComponentTask({ ...componentTask, task: next });
       if (next.task.state === 'done') {
-        await Promise.all([
-          refreshHubRuntime(queryClient, hubId),
-          queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
-        ]);
+        await refreshComponentState();
       }
     } catch (error) {
       const raw = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '';
-      toast.show({ message: friendlyAgentError(raw) ?? zh.sites.installFailed });
+      toast.show({
+        message:
+          friendlyAgentError(raw) ??
+          (componentTask.kind === 'uninstall'
+            ? zh.nodeSettings.componentUninstallFailed
+            : zh.sites.installFailed),
+      });
     } finally {
-      setInstallBusy(false);
+      setComponentBusy(false);
     }
   };
 
   const runInstall = async (row: BuiltinRow) => {
     setInstallTarget(null);
-    setInstallBusy(true);
+    setComponentBusy(true);
     try {
       const envelope =
         row.key === CADDY_SITE_APP
@@ -148,19 +171,39 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
       }
       if (envelope.taskId) {
         const task = await fetchTask(hubId, envelope.taskId);
-        setInstallTask({ name: row.name, task });
+        setComponentTask({ name: row.name, kind: 'install', task });
       } else {
-        await Promise.all([
-          refreshHubRuntime(queryClient, hubId),
-          queryClient.invalidateQueries({ queryKey: ['hubs', hubId, 'apps'] }),
-        ]);
+        await refreshComponentState();
       }
       toast.show({ message: zh.sites.installSubmitted });
     } catch (error) {
       const raw = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '';
       toast.show({ message: friendlyAgentError(raw) ?? zh.sites.installFailed });
     } finally {
-      setInstallBusy(false);
+      setComponentBusy(false);
+    }
+  };
+
+  const runWgUninstall = async (row: BuiltinRow) => {
+    setUninstallTarget(null);
+    setComponentBusy(true);
+    try {
+      const envelope = await runWireGuardAction(hubId, 'uninstall', { purge: true });
+      if ('ok' in envelope && !envelope.ok) {
+        throw new Error(envelopeErrorText(envelope) ?? zh.nodeSettings.componentUninstallFailed);
+      }
+      if (envelope.taskId) {
+        const task = await fetchTask(hubId, envelope.taskId);
+        setComponentTask({ name: row.name, kind: 'uninstall', task });
+      } else {
+        await refreshComponentState();
+      }
+      toast.show({ message: zh.nodeSettings.componentUninstallSubmitted });
+    } catch (error) {
+      const raw = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '';
+      toast.show({ message: friendlyAgentError(raw) ?? zh.nodeSettings.componentUninstallFailed });
+    } finally {
+      setComponentBusy(false);
     }
   };
 
@@ -199,10 +242,21 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
                 label={zh.nodeSettings.componentInstall}
                 size="sm"
                 variant="default"
-                loading={installBusy}
+                loading={componentBusy}
                 disabled={unreachable}
                 disabledReason={zh.channels.unknownWriteReason}
                 onClick={() => setInstallTarget(row)}
+              />
+            ) : null}
+            {row.canUninstall ? (
+              <Button
+                label={zh.nodeSettings.componentUninstall}
+                size="sm"
+                variant="ghost"
+                loading={componentBusy}
+                disabled={unreachable}
+                disabledReason={zh.channels.unknownWriteReason}
+                onClick={() => setUninstallTarget(row)}
               />
             ) : null}
             <Button
@@ -220,15 +274,15 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
   return (
     <>
       <Stack gap={4}>
-        {installTask ? (
+        {componentTask ? (
           <Banner
             tone="info"
-            title={`${installTask.name} · ${installTaskText(installTask.task, zh.sites.installTaskState)}`}
+            title={`${componentTask.name} · ${installTaskText(componentTask.task, zh.sites.installTaskState)}`}
             action={
               <Button
                 label={zh.sites.installRefresh}
                 size="sm"
-                loading={installBusy}
+                loading={componentBusy}
                 onClick={() => void refreshTask()}
               />
             }
@@ -241,10 +295,19 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
             columns={columns}
             rowKey={(row) => row.key}
             onRowOpen={(row) => void navigate({ href: row.to })}
-            rowActions={(row) =>
-              row.installed === false && row.canInstall ? [action('app.install')] : []
-            }
-            onRowAction={(_ref, row) => setInstallTarget(row)}
+            rowActions={(row) => {
+              const items: ActionRef[] = [];
+              if (row.installed === false && row.canInstall) items.push(action('app.install'));
+              if (row.canUninstall) items.push(action('app.uninstall'));
+              return items;
+            }}
+            onRowAction={(ref, row) => {
+              if (ref.id === 'app.uninstall') {
+                setUninstallTarget(row);
+                return;
+              }
+              setInstallTarget(row);
+            }}
             rowActionDisabled={() => (unreachable ? zh.channels.unknownWriteReason : undefined)}
             objectLabel={zh.nodeSettings.builtinComponentsTitle}
             empty={{
@@ -272,6 +335,19 @@ export function ComponentsCard({ hubId, offline }: { hubId: string; offline: boo
           })}
           onCancel={() => setInstallTarget(null)}
           onConfirm={() => runInstall(installTarget)}
+        />
+      ) : null}
+
+      {uninstallTarget ? (
+        <ConfirmAction
+          open
+          action={action('app.uninstall')}
+          title={zh.nodeSettings.componentWgUninstallTitle}
+          body={zh.nodeSettings.componentWgUninstallBody}
+          confirmLabel={zh.nodeSettings.componentWgUninstallConfirm}
+          targetName={WIREGUARD_APP}
+          onCancel={() => setUninstallTarget(null)}
+          onConfirm={() => runWgUninstall(uninstallTarget)}
         />
       ) : null}
     </>
