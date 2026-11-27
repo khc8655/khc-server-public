@@ -1578,7 +1578,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.2.2")
+        self.assertEqual(self.adapter.version, "1.2.3")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -4914,3 +4914,106 @@ class SnapshotProcessOrderTests(ScriptTestBase):
             )
             self.assertFalse(peer_deny["ok"])
             self.assertEqual(peer_deny["error"]["code"], "E_PEER_FORBIDDEN")
+
+    def test_read_chunked_avoids_proc_sys_4mb_enomem(self) -> None:
+        """Linux /proc/sys/* 对 4 MiB 单次 read() 会报 ENOMEM，必须按 <=64 KiB 分块读取。"""
+
+        class _ProcSysHandle:
+            def __init__(self, data: str | bytes) -> None:
+                self._data = data
+                self._pos = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size: int = -1):
+                if size < 0 or size > 65536:
+                    raise OSError(errno.ENOMEM, "Cannot allocate memory")
+                chunk = self._data[self._pos : self._pos + size]
+                self._pos += len(chunk)
+                return chunk
+
+        files = {
+            os.path.join(self.proc_root, "sys", "vm", "swappiness"): "10\n",
+            os.path.join(self.proc_root, "sys", "net", "ipv4", "tcp_available_congestion_control"): "reno cubic bbr\n",
+            os.path.join(self.proc_root, "sys", "net", "ipv4", "tcp_congestion_control"): "bbr\n",
+            os.path.join(self.proc_root, "sys", "net", "core", "default_qdisc"): "fq\n",
+        }
+        orig_open = open
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if path in files:
+                val = files[path]
+                return _ProcSysHandle(val.encode("utf-8") if "b" in mode else val)
+            return orig_open(path, mode, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=fake_open):
+            self.assertEqual(HOST_SCRIPT._read_swappiness(), 10)
+            bbr = HOST_SCRIPT._collect_bbr_status()
+            self.assertTrue(bbr["supported"])
+            self.assertTrue(bbr["enabled"])
+            self.assertEqual(HOST_SCRIPT._read_bytes(os.path.join(self.proc_root, "sys", "vm", "swappiness")), b"10\n")
+
+    def test_tune_journal_vacuum_days_rotates_and_validates(self) -> None:
+        self._seed_tune_proc()
+        dropin = os.path.join(self.etc_root, "systemd", "journald.conf.d", "99-khc.conf")
+        _write(dropin, "[Journal]\nSystemMaxUse=100M\n")
+        sizes = iter(["90.3M", "28.0M"])
+        self.runner.on("journalctl", lambda argv, _: (0, f"take up {next(sizes, '28.0M')}\n", ""))
+        jres = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 100, "vacuumDays": 2})
+        self.assertTrue(jres["ok"])
+        self.assertEqual(jres["data"]["vacuumDays"], 2)
+        self.assertEqual(jres["data"]["afterBytes"], 28 * 1024 ** 2)
+        self.assertEqual([c for c in self.runner.commands("systemctl") if "restart" in c], [])
+        self.assertIn(["journalctl", "--rotate"], self.runner.commands("journalctl"))
+        self.assertIn(["journalctl", "--vacuum-time=2d"], self.runner.commands("journalctl"))
+        self.assertIn(["journalctl", "--vacuum-size=100M"], self.runner.commands("journalctl"))
+
+        for bad in (1, 31, "2", True):
+            err = self.run_verb("tune.journal-vacuum", {"maxSizeMb": 100, "vacuumDays": bad})
+            self.assertFalse(err["ok"])
+            self.assertEqual(err["error"]["code"], "E_BAD_REQUEST")
+
+    def test_tune_swap_remove_small_ram_headroom_and_zero_used(self) -> None:
+        # 512 MiB 小内存机：used=0 时直接允许关闭；used=4 MiB 且 MemAvailable=112 MiB (>= 4 + ~82 MiB) 允许关闭；
+        # used=50 MiB 且 MemAvailable=112 MiB (< 50 + ~82 MiB) 仍返回 E_CONFLICT。
+        meminfo = os.path.join(self.proc_root, "meminfo")
+        fstab = os.path.join(self.etc_root, "fstab")
+
+        def setup_vm(used_kb: int, avail_kb: int) -> None:
+            swap_row = f"{HOST_SCRIPT.SWAPFILE_PATH} file 2097148 {used_kb} -2\n"
+            self._seed_tune_proc(
+                swap_total_kb=2 * 1024 * 1024,
+                swap_free_kb=2 * 1024 * 1024 - used_kb,
+                swaps_rows=[swap_row],
+            )
+            txt = (
+                read_text(meminfo)
+                .replace("MemTotal:       1048576 kB", "MemTotal:        421888 kB")
+                .replace("MemAvailable:    600000 kB", f"MemAvailable:    {avail_kb} kB")
+            )
+            _write(meminfo, txt)
+            _write(
+                fstab,
+                f"UUID=abc / ext4 defaults 0 1\n{HOST_SCRIPT.SWAPFILE_PATH} none swap sw 0 0 # khc-managed-swap\n",
+            )
+
+        setup_vm(used_kb=50 * 1024, avail_kb=112 * 1024)
+        deny = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertFalse(deny["ok"])
+        self.assertEqual(deny["error"]["code"], "E_CONFLICT")
+
+        setup_vm(used_kb=4 * 1024, avail_kb=112 * 1024)
+        self.runner.on(
+            "swapoff",
+            lambda argv, _: (self._seed_tune_proc(swap_total_kb=0, swap_free_kb=0, swaps_rows=[]), (0, "", ""))[1],
+        )
+        ok_small = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertTrue(ok_small["ok"])
+
+        setup_vm(used_kb=0, avail_kb=50 * 1024)
+        ok_zero = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertTrue(ok_zero["ok"])

@@ -178,15 +178,25 @@ export const HOST_TUNE_ITEMS: readonly TuneItemSpec[] = [
         : zh.hostOps.tune.journalUncapped,
     primaryAction: (s) => {
       if (!s.journal.available) return null;
+      const managed = s.journal.managed;
       return {
         actionRef: action('hostOps.tuneJournal'),
         verb: 'tune.journal-vacuum',
-        params: { maxSizeMb: 100 },
-        buttonLabel: zh.hostOps.tune.journalAction,
-        confirmTitle: zh.hostOps.tune.journalTitle,
-        confirmBody: zh.hostOps.tune.journalBody,
-        confirmLabel: zh.hostOps.tune.journalAction,
-        toastText: () => zh.hostOps.tune.journalDone,
+        params: managed ? { maxSizeMb: 100, vacuumDays: 2 } : { maxSizeMb: 100 },
+        buttonLabel: managed ? zh.hostOps.tune.journalCleanAction : zh.hostOps.tune.journalAction,
+        confirmTitle: managed ? zh.hostOps.tune.journalCleanTitle : zh.hostOps.tune.journalTitle,
+        confirmBody: managed ? zh.hostOps.tune.journalCleanBody : zh.hostOps.tune.journalBody,
+        confirmLabel: managed ? zh.hostOps.tune.journalCleanAction : zh.hostOps.tune.journalAction,
+        toastText: (data) => {
+          const freed =
+            data && typeof data === 'object' && 'freedBytes' in data && typeof data.freedBytes === 'number'
+              ? data.freedBytes
+              : null;
+          if (freed !== null && freed > 0) {
+            return fmt(zh.hostOps.tune.journalDoneFreed, { freed: formatBytes(freed) });
+          }
+          return managed ? zh.hostOps.tune.journalDoneNoop : zh.hostOps.tune.journalDone;
+        },
       };
     },
   },
