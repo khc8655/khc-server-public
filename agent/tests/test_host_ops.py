@@ -1578,7 +1578,7 @@ class AdapterTestBase(unittest.TestCase):
 class AdapterSchemaRenderTests(AdapterTestBase):
     def test_metadata(self) -> None:
         self.assertEqual(self.adapter.name, "host-ops")
-        self.assertEqual(self.adapter.version, "1.2.0")
+        self.assertEqual(self.adapter.version, "1.2.1")
         self.assertEqual(self.adapter.api, 1)
         self.assertTrue(self.adapter.requires_root)
         self.assertEqual(self.adapter.ports, [])
@@ -4389,6 +4389,7 @@ class SnapshotProcessOrderTests(ScriptTestBase):
 
         # 4) Btrfs 走 truncate + chattr +C + dd
         self._seed_tune_proc(root_fs="btrfs")
+        _write(os.path.join(self.etc_root, "fstab"), "UUID=abc / btrfs defaults 0 1\n")
         btrfs_ok = self.run_verb("tune.swap", {"action": "create", "sizeGb": 1})
         self.assertTrue(btrfs_ok["ok"])
         self.assertEqual(self.runner.commands("chattr")[-1], ["chattr", "+C", HOST_SCRIPT.SWAPFILE_PATH])
@@ -4408,6 +4409,113 @@ class SnapshotProcessOrderTests(ScriptTestBase):
         sym = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
         self.assertFalse(sym["ok"])
         self.assertEqual(sym["error"]["code"], "E_PROTECTED")
+
+    def test_tune_swap_fstab_unsafe_aborts_before_allocation(self) -> None:
+        fstab = os.path.join(self.etc_root, "fstab")
+        cases = {
+            "missing": None,
+            "empty": b"  \n",
+            "non-utf8": b"UUID=abc / ext4 defaults 0 1 # \xff\n",
+        }
+        for name, raw in cases.items():
+            with self.subTest(name):
+                self._seed_tune_proc()
+                if os.path.lexists(fstab):
+                    os.unlink(fstab)
+                if raw is not None:
+                    with open(fstab, "wb") as handle:
+                        handle.write(raw)
+                calls_before = len(self.runner.calls)
+                res = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+                self.assertFalse(res["ok"])
+                self.assertEqual(res["error"]["code"], "E_UNSUPPORTED")
+                new_cmds = [os.path.basename(c["argv"][0]) for c in self.runner.calls[calls_before:]]
+                for cmd in ("fallocate", "dd", "mkswap", "swapon"):
+                    self.assertNotIn(cmd, new_cmds)
+                if raw is not None:
+                    with open(fstab, "rb") as handle:
+                        self.assertEqual(handle.read(), raw)
+
+    def test_tune_swap_fstab_read_error_never_truncates(self) -> None:
+        self._seed_tune_proc()
+        fstab = os.path.join(self.etc_root, "fstab")
+        _write(fstab, "UUID=abc / ext4 defaults 0 1\n")
+        real_open = open
+
+        def failing_open(path, *args, **kwargs):
+            if os.path.abspath(str(path)) == os.path.abspath(fstab) and "rb" in (args[:1] or (kwargs.get("mode", ""),)):
+                raise PermissionError(13, "denied")
+            return real_open(path, *args, **kwargs)
+
+        import builtins
+
+        builtins.open = failing_open
+        try:
+            res = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        finally:
+            builtins.open = real_open
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["error"]["code"], "E_IO")
+        self.assertEqual(read_text(fstab), "UUID=abc / ext4 defaults 0 1\n")
+        self.assertEqual(self.runner.commands("fallocate"), [])
+
+    def test_tune_swap_fstab_backup_and_verify_rollback(self) -> None:
+        self._seed_tune_proc()
+        fstab = os.path.join(self.etc_root, "fstab")
+        original = "# comment\nUUID=abc / ext4 defaults 0 1\n"
+        _write(fstab, original)
+        verify_calls = {"n": 0}
+
+        def on_findmnt(argv, _):
+            verify_calls["n"] += 1
+            # 第一次校验原文通过，第二次校验新文失败 -> 应恢复原文并回滚 swapon
+            return (0, "", "") if verify_calls["n"] == 1 else (1, "", "parse error")
+
+        self.runner.on("findmnt", on_findmnt)
+        res = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["error"]["code"], "E_IO")
+        self.assertEqual(read_text(fstab), original)
+        self.assertEqual(read_text(fstab + ".khc-bak"), original)
+        self.assertTrue(self.runner.commands("swapoff"))
+        self.assertFalse(os.path.exists(HOST_SCRIPT.SWAPFILE_PATH))
+
+        # 原文本身就不通过 findmnt 时不以校验结果回滚（不让既有问题挡住操作）
+        self.runner.on("findmnt", lambda argv, _: (1, "", "already broken"))
+        ok_res = self.run_verb("tune.swap", {"action": "create", "sizeGb": 2})
+        self.assertTrue(ok_res["ok"])
+        self.assertIn("UUID=abc / ext4 defaults 0 1", read_text(fstab))
+        self.assertIn("# comment", read_text(fstab))
+        self.assertIn("# khc-managed-swap", read_text(fstab))
+
+    def test_tune_swap_remove_refuses_when_memory_cannot_absorb_swap(self) -> None:
+        swap_row = f"{HOST_SCRIPT.SWAPFILE_PATH} file 2097148 614400 -2\n"  # 已用 600 MB
+        self._seed_tune_proc(
+            swap_total_kb=2 * 1024 * 1024,
+            swap_free_kb=2 * 1024 * 1024 - 614400,
+            swaps_rows=[swap_row],
+        )
+        meminfo = os.path.join(self.proc_root, "meminfo")
+        text = read_text(meminfo).replace("MemAvailable:    600000 kB", "MemAvailable:    307200 kB")
+        _write(meminfo, text)
+        fstab = os.path.join(self.etc_root, "fstab")
+        _write(fstab, f"UUID=abc / ext4 defaults 0 1\n{HOST_SCRIPT.SWAPFILE_PATH} none swap sw 0 0 # khc-managed-swap\n")
+        res = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["error"]["code"], "E_CONFLICT")
+        self.assertEqual(self.runner.commands("swapoff"), [])
+        self.assertIn("# khc-managed-swap", read_text(fstab))
+
+        # 可用内存充足（1 GB 可用 − 600 MB 已用 ≥ 256 MB）时允许关闭
+        _write(meminfo, text.replace("MemAvailable:    307200 kB", "MemAvailable:    1048576 kB"))
+        self.runner.on(
+            "swapoff",
+            lambda argv, _: (self._seed_tune_proc(swap_total_kb=0, swap_free_kb=0, swaps_rows=[]), (0, "", ""))[1],
+        )
+        ok_res = self.run_verb("tune.swap", {"action": "remove"})
+        self.assertTrue(ok_res["ok"])
+        self.assertNotIn("# khc-managed-swap", read_text(fstab))
+        self.assertIn("UUID=abc / ext4 defaults 0 1", read_text(fstab))
 
     def test_tune_bbr_journal_and_apt_clean(self) -> None:
         # BBR 不支持 -> E_UNSUPPORTED

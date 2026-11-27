@@ -66,7 +66,7 @@ import time
 from collections import Counter
 from typing import Any, Iterable, Mapping, Optional
 
-SCRIPT_VERSION = "1.8.0"
+SCRIPT_VERSION = "1.8.1"
 PROTOCOL_VERSION = 1
 
 MAX_INPUT_BYTES = 64 * 1024
@@ -3703,15 +3703,87 @@ def tune_status_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, An
     )
 
 
-def _update_fstab_swap(enable: bool) -> None:
+#: 关闭受管 Swap 前要求「可用内存 − 待收回的 swap 用量」至少留出的余量；
+#: swapoff 会把换出页全部搬回内存，余量不足时会触发 OOM，杀掉 Caddy/Agent 或卡死整机。
+SWAP_OFF_HEADROOM_BYTES = 256 * 1024 * 1024
+FSTAB_BACKUP_SUFFIX = ".khc-bak"
+
+
+def _read_fstab_strict(fstab: str) -> Optional[str]:
+    """严格读取 fstab：不存在返回 None；读失败、非 UTF-8 或内容为空一律中止。
+
+    为什么不用 ``_read_text``：它在 OSError 时返回空串、按 ``errors="replace"`` 解码。
+    fstab 场景下「读失败」被当成「空文件」，随后会被覆盖成只剩 swap 一行，
+    根分区挂载行丢失、机器无法启动；替换字符写回也会改坏原文件。
+    """
+
+    if not os.path.lexists(fstab):
+        return None
+    if os.path.islink(fstab):
+        raise HostError("E_PROTECTED", f"拒绝修改符号链接: {fstab}")
+    try:
+        with open(fstab, "rb") as handle:
+            raw = handle.read(1024 * 1024 + 1)
+    except OSError as exc:
+        raise HostError("E_IO", f"读取 {fstab} 失败，未修改: {exc}") from exc
+    if len(raw) > 1024 * 1024:
+        raise HostError("E_UNSUPPORTED", f"{fstab} 超过 1 MiB，拒绝自动修改")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HostError("E_UNSUPPORTED", f"{fstab} 含非 UTF-8 字节，拒绝自动修改") from exc
+    if not text.strip():
+        raise HostError("E_UNSUPPORTED", f"{fstab} 为空，无法确认挂载配置，拒绝自动修改")
+    return text
+
+
+def _plan_fstab_swap(enable: bool) -> Optional[tuple[str, str]]:
+    """预演 fstab 改写：返回 ``(原文, 新文)``；无需改写返回 None。只读，不落盘。"""
+
     fstab = _fstab_path()
-    lines = _read_text(fstab).splitlines()
+    original = _read_fstab_strict(fstab)
+    if original is None:
+        if not enable:
+            return None
+        raise HostError("E_UNSUPPORTED", f"{fstab} 不存在，无法持久化 Swap，未做任何修改")
+    lines = original.splitlines()
     kept = [line for line in lines if SWAP_MARKER not in line]
+    removed = len(lines) - len(kept)
     if enable:
         kept.append(f"{SWAPFILE_PATH} none swap sw 0 0 {SWAP_MARKER}")
-    content = ("\n".join(kept) + "\n") if kept else ""
-    if enable or os.path.lexists(fstab):
-        _write_system_file(fstab, content, mode=0o644)
+    # 自检：只允许增删带标记的那一行，其余行逐字保留。
+    if [line for line in kept if SWAP_MARKER not in line] != [
+        line for line in lines if SWAP_MARKER not in line
+    ]:
+        raise HostError("E_IO", "fstab 改写自检失败，未修改")
+    content = "\n".join(kept) + "\n"
+    if content == original or (not enable and removed == 0):
+        return None
+    return original, content
+
+
+def _fstab_verify_ok(path: str) -> Optional[bool]:
+    """``findmnt --verify``：True 通过、False 失败、None 工具不可用（不作判断）。"""
+
+    rc, _out, _err = _run(["findmnt", "--verify", "--tab-file", path], timeout=10.0)
+    if rc == 127:
+        return None
+    return rc == 0
+
+
+def _apply_fstab_plan(plan: Optional[tuple[str, str]]) -> None:
+    """备份原文 → 原子写入新文 → findmnt 校验；原文通过而新文不通过时恢复备份。"""
+
+    if plan is None:
+        return
+    original, content = plan
+    fstab = _fstab_path()
+    _write_system_file(fstab + FSTAB_BACKUP_SUFFIX, original, mode=0o644)
+    before_ok = _fstab_verify_ok(fstab)
+    _write_system_file(fstab, content, mode=0o644)
+    if before_ok and _fstab_verify_ok(fstab) is False:
+        _write_system_file(fstab, original, mode=0o644)
+        raise HostError("E_IO", "fstab 写入后校验失败，已恢复原文件")
 
 
 def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]:
@@ -3737,6 +3809,8 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
                 "E_INVALID",
                 f"根分区可用空间不足：需至少 {size_gb + 1} GiB（预留 1 GiB），当前可用 {free_gib} GiB",
             )
+        # 先预演 fstab 改写：读不了/不安全就在分配 swapfile 之前中止，避免「已 swapon 但无法持久化」。
+        fstab_plan = _plan_fstab_swap(True)
         if os.path.lexists(SWAPFILE_PATH):
             _remove_system_file(SWAPFILE_PATH)
 
@@ -3780,7 +3854,13 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
                     f"执行 {step_name} 失败（部分容器内核不支持 swapon）: {(err or '').strip()[:200]}",
                 )
 
-        _update_fstab_swap(True)
+        try:
+            _apply_fstab_plan(fstab_plan)
+        except HostError:
+            # 持久化失败时回滚本次 swapon，保持「要么完整开启、要么未开启」。
+            _run_privileged(["swapoff", SWAPFILE_PATH], timeout=60.0)
+            _remove_system_file(SWAPFILE_PATH)
+            raise
         _write_system_file(
             os.path.join(_sysctl_d_dir(), SWAP_SYSCTL_FILE),
             "vm.swappiness = 10\n",
@@ -3792,12 +3872,26 @@ def tune_swap_verb(params: Mapping[str, Any], args: list[str]) -> dict[str, Any]
     # action == "remove"
     if current["external"] and not current["managed"]:
         raise HostError("E_PROTECTED", "当前 Swap 为系统自带或外部配置（分区/zram），面板不予删除")
+    fstab_plan = _plan_fstab_swap(False)
     if current["active"] or SWAPFILE_PATH in current["sources"]:
+        managed_used = sum(
+            item["usedBytes"] for item in _parse_proc_swaps() if item["path"] == SWAPFILE_PATH
+        )
+        mem_available = _parse_meminfo_bytes().get("MemAvailable")
+        if mem_available is None:
+            raise HostError("E_UNSUPPORTED", "无法读取可用内存（MemAvailable），为避免 OOM 拒绝关闭 Swap")
+        if mem_available - managed_used < SWAP_OFF_HEADROOM_BYTES:
+            raise HostError(
+                "E_CONFLICT",
+                "可用内存不足以收回 Swap：Swap 已用 "
+                f"{managed_used // (1024 * 1024)} MB，可用内存 {mem_available // (1024 * 1024)} MB，"
+                f"需至少多出 {SWAP_OFF_HEADROOM_BYTES // (1024 * 1024)} MB；请先降低内存占用后再关闭",
+            )
         rc, _out, err = _run_privileged(["swapoff", SWAPFILE_PATH], timeout=60.0)
         if rc != 0:
             raise HostError("E_BAD_REQUEST", f"swapoff 失败: {(err or '').strip()[:200]}")
+    _apply_fstab_plan(fstab_plan)
     _remove_system_file(SWAPFILE_PATH)
-    _update_fstab_swap(False)
     _remove_system_file(os.path.join(_sysctl_d_dir(), SWAP_SYSCTL_FILE))
     return ok({"action": "remove", "swap": _collect_swap_status()})
 
